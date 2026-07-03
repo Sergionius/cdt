@@ -1,0 +1,52 @@
+version: 1
+plugins:
+  - cdt_steps.offline
+
+pipelines:
+  offline-test:
+    steps:
+      - offline.fetch_config:
+          output: build/offline/config.json
+
+  deploy:
+    steps:
+      - git.prepare_clean_main
+      - web.build:
+          env: prod
+      - web.copy:
+          repository: ${WEB_REPOSITORY}
+          destination: ${WEB_BUILD_PLACE}
+          inner: ${WEB_INNER}
+      - web.cache_bust:
+          destination: ${WEB_BUILD_PLACE}
+          inner: ${WEB_INNER}
+      - git.commit_push:
+          repository: ${WEB_REPOSITORY}
+          message: ${flutter.version}
+
+  mobile-upload:
+    steps:
+      - flutter.pub_get
+      - parallel:
+          steps:
+            - ios.flutter_build_ipa:
+                env: test
+                artifact: ios_ipa
+                dart_defines:
+                  ENV: test
+                extra_args:
+                  - --export-method=ad-hoc
+            - android.build_aab:
+                env: test
+                artifact: android_aab
+                dart_defines:
+                  ENV: test
+                no_shrink: true
+      - parallel:
+          steps:
+            - appstore.upload_testflight:
+                artifact: ios_ipa
+                changelog: dev build ${ids}
+            - firebase.upload_app_distribution:
+                artifact: android_aab
+                release_notes_from_ids: true
