@@ -58,7 +58,6 @@ def legacy_pipeline_defs() -> dict[str, dict[str, Any]]:
                 },
                 {"web.cache_bust": {"destination": "${WEB_BUILD_PLACE}", "inner": "${WEB_INNER}"}},
                 {"git.commit_push": {"repository": "${WEB_REPOSITORY}", "message": "${flutter.version}"}},
-                "notify.success",
             ]
         },
         "ios-prod": {
@@ -79,7 +78,7 @@ def legacy_pipeline_defs() -> dict[str, dict[str, Any]]:
                 "notify.success",
             ]
         },
-        "firebase-deploy": {"steps": ["web.build", "firebase.deploy", "notify.success"]},
+        "firebase-deploy": {"steps": ["firebase.ensure_cli", "web.build", "firebase.deploy"]},
     }
 
 
