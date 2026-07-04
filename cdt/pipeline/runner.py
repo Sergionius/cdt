@@ -28,5 +28,5 @@ def run_configured_pipeline(
     errors = validate_pipeline(config, name)
     if errors:
         raise typer.BadParameter("Invalid pipeline config: " + "; ".join(error["message"] for error in errors))
-    ctx = PipelineContext(cwd=cwd, env=env, runner=runner or CommandRunner(), ids=ids or [])
+    ctx = PipelineContext(cwd=cwd, env=env, runner=runner or CommandRunner(), ids=ids or [], pipeline_name=name)
     PipelineExecutor().run(configured_steps(pipeline), ctx)

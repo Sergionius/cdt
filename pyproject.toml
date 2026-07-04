@@ -33,6 +33,9 @@ cdt = "cdt.cli:app"
 Repository = "https://github.com/Sergionius/cdt"
 Issues = "https://github.com/Sergionius/cdt/issues"
 
+[tool.setuptools.packages.find]
+include = ["cdt*"]
+
 [tool.ruff]
 line-length = 120
 target-version = "py310"

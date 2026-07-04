@@ -1,7 +1,7 @@
 import typer
 
 from ..pipeline import PipelineContext
-from ..platforms.ios_flutter import _build_ios_prod_ipa_command, _build_ios_test_ipa_command, _ios_ipa_artifact
+from ..platforms.ios_flutter import _build_ios_ipa_command, _ios_ipa_artifact
 from ..platforms.ios_xcode import (
     _increment_ios_build_number,
     _ios_xcode_build_ipa,
@@ -76,11 +76,7 @@ class IosFlutterBuildIpaStep:
             "no_pub": self.no_pub,
             "extra_args": self.extra_args,
         }
-        command = (
-            _build_ios_prod_ipa_command(**options)
-            if self.profile == "prod"
-            else _build_ios_test_ipa_command(**options)
-        )
+        command = _build_ios_ipa_command(profile=self.profile, **options)
         if ctx.runner.run(command, cwd=ctx.cwd) != 0:
             _play_fail_sound(ctx.env, ctx.cwd)
             raise typer.Exit(code=1)

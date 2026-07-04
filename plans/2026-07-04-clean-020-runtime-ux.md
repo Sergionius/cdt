@@ -86,7 +86,7 @@ Run:
 
 ## Save Path
 
-`docs/plans/2026-07-04-clean-020-runtime-ux.md`
+`plans/2026-07-04-clean-020-runtime-ux.md`
 
 ## Out of Scope
 

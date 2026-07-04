@@ -2,7 +2,7 @@
 
 ## Summary
 
-Remove the legacy migration helper from CLI, runtime code, tests, documentation, and GitHub Actions. All known projects have already been migrated. README should describe only the current public interface, so legacy command mapping must be removed from README and kept only in historical notes such as `CHANGELOG.md` or archived `docs/plans/*`.
+Remove the legacy migration helper from CLI, runtime code, tests, documentation, and GitHub Actions. All known projects have already been migrated. README should describe only the current public interface, so legacy command mapping must be removed from README and kept only in historical notes such as `CHANGELOG.md` or archived `plans/*`.
 
 ## Key Changes
 
@@ -30,7 +30,7 @@ Remove the legacy migration helper from CLI, runtime code, tests, documentation,
   - remove migrator behavior text.
 - Keep historical legacy mapping only in:
   - `CHANGELOG.md`, if useful as release history;
-  - archived `docs/plans/*` files.
+  - archived `plans/*` files.
 
 ### 3. CHANGELOG
 
@@ -52,7 +52,7 @@ Remove the legacy migration helper from CLI, runtime code, tests, documentation,
 ### 5. Saved plan
 
 - Save this plan as:
-  - `docs/plans/2026-07-04-remove-cdt-migrate-legacy.md`.
+  - `plans/2026-07-04-remove-cdt-migrate-legacy.md`.
 
 ## Test Plan
 
@@ -88,4 +88,4 @@ Expected: command not found / non-zero exit code.
 
 - Backward compatibility for `cdt migrate` is not required.
 - README should contain only the current supported interface.
-- `docs/plans` are historical archives, so existing old plans with legacy mapping can remain unchanged.
+- `plans` are historical archives, so existing old plans with legacy mapping can remain unchanged.

@@ -17,21 +17,21 @@ class NoopRunner:
         return 0
 
 
-def test_notify_success_default_and_custom_message(tmp_path, monkeypatch, capsys):
+def test_notify_success_default_pipeline_name_and_custom_message(tmp_path, monkeypatch, capsys):
     sent: list[tuple[str, list[str] | None]] = []
 
     def fake_notify(env, new_version, ids=None):
         sent.append((new_version, ids))
 
     monkeypatch.setattr("cdt.steps.notify._notify_success", fake_notify)
-    ctx = PipelineContext(cwd=tmp_path, env={}, runner=NoopRunner(), ids=["APP-1"])
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=NoopRunner(), ids=["APP-1"], pipeline_name="prod")
     ctx.new_version = "1.2.3+4"
 
     NotifySuccessStep(include_ids=True).run(ctx)
     NotifySuccessStep(message="Deploy finished").run(ctx)
 
     out = capsys.readouterr().out
-    assert "✅ Pipeline completed" in out
+    assert "✅ Pipeline 'prod' completed" in out
     assert "✅ Deploy finished" in out
     assert "iOS TestFlight flow" not in out
     assert sent == [("1.2.3+4", ["APP-1"]), ("1.2.3+4", None)]

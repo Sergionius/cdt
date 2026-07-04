@@ -14,6 +14,7 @@ class PipelineContext:
     env: dict[str, str]
     runner: CommandRunner
     ids: list[str] = field(default_factory=list)
+    pipeline_name: str | None = None
     old_version: str | None = None
     new_version: str | None = None
     artifacts: dict[str, BuildArtifact] = field(default_factory=dict)

@@ -1,7 +1,7 @@
 import pytest
 import typer
 
-from cdt.flows import test_flow
+from cdt.flows import testing_flow as test_flow
 from cdt.runner import SpawnedProcess
 
 

@@ -1,5 +1,10 @@
 from cdt.artifacts import ArtifactKind
-from cdt.platforms.ios_flutter import _build_ios_prod_ipa_command, _build_ios_test_ipa_command, _ios_ipa_artifact
+from cdt.platforms.ios_flutter import (
+    _build_ios_ipa_command,
+    _build_ios_prod_ipa_command,
+    _build_ios_test_ipa_command,
+    _ios_ipa_artifact,
+)
 
 
 def test_ios_build_commands():
@@ -42,6 +47,18 @@ def test_ios_build_command_accepts_custom_flutter_options():
         "--dart-define=ENV=qa",
         "--dart-define=API=mock",
         "--export-method=ad-hoc",
+    ]
+
+
+def test_ios_custom_profile_adds_matching_env_dart_define():
+    assert _build_ios_ipa_command(profile="qa") == [
+        "flutter",
+        "build",
+        "ipa",
+        "--obfuscate",
+        "--split-debug-info=obfsymbols",
+        "--dart-define=ENV=qa",
+        "--no-pub",
     ]
 
 

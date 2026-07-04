@@ -16,7 +16,12 @@ class NotifySuccessStep:
         if not ctx.new_version:
             raise typer.BadParameter("Missing pipeline value: new_version")
 
-        typer.echo(f"✅ {self.message}" if self.message else "✅ Pipeline completed")
+        if self.message:
+            typer.echo(f"✅ {self.message}")
+        elif ctx.pipeline_name:
+            typer.echo(f"✅ Pipeline '{ctx.pipeline_name}' completed")
+        else:
+            typer.echo("✅ Pipeline completed")
         issue_ids = ctx.ids if self.include_ids and ctx.ids else None
         try:
             _notify_success(ctx.env, ctx.new_version, issue_ids)

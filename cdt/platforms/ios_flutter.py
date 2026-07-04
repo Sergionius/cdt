@@ -6,8 +6,15 @@ from ..artifacts import ArtifactKind, BuildArtifact
 from .flutter_build import flutter_build_options, merge_dart_defines
 
 
-def _build_ios_test_ipa_command(
+def _profile_defines(profile: str | None) -> dict[str, str]:
+    if profile and profile != "test":
+        return {"ENV": profile}
+    return {}
+
+
+def _build_ios_ipa_command(
     *,
+    profile: str = "test",
     dart_defines=None,
     flavor: str | None = None,
     target: str | None = None,
@@ -21,7 +28,7 @@ def _build_ios_test_ipa_command(
         "build",
         "ipa",
         *flutter_build_options(
-            dart_defines=dart_defines,
+            dart_defines=merge_dart_defines(_profile_defines(profile), dart_defines),
             flavor=flavor,
             target=target,
             obfuscate=obfuscate,
@@ -32,30 +39,12 @@ def _build_ios_test_ipa_command(
     ]
 
 
-def _build_ios_prod_ipa_command(
-    *,
-    dart_defines=None,
-    flavor: str | None = None,
-    target: str | None = None,
-    obfuscate: bool = True,
-    split_debug_info: str | None = "obfsymbols",
-    no_pub: bool = True,
-    extra_args: list[str] | None = None,
-) -> list[str]:
-    return [
-        "flutter",
-        "build",
-        "ipa",
-        *flutter_build_options(
-            dart_defines=merge_dart_defines({"ENV": "prod"}, dart_defines),
-            flavor=flavor,
-            target=target,
-            obfuscate=obfuscate,
-            split_debug_info=split_debug_info,
-            no_pub=no_pub,
-            extra_args=extra_args,
-        ),
-    ]
+def _build_ios_test_ipa_command(**kwargs) -> list[str]:
+    return _build_ios_ipa_command(profile="test", **kwargs)
+
+
+def _build_ios_prod_ipa_command(**kwargs) -> list[str]:
+    return _build_ios_ipa_command(profile="prod", **kwargs)
 
 
 def _find_ipa(project_root: Path) -> Path:
