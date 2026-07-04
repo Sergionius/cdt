@@ -7,6 +7,7 @@ from cdt.pipeline import PipelineContext, PipelineExecutor
 from cdt.pipeline.builtins import register_builtin_steps
 from cdt.pipeline.config import ParallelSpec, configured_steps, load_pipeline_config, load_plugins
 from cdt.pipeline.registry import _clear_steps_for_tests
+from cdt.pipeline.validation import validate_pipeline
 from cdt.runner import CommandRunner
 
 
@@ -197,8 +198,8 @@ def test_yaml_flutter_build_options_are_passed_to_step(tmp_path):
                 "  demo:",
                 "    steps:",
                 "      - android.build_aab:",
+                "          profile: qa",
                 "          dart_defines:",
-                "            ENV: qa",
                 "            API: mock",
                 "          flavor: qa",
                 "          target: lib/main_qa.dart",
@@ -236,4 +237,47 @@ def test_yaml_flutter_build_options_are_passed_to_step(tmp_path):
             ],
             tmp_path,
         )
+    ]
+
+
+def test_build_step_env_option_is_rejected_with_profile_hint(tmp_path):
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  demo:",
+                "    steps:",
+                "      - android.build_aab:",
+                "          env: prod",
+                "      - android.build_apk:",
+                "          env: prod",
+                "      - ios.flutter_build_ipa:",
+                "          env: test",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    register_builtin_steps()
+    config = load_pipeline_config(tmp_path)
+
+    errors = validate_pipeline(config, "demo")
+
+    assert errors == [
+        {
+            "code": "unknown_step_option",
+            "message": "Unknown option 'env' for step android.build_aab. Use 'profile' instead.",
+            "path": "pipelines.demo.steps[0].env",
+        },
+        {
+            "code": "unknown_step_option",
+            "message": "Unknown option 'env' for step android.build_apk. Use 'profile' instead.",
+            "path": "pipelines.demo.steps[1].env",
+        },
+        {
+            "code": "unknown_step_option",
+            "message": "Unknown option 'env' for step ios.flutter_build_ipa. Use 'profile' instead.",
+            "path": "pipelines.demo.steps[2].env",
+        },
     ]

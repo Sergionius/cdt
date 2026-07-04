@@ -25,9 +25,8 @@ class _AndroidBuildBase:
         no_shrink: bool = True,
         no_pub: bool = True,
         extra_args: list[str] | None = None,
-        env: str | None = None,
     ):
-        self.profile = env or profile
+        self.profile = profile
         self.artifact = artifact or self.artifact_kind
         self.dart_defines = dart_defines
         self.flavor = flavor

@@ -7,6 +7,7 @@ from .builtins import register_builtin_steps
 from .config import configured_steps, load_pipeline_config, load_plugins
 from .context import PipelineContext
 from .executor import PipelineExecutor
+from .validation import validate_pipeline
 
 
 def run_configured_pipeline(
@@ -24,5 +25,8 @@ def run_configured_pipeline(
     except KeyError as exc:
         available = ", ".join(sorted(config.pipelines)) or "none"
         raise typer.BadParameter(f"Unknown pipeline: {name}. Available pipelines: {available}") from exc
+    errors = validate_pipeline(config, name)
+    if errors:
+        raise typer.BadParameter("Invalid pipeline config: " + "; ".join(error["message"] for error in errors))
     ctx = PipelineContext(cwd=cwd, env=env, runner=runner or CommandRunner(), ids=ids or [])
     PipelineExecutor().run(configured_steps(pipeline), ctx)

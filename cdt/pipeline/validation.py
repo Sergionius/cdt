@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+from difflib import get_close_matches
 from typing import Any
 
 from .config import ParallelSpec, PipelineConfig, PipelineItemSpec, PipelineSpec, StepSpec
@@ -93,10 +95,38 @@ def _validate_steps(pipeline: PipelineSpec) -> list[dict[str, str]]:
 
 def _validate_step(step: StepSpec, path: str) -> list[dict[str, str]]:
     try:
-        get_step_factory(step.name)
+        factory = get_step_factory(step.name)
     except Exception as exc:
         return [{"code": "unknown_step", "message": str(exc), "path": path}]
-    return []
+    return _validate_step_options(step, factory, path)
+
+
+def _validate_step_options(step: StepSpec, factory: Any, path: str) -> list[dict[str, str]]:
+    try:
+        signature = inspect.signature(factory)
+    except (TypeError, ValueError):
+        return []
+
+    parameters = signature.parameters
+    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()):
+        return []
+
+    allowed_options = {
+        name
+        for name, parameter in parameters.items()
+        if parameter.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    }
+    errors: list[dict[str, str]] = []
+    for option in sorted(set(step.options) - allowed_options):
+        message = f"Unknown option '{option}' for step {step.name}."
+        if option == "env" and "profile" in allowed_options:
+            message += " Use 'profile' instead."
+        else:
+            matches = get_close_matches(option, sorted(allowed_options), n=1)
+            if matches:
+                message += f" Did you mean '{matches[0]}'?"
+        errors.append({"code": "unknown_step_option", "message": message, "path": f"{path}.{option}"})
+    return errors
 
 
 def _step_node(item: PipelineItemSpec) -> dict[str, Any]:
