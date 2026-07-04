@@ -46,5 +46,3 @@ jobs:
           python -m cdt.cli run --help
           python -m cdt.cli pipeline --help
           python -m cdt.cli pipeline steps --help
-          python -m cdt.cli migrate --help
-          python -m cdt.cli migrate legacy --help

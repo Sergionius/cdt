@@ -29,32 +29,6 @@ pipelines:
 
 Top-level fields are `version`, optional `plugins`, and `pipelines`. Legacy top-level lifecycle keys and default pipelines are not supported.
 
-## Migration from legacy commands
-
-```bash
-cdt migrate legacy --dry-run
-cdt migrate legacy
-```
-
-| Было | Стало |
-|---|---|
-| `cdt prod` | `cdt run prod` |
-| `cdt test` | `cdt run test` |
-| `cdt deploy` | `cdt run deploy` |
-| `cdt ios-prod` | `cdt run ios-prod` |
-| `cdt ios-test` | `cdt run ios-test` |
-| `cdt firebase_deploy` | `cdt run firebase-deploy` |
-
-The migrator creates/merges `cdt.yaml` and ensures `cdt/hooks/.gitkeep`. Existing pipelines are kept unless `--force` is used; modifying an existing config creates `cdt.yaml.bak`.
-
-Recommended project-local hook location:
-
-```text
-cdt/hooks/
-```
-
-Legacy `cdt prod` added `--dart-define=STORE=ru` for Android APK. Pipeline built-ins no longer do this implicitly. `cdt migrate legacy` preserves this explicitly in generated YAML; remove or change it if not needed.
-
 ## Steps and parallel groups
 
 Each item in `steps` is one of:

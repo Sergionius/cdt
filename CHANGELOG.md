@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Removed `cdt migrate legacy` after all known projects were migrated.
+
 ## v0.2.0 - 2026-07-04
 
 - Switched release automation to YAML-only `cdt.yaml` pipelines.

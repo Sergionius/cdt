@@ -5,7 +5,6 @@ import typer
 
 from . import __version__
 from .config import _load_project_env, _set_ui_mode
-from .migration import migrate_legacy
 from .pipeline.builtins import register_builtin_steps
 from .pipeline.config import load_pipeline_config, load_plugins
 from .pipeline.registry import list_steps
@@ -14,7 +13,6 @@ from .pipeline.validation import inspect_payload, step_tree, steps_payload, vali
 
 app = typer.Typer(no_args_is_help=True)
 pipeline_app = typer.Typer(no_args_is_help=True)
-migrate_app = typer.Typer(no_args_is_help=True)
 
 
 def _version_callback(value: bool) -> None:
@@ -158,17 +156,7 @@ def pipeline_steps(json_output: bool = typer.Option(False, "--json", help="Emit 
         typer.echo(step_name)
 
 
-@migrate_app.command(name="legacy")
-def migrate_legacy_command(
-    dry_run: bool = typer.Option(False, "--dry-run", help="Show planned changes without writing files."),
-    force: bool = typer.Option(False, "--force", help="Overwrite existing generated legacy pipelines."),
-):
-    """Create or merge cdt.yaml pipelines for removed legacy commands."""
-    typer.echo(migrate_legacy(Path.cwd(), dry_run=dry_run, force=force))
-
-
 app.add_typer(pipeline_app, name="pipeline")
-app.add_typer(migrate_app, name="migrate")
 
 
 def _echo_json(payload: dict) -> None:

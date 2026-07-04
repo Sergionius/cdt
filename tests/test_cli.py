@@ -34,7 +34,6 @@ def test_root_help_lists_commands():
     for command in (
         "run",
         "pipeline",
-        "migrate",
     ):
         assert command in result.output
 
@@ -51,7 +50,6 @@ def test_command_help_lists_key_options():
     cases = {
         "run": ("--id",),
         "pipeline": (),
-        "migrate": (),
     }
 
     for command, options in cases.items():
@@ -61,6 +59,12 @@ def test_command_help_lists_key_options():
         assert result.exit_code == 0
         for option in options:
             assert option in output
+
+
+def test_migrate_command_is_unavailable():
+    result = runner.invoke(app, ["migrate", "--help"])
+
+    assert result.exit_code != 0
 
 
 def test_pipeline_inspect_json_returns_step_tree(tmp_path, monkeypatch):

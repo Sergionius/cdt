@@ -11,11 +11,7 @@ cdt pipeline list
 cdt pipeline inspect <pipeline> --json
 cdt pipeline validate [pipeline]
 cdt pipeline steps
-cdt migrate legacy --dry-run
-cdt migrate legacy
 ```
-
-Legacy direct commands (`cdt prod`, `cdt test`, `cdt deploy`, `cdt ios-prod`, `cdt ios-test`, `cdt firebase_deploy`) were removed in 0.2. Use pipelines instead.
 
 ## Minimal `cdt.yaml`
 
@@ -43,32 +39,6 @@ pipelines:
 ```
 
 See `examples/cdt.yaml` and `docs/pipelines.md` for a fuller prod pipeline, plugins, artifacts, and hooks.
-
-## Migrate legacy projects
-
-```bash
-cdt migrate legacy --dry-run
-cdt migrate legacy
-```
-
-| Было | Стало |
-|---|---|
-| `cdt prod` | `cdt run prod` |
-| `cdt test` | `cdt run test` |
-| `cdt deploy` | `cdt run deploy` |
-| `cdt ios-prod` | `cdt run ios-prod` |
-| `cdt ios-test` | `cdt run ios-test` |
-| `cdt firebase_deploy` | `cdt run firebase-deploy` |
-
-The migrator creates or merges `cdt.yaml`, creates `cdt/hooks/.gitkeep`, keeps existing pipelines unless `--force` is used, and backs up existing config to `cdt.yaml.bak` before writing.
-
-Recommended hook location:
-
-```text
-cdt/hooks/
-```
-
-Legacy `cdt prod` added `--dart-define=STORE=ru` for Android APK. Pipeline built-ins no longer do this implicitly. `cdt migrate legacy` preserves this explicitly in generated YAML; remove or change it if not needed.
 
 ## Built-in steps
 
