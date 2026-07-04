@@ -19,13 +19,12 @@ def _run_ios_flow(
     notify_prod_user_agent: bool = False,
 ) -> None:
     issue_ids = ids or []
-    command_name = "ios-test" if mode == "test" else "ios-prod"
     ctx = PipelineContext(cwd=cwd, env=env, runner=CommandRunner(), ids=issue_ids)
     steps = [
         IncrementIosBuildNumberStep(scheme_key, fallback_scheme_key),
         IosXcodeBuildIpaStep(mode),
         UploadTestFlightStep(changelog),
-        NotifySuccessStep(command_name, include_ids=True),
+        NotifySuccessStep(include_ids=True),
         PlaySuccessSoundStep(),
     ]
     if issue_ids:

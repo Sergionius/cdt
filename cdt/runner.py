@@ -1,3 +1,4 @@
+import os
 import shlex
 import subprocess
 import tempfile
@@ -57,12 +58,19 @@ def _run(command: list[str], *, cwd: Path) -> int:
         )
         code = proc.wait()
 
-    if code != 0:
-        tail = _tail_text(log_path)
-        if tail:
-            typer.echo("--- last log lines ---", err=True)
-            typer.echo(tail, err=True)
-            typer.echo("--- end log ---", err=True)
+    if code == 0:
+        try:
+            os.remove(log_path)
+        except FileNotFoundError:
+            pass
+        return code
+
+    typer.echo(f"Command failed with exit code {code}. Full log: {log_path}", err=True)
+    tail = _tail_text(log_path)
+    if tail:
+        typer.echo("--- last log lines ---", err=True)
+        typer.echo(tail, err=True)
+        typer.echo("--- end log ---", err=True)
     return code
 
 

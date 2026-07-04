@@ -8,15 +8,15 @@ from ..sounds import _play_success_sound
 class NotifySuccessStep:
     name = "notify.success"
 
-    def __init__(self, command_name: str = "run", include_ids: bool = False):
-        self.command_name = command_name
+    def __init__(self, message: str | None = None, include_ids: bool = False):
+        self.message = message
         self.include_ids = include_ids
 
     def run(self, ctx: PipelineContext) -> None:
         if not ctx.new_version:
             raise typer.BadParameter("Missing pipeline value: new_version")
 
-        typer.echo(f"✅ CDT {self.command_name} completed: iOS TestFlight flow")
+        typer.echo(f"✅ {self.message}" if self.message else "✅ Pipeline completed")
         issue_ids = ctx.ids if self.include_ids and ctx.ids else None
         try:
             _notify_success(ctx.env, ctx.new_version, issue_ids)

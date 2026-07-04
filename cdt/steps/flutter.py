@@ -13,9 +13,6 @@ class IncrementFlutterBuildNumberStep:
         ctx.values["flutter.version.old"] = ctx.old_version
         ctx.values["flutter.version"] = ctx.new_version
         ctx.values["flutter.build_number"] = ctx.new_version.rsplit("+", 1)[1]
-        # Backwards-compatible aliases for older pipelines/tests.
-        ctx.values["flutter_version_old"] = ctx.old_version
-        ctx.values["flutter_version"] = ctx.new_version
         typer.echo(f"==> pubspec version bumped: {ctx.old_version} -> {ctx.new_version}")
 
 

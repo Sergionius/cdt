@@ -62,7 +62,7 @@ class ConfiguredStep:
 def load_pipeline_config(cwd: Path, filename: str = "cdt.yaml") -> PipelineConfig:
     path = cwd / filename
     if not path.exists():
-        raise typer.BadParameter(f"Pipeline config not found: {path}")
+        raise typer.BadParameter(f"Pipeline config not found: {path}. See examples/cdt.yaml.")
     if yaml is None:
         raise typer.BadParameter("PyYAML is required to read cdt.yaml. Install package dependency: PyYAML")
 
@@ -179,11 +179,7 @@ def _resolve_expression(expression: str, ctx: PipelineContext) -> str:
     if key == "ids":
         return ", ".join(ctx.ids)
     if key == "flutter.version":
-        version = ctx.values.get("flutter_version")
-        if not version:
-            version = _current_flutter_version(ctx.cwd)
-            ctx.values["flutter_version"] = version
-        return version
+        return ctx.values.get("flutter.version") or _current_flutter_version(ctx.cwd)
     if key.startswith("values."):
         value_key = key.removeprefix("values.")
         try:

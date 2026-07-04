@@ -39,6 +39,12 @@ Each item in `steps` is one of:
 
 Parallel branches start together, already-started branches are not cancelled on failure, and errors are aggregated after all branches finish.
 
+Parallel context limitations:
+
+- `ctx.artifacts` registration is thread-safe.
+- Writing to `ctx.values` from parallel branches is not guaranteed to be thread-safe.
+- Parallel branches should not depend on each other through `ctx.values`; produce values before the parallel group or join via explicit artifacts/steps after it.
+
 ## Built-ins
 
 Important built-ins include:
