@@ -27,11 +27,15 @@ def test_current_flutter_version_errors_without_version_field(tmp_path):
         _current_flutter_version(tmp_path)
 
 
-def test_increment_flutter_build_number_errors_without_build_suffix(tmp_path):
-    (tmp_path / "pubspec.yaml").write_text("name: app\nversion: 1.2.3\n", encoding="utf-8")
+def test_increment_flutter_build_number_adds_build_suffix(tmp_path):
+    pubspec = tmp_path / "pubspec.yaml"
+    pubspec.write_text("name: app\nversion: 1.2.3\n", encoding="utf-8")
 
-    with pytest.raises(typer.BadParameter, match="pubspec version must include build suffix"):
-        _increment_flutter_build_number(tmp_path)
+    old_version, new_version = _increment_flutter_build_number(tmp_path)
+
+    assert old_version == "1.2.3"
+    assert new_version == "1.2.3+1"
+    assert pubspec.read_text(encoding="utf-8") == "name: app\nversion: 1.2.3+1\n"
 
 
 def test_flutter_build_number_errors_without_build_suffix():

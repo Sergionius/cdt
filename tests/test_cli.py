@@ -32,14 +32,9 @@ def test_root_help_lists_commands():
 
     assert result.exit_code == 0
     for command in (
-        "test",
-        "prod",
-        "deploy",
         "run",
         "pipeline",
-        "ios-test",
-        "ios-prod",
-        "firebase_deploy",
+        "migrate",
     ):
         assert command in result.output
 
@@ -49,18 +44,14 @@ def test_root_version_flags():
         result = runner.invoke(app, [flag])
 
         assert result.exit_code == 0
-        assert result.output == "cdt 0.1.0\n"
+        assert result.output == "cdt 0.2.0\n"
 
 
 def test_command_help_lists_key_options():
     cases = {
-        "test": ("--only", "--id"),
-        "prod": ("--only",),
-        "deploy": (),
         "run": ("--id",),
-        "ios-test": ("--id",),
-        "ios-prod": (),
-        "firebase_deploy": (),
+        "pipeline": (),
+        "migrate": (),
     }
 
     for command, options in cases.items():
@@ -98,6 +89,7 @@ def test_pipeline_inspect_json_returns_step_tree(tmp_path, monkeypatch):
     payload = json.loads(result.output)
 
     assert result.exit_code == 0
+    assert payload["schema_version"] == 1
     assert payload["pipeline"] == "demo"
     assert payload["plugins"] == []
     assert payload["errors"] == []
@@ -133,6 +125,7 @@ def test_pipeline_validate_json_reports_unknown_step(tmp_path, monkeypatch):
     payload = json.loads(result.output)
 
     assert result.exit_code == 1
+    assert payload["schema_version"] == 1
     assert payload["pipeline"] == "demo"
     assert payload["errors"][0]["code"] == "unknown_step"
     assert payload["errors"][0]["path"] == "pipelines.demo.steps[0]"
@@ -180,5 +173,6 @@ def test_pipeline_steps_json_includes_plugin_steps(tmp_path, monkeypatch):
     payload = json.loads(result.output)
 
     assert result.exit_code == 0
+    assert payload["schema_version"] == 1
     assert "flutter.pub_get" in payload["registered_steps"]
     assert "offline.fetch_config" in payload["registered_steps"]
