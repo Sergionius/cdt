@@ -43,9 +43,8 @@ jobs:
         run: |
           python -m cdt.cli --version
           python -m cdt.cli --help
-          python -m cdt.cli test --help
-          python -m cdt.cli prod --help
-          python -m cdt.cli ios-test --help
-          python -m cdt.cli ios-prod --help
-          python -m cdt.cli deploy --help
-          python -m cdt.cli firebase_deploy --help
+          python -m cdt.cli run --help
+          python -m cdt.cli pipeline --help
+          python -m cdt.cli pipeline steps --help
+          python -m cdt.cli migrate --help
+          python -m cdt.cli migrate legacy --help
