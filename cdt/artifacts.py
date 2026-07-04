@@ -15,3 +15,14 @@ class BuildArtifact:
     kind: ArtifactKind
     path: Path
     label: str
+    step: str | None = None
+
+    def to_json(self, name: str) -> dict[str, str]:
+        payload = {
+            "name": name,
+            "path": str(self.path),
+            "kind": self.kind.value,
+        }
+        if self.step:
+            payload["step"] = self.step
+        return payload

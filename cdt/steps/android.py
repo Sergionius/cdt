@@ -3,20 +3,20 @@ import typer
 from ..pipeline import PipelineContext
 from ..platforms.android import (
     _android_aab_artifact,
-    _build_android_prod_aab_command,
-    _build_android_test_aab_command,
+    _android_apk_artifact,
+    _build_android_aab_command,
+    _build_android_apk_command,
 )
 from ..sounds import _play_fail_sound
-from .flutter import ensure_flutter_build_number
 
 
-class AndroidBuildAabStep:
-    name = "android.build_aab"
+class _AndroidBuildBase:
+    artifact_kind = "aab"
 
     def __init__(
         self,
-        env: str = "test",
-        artifact: str = "aab",
+        profile: str = "test",
+        artifact: str | None = None,
         dart_defines=None,
         flavor: str | None = None,
         target: str | None = None,
@@ -25,9 +25,10 @@ class AndroidBuildAabStep:
         no_shrink: bool = True,
         no_pub: bool = True,
         extra_args: list[str] | None = None,
+        env: str | None = None,
     ):
-        self.env = env
-        self.artifact = artifact
+        self.profile = env or profile
+        self.artifact = artifact or self.artifact_kind
         self.dart_defines = dart_defines
         self.flavor = flavor
         self.target = target
@@ -37,9 +38,9 @@ class AndroidBuildAabStep:
         self.no_pub = no_pub
         self.extra_args = extra_args
 
-    def run(self, ctx: PipelineContext) -> None:
-        ensure_flutter_build_number(ctx)
-        options = {
+    def _options(self) -> dict:
+        return {
+            "profile": self.profile,
             "dart_defines": self.dart_defines,
             "flavor": self.flavor,
             "target": self.target,
@@ -49,12 +50,25 @@ class AndroidBuildAabStep:
             "no_pub": self.no_pub,
             "extra_args": self.extra_args,
         }
-        command = (
-            _build_android_prod_aab_command(**options)
-            if self.env == "prod"
-            else _build_android_test_aab_command(**options)
-        )
-        if ctx.runner.run(command, cwd=ctx.cwd) != 0:
+
+
+class AndroidBuildAabStep(_AndroidBuildBase):
+    name = "android.build_aab"
+    artifact_kind = "aab"
+
+    def run(self, ctx: PipelineContext) -> None:
+        if ctx.runner.run(_build_android_aab_command(**self._options()), cwd=ctx.cwd) != 0:
             _play_fail_sound(ctx.env, ctx.cwd)
             raise typer.Exit(code=1)
         ctx.register_artifact(self.artifact, _android_aab_artifact(ctx.cwd))
+
+
+class AndroidBuildApkStep(_AndroidBuildBase):
+    name = "android.build_apk"
+    artifact_kind = "apk"
+
+    def run(self, ctx: PipelineContext) -> None:
+        if ctx.runner.run(_build_android_apk_command(**self._options()), cwd=ctx.cwd) != 0:
+            _play_fail_sound(ctx.env, ctx.cwd)
+            raise typer.Exit(code=1)
+        ctx.register_artifact(self.artifact, _android_apk_artifact(ctx.cwd))

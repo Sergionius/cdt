@@ -5,10 +5,7 @@ import typer
 
 from . import __version__
 from .config import _load_project_env, _set_ui_mode
-from .flows.deploy_flow import run_firebase_deploy_flow, run_web_deploy_flow
-from .flows.ios_flow import run_ios_prod_flow, run_ios_test_flow
-from .flows.prod_flow import run_prod_flow
-from .flows.test_flow import run_test_flow
+from .migration import migrate_legacy
 from .pipeline.builtins import register_builtin_steps
 from .pipeline.config import load_pipeline_config, load_plugins
 from .pipeline.registry import list_steps
@@ -17,6 +14,7 @@ from .pipeline.validation import inspect_payload, step_tree, steps_payload, vali
 
 app = typer.Typer(no_args_is_help=True)
 pipeline_app = typer.Typer(no_args_is_help=True)
+migrate_app = typer.Typer(no_args_is_help=True)
 
 
 def _version_callback(value: bool) -> None:
@@ -160,88 +158,17 @@ def pipeline_steps(json_output: bool = typer.Option(False, "--json", help="Emit 
         typer.echo(step_name)
 
 
-@app.command()
-def test(
-    id: list[str] = typer.Option([], "--id", help="Repeatable: --id A --id B"),
-    only: str | None = typer.Option(None, "--only", help="Run only one platform: ios|android"),
+@migrate_app.command(name="legacy")
+def migrate_legacy_command(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show planned changes without writing files."),
+    force: bool = typer.Option(False, "--force", help="Overwrite existing generated legacy pipelines."),
 ):
-    """
-    Android: build AAB via Flutter and upload to Firebase App Distribution (AppTester).
-    iOS: build IPA via Flutter and upload to TestFlight.
-
-    Loads secrets from <target_project>/.env.
-    """
-    cwd = Path.cwd()
-    env = _load_project_env(cwd)
-    _set_ui_mode(env)
-    run_test_flow(cwd, env, id, only)
-
-
-@app.command(name="ios-test")
-def ios_test(
-    id: list[str] = typer.Option([], "--id", help="Repeatable: --id A --id B"),
-):
-    """
-    iOS-only Xcode build + TestFlight upload.
-
-    Uses xcodebuild archive/export (fastlane gym analog).
-    Scheme is taken from .env: IOS_TEST_SCHEME
-    """
-    cwd = Path.cwd()
-    env = _load_project_env(cwd)
-    _set_ui_mode(env)
-    run_ios_test_flow(cwd, env, id)
-
-
-@app.command(name="ios-prod")
-def ios_prod():
-    """
-    iOS-only Xcode build + TestFlight upload for production.
-
-    Uses xcodebuild archive/export (fastlane gym analog).
-    Scheme is taken from .env: IOS_PROD_SCHEME
-    """
-    cwd = Path.cwd()
-    env = _load_project_env(cwd)
-    _set_ui_mode(env)
-    run_ios_prod_flow(cwd, env)
-
-
-@app.command(name="firebase_deploy")
-def firebase_deploy():
-    """Build Flutter web with dev/test params and deploy to Firebase Hosting."""
-    cwd = Path.cwd()
-    env = _load_project_env(cwd)
-    _set_ui_mode(env)
-    run_firebase_deploy_flow(cwd, env)
-
-
-@app.command()
-def deploy():
-    """Build Flutter web (prod), copy to web repo place, commit and push."""
-    cwd = Path.cwd()
-    env = _load_project_env(cwd)
-    _set_ui_mode(env)
-    run_web_deploy_flow(cwd, env)
-
-
-@app.command()
-def prod(
-    only: str | None = typer.Option(None, "--only", help="Run only one platform: ios|android"),
-):
-    """
-    Production flow.
-
-    iOS: build IPA with ENV=prod and upload to TestFlight (with changelog "prod build").
-    Android: build APK + AAB with prod defines and copy artifacts to ~/Downloads.
-    """
-    cwd = Path.cwd()
-    env = _load_project_env(cwd)
-    _set_ui_mode(env)
-    run_prod_flow(cwd, env, only)
+    """Create or merge cdt.yaml pipelines for removed legacy commands."""
+    typer.echo(migrate_legacy(Path.cwd(), dry_run=dry_run, force=force))
 
 
 app.add_typer(pipeline_app, name="pipeline")
+app.add_typer(migrate_app, name="migrate")
 
 
 def _echo_json(payload: dict) -> None:
@@ -265,6 +192,7 @@ def _load_plugins_for_json(plugins: list[str]) -> list[dict[str, str]]:
 
 def _error_payload(name: str | None, errors: list[dict[str, str]]) -> dict:
     return {
+        "schema_version": 1,
         "pipeline": name,
         "pipelines": [],
         "plugins": [],

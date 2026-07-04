@@ -3,41 +3,66 @@ plugins:
   - cdt_steps.offline
 
 pipelines:
+  prod:
+    steps:
+      # Uncomment and customize if you need offline data before prod build:
+      # - hook.python_script:
+      #     name: fetch_offline_config
+      #     script: cdt/hooks/fetch_offline_data.py
+      #     env:
+      #       OFFLINE_API_URL: ${OFFLINE_API_URL}
+      #       OFFLINE_OUTPUT: assets/offline_data.json
+      #     outputs:
+      #       - assets/offline_data.json
+      - flutter.increment_build_number
+      - flutter.pub_get
+      - parallel:
+          steps:
+            - ios.flutter_build_ipa:
+                profile: prod
+                flavor: prod
+                artifact: ios_ipa
+            - android.build_aab:
+                profile: prod
+                flavor: prod
+                artifact: android_aab
+      - parallel:
+          steps:
+            - appstore.upload_testflight:
+                artifact: ios_ipa
+                changelog: prod build
+            - artifact.copy_to_downloads:
+                artifact: android_aab
+      - android.build_apk:
+          profile: prod
+          flavor: prod
+          artifact: android_apk
+          dart_defines:
+            STORE: ru
+      - artifact.copy_to_downloads:
+          artifact: android_apk
+      - notify.success
+
   offline-test:
     steps:
       - offline.fetch_config:
           output: build/offline/config.json
 
-  deploy:
-    steps:
-      - git.prepare_clean_main
-      - web.build:
-          env: prod
-      - web.copy:
-          repository: ${WEB_REPOSITORY}
-          destination: ${WEB_BUILD_PLACE}
-          inner: ${WEB_INNER}
-      - web.cache_bust:
-          destination: ${WEB_BUILD_PLACE}
-          inner: ${WEB_INNER}
-      - git.commit_push:
-          repository: ${WEB_REPOSITORY}
-          message: ${flutter.version}
-
   mobile-upload:
     steps:
+      - flutter.increment_build_number
       - flutter.pub_get
       - parallel:
           steps:
             - ios.flutter_build_ipa:
-                env: test
+                profile: test
                 artifact: ios_ipa
                 dart_defines:
                   ENV: test
                 extra_args:
                   - --export-method=ad-hoc
             - android.build_aab:
-                env: test
+                profile: test
                 artifact: android_aab
                 dart_defines:
                   ENV: test

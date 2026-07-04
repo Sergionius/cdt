@@ -1,6 +1,9 @@
+import re
 from pathlib import Path
 
 import typer
+
+_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:\+\d+)?$")
 
 
 def _current_flutter_version(project_root: Path) -> str:
@@ -38,14 +41,15 @@ def _increment_flutter_build_number(project_root: Path) -> tuple[str, str]:
             continue
 
         value = stripped.split(":", 1)[1].strip()
-        if "+" not in value:
-            raise typer.BadParameter("pubspec version must include build suffix, e.g. version: 1.1.22+419")
+        if not _VERSION_RE.match(value):
+            raise typer.BadParameter(f"Invalid pubspec version: {value}. Expected 1.2.3 or 1.2.3+7")
 
-        base, build = value.rsplit("+", 1)
-        try:
+        if "+" in value:
+            base, build = value.rsplit("+", 1)
             build_num = int(build)
-        except ValueError as exc:
-            raise typer.BadParameter(f"Invalid build number in pubspec version: {value}") from exc
+        else:
+            base = value
+            build_num = 0
 
         new_value = f"{base}+{build_num + 1}"
         prefix = line[: line.index("version:")]

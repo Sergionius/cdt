@@ -1,8 +1,10 @@
-from ..steps.android import AndroidBuildAabStep
+from ..steps.android import AndroidBuildAabStep, AndroidBuildApkStep
 from ..steps.appstore import UploadTestFlightStep
+from ..steps.artifact import CopyArtifactToDownloadsStep
 from ..steps.firebase import EnsureFirebaseCliStep, FirebaseDeployStep, FirebaseUploadAppDistributionStep
-from ..steps.flutter import FlutterPubGetStep
+from ..steps.flutter import FlutterPubGetStep, IncrementFlutterBuildNumberStep
 from ..steps.git import GitAddCommitPushStep, PrepareGitMainStep
+from ..steps.hook import PythonScriptHookStep
 from ..steps.ios import IncrementIosBuildNumberStep, IosFlutterBuildIpaStep, IosXcodeBuildIpaStep
 from ..steps.notify import NotifySuccessStep
 from ..steps.tracker import TrackerCommentStep
@@ -11,16 +13,20 @@ from .registry import list_steps, register_step
 
 _BUILTINS: dict[str, type] = {
     "android.build_aab": AndroidBuildAabStep,
+    "android.build_apk": AndroidBuildApkStep,
     "appstore.upload_testflight": UploadTestFlightStep,
+    "artifact.copy_to_downloads": CopyArtifactToDownloadsStep,
     "firebase.ensure_cli": EnsureFirebaseCliStep,
     "firebase.deploy": FirebaseDeployStep,
     "firebase.upload_app_distribution": FirebaseUploadAppDistributionStep,
+    "flutter.increment_build_number": IncrementFlutterBuildNumberStep,
     "flutter.pub_get": FlutterPubGetStep,
     "git.commit_push": GitAddCommitPushStep,
     "git.prepare_clean_main": PrepareGitMainStep,
     "ios.bump_xcode_build_number": IncrementIosBuildNumberStep,
     "ios.flutter_build_ipa": IosFlutterBuildIpaStep,
     "ios.xcode_build_ipa": IosXcodeBuildIpaStep,
+    "hook.python_script": PythonScriptHookStep,
     "notify.success": NotifySuccessStep,
     "tracker.comment": TrackerCommentStep,
     "web.build": BuildFlutterWebStep,

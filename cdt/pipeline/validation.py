@@ -43,6 +43,7 @@ def inspect_payload(
 ) -> dict[str, Any]:
     pipeline = config.pipelines.get(name)
     return {
+        "schema_version": 1,
         "pipeline": name,
         "pipelines": pipeline_names(config),
         "plugins": list(config.plugins),
@@ -59,6 +60,7 @@ def validate_payload(
     errors: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     return {
+        "schema_version": 1,
         "pipeline": name,
         "pipelines": pipeline_names(config),
         "plugins": list(config.plugins),
@@ -69,6 +71,7 @@ def validate_payload(
 
 def steps_payload(config: PipelineConfig | None, *, errors: list[dict[str, str]] | None = None) -> dict[str, Any]:
     return {
+        "schema_version": 1,
         "pipelines": pipeline_names(config) if config is not None else [],
         "plugins": list(config.plugins) if config is not None else [],
         "registered_steps": list_steps(),

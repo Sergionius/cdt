@@ -8,7 +8,6 @@ from ..platforms.ios_xcode import (
     _ios_xcode_ipa_artifact,
 )
 from ..sounds import _play_fail_sound
-from .flutter import ensure_flutter_build_number
 
 
 class IncrementIosBuildNumberStep:
@@ -47,7 +46,7 @@ class IosFlutterBuildIpaStep:
 
     def __init__(
         self,
-        env: str = "test",
+        profile: str = "test",
         artifact: str = "ipa",
         dart_defines=None,
         flavor: str | None = None,
@@ -56,8 +55,9 @@ class IosFlutterBuildIpaStep:
         split_debug_info: str | None = "obfsymbols",
         no_pub: bool = True,
         extra_args: list[str] | None = None,
+        env: str | None = None,
     ):
-        self.env = env
+        self.profile = env or profile
         self.artifact = artifact
         self.dart_defines = dart_defines
         self.flavor = flavor
@@ -68,7 +68,6 @@ class IosFlutterBuildIpaStep:
         self.extra_args = extra_args
 
     def run(self, ctx: PipelineContext) -> None:
-        ensure_flutter_build_number(ctx)
         options = {
             "dart_defines": self.dart_defines,
             "flavor": self.flavor,
@@ -80,7 +79,7 @@ class IosFlutterBuildIpaStep:
         }
         command = (
             _build_ios_prod_ipa_command(**options)
-            if self.env == "prod"
+            if self.profile == "prod"
             else _build_ios_test_ipa_command(**options)
         )
         if ctx.runner.run(command, cwd=ctx.cwd) != 0:

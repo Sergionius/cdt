@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from difflib import get_close_matches
 
 import typer
 
@@ -23,8 +24,11 @@ def get_step_factory(name: str) -> StepFactory:
     try:
         return _STEP_FACTORIES[name]
     except KeyError as exc:
-        available = ", ".join(list_steps()) or "none"
-        raise typer.BadParameter(f"Unknown pipeline step: {name}. Available steps: {available}") from exc
+        steps = list_steps()
+        available = ", ".join(steps) or "none"
+        matches = get_close_matches(name, steps, n=3)
+        hint = f" Did you mean: {', '.join(matches)}?" if matches else ""
+        raise typer.BadParameter(f"Unknown pipeline step: {name}.{hint} Available steps: {available}") from exc
 
 
 def list_steps() -> list[str]:

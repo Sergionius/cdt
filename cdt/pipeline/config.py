@@ -70,6 +70,11 @@ def load_pipeline_config(cwd: Path, filename: str = "cdt.yaml") -> PipelineConfi
     if not isinstance(data, dict):
         raise typer.BadParameter("cdt.yaml must contain a mapping")
 
+    allowed_top_level = {"version", "plugins", "pipelines"}
+    unknown_top_level = sorted(set(data) - allowed_top_level)
+    if unknown_top_level:
+        raise typer.BadParameter("Unsupported top-level cdt.yaml fields: " + ", ".join(unknown_top_level))
+
     version = data.get("version")
     if version != 1:
         raise typer.BadParameter("cdt.yaml version must be 1")
@@ -91,8 +96,8 @@ def load_pipeline_config(cwd: Path, filename: str = "cdt.yaml") -> PipelineConfi
         if not isinstance(pipeline_data, dict):
             raise typer.BadParameter(f"Pipeline '{pipeline_name}' must be a mapping")
         raw_steps = pipeline_data.get("steps")
-        if not isinstance(raw_steps, list) or not raw_steps:
-            raise typer.BadParameter(f"Pipeline '{pipeline_name}' steps must be a non-empty list")
+        if not isinstance(raw_steps, list):
+            raise typer.BadParameter(f"Pipeline '{pipeline_name}' steps must be a list")
         pipelines[pipeline_name] = PipelineSpec(
             name=pipeline_name,
             steps=[_parse_step_spec(pipeline_name, index, item) for index, item in enumerate(raw_steps, start=1)],

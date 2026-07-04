@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Lock
 
 import typer
 
@@ -17,6 +18,7 @@ class PipelineContext:
     new_version: str | None = None
     artifacts: dict[str, BuildArtifact] = field(default_factory=dict)
     values: dict[str, str] = field(default_factory=dict)
+    _artifact_lock: Lock = field(default_factory=Lock, repr=False)
 
     def env_value(self, key: str, fallback_key: str | None = None, default: str = "") -> str:
         value = self.env.get(key, "").strip()
@@ -41,7 +43,10 @@ class PipelineContext:
         return path
 
     def register_artifact(self, name: str, artifact: BuildArtifact) -> None:
-        self.artifacts[name] = artifact
+        with self._artifact_lock:
+            if name in self.artifacts:
+                raise typer.BadParameter(f"Duplicate pipeline artifact: {name}")
+            self.artifacts[name] = artifact
 
     def artifact(self, name: str) -> BuildArtifact:
         try:

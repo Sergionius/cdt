@@ -7,8 +7,17 @@ from ..artifacts import ArtifactKind, BuildArtifact
 from .flutter_build import flutter_build_options, merge_dart_defines
 
 
-def _build_android_test_aab_command(
+def _profile_defines(profile: str | None) -> dict[str, str]:
+    if profile == "prod":
+        return {"ENV": "prod"}
+    if profile and profile != "test":
+        return {"ENV": profile}
+    return {}
+
+
+def _build_android_aab_command(
     *,
+    profile: str = "test",
     dart_defines=None,
     flavor: str | None = None,
     target: str | None = None,
@@ -23,7 +32,7 @@ def _build_android_test_aab_command(
         "build",
         "appbundle",
         *flutter_build_options(
-            dart_defines=dart_defines,
+            dart_defines=merge_dart_defines(_profile_defines(profile), dart_defines),
             flavor=flavor,
             target=target,
             obfuscate=obfuscate,
@@ -35,8 +44,13 @@ def _build_android_test_aab_command(
     ]
 
 
-def _build_android_prod_apk_command(
+def _build_android_test_aab_command(**kwargs) -> list[str]:
+    return _build_android_aab_command(profile="test", **kwargs)
+
+
+def _build_android_apk_command(
     *,
+    profile: str = "test",
     dart_defines=None,
     flavor: str | None = None,
     target: str | None = None,
@@ -51,7 +65,7 @@ def _build_android_prod_apk_command(
         "build",
         "apk",
         *flutter_build_options(
-            dart_defines=merge_dart_defines({"ENV": "prod", "STORE": "ru"}, dart_defines),
+            dart_defines=merge_dart_defines(_profile_defines(profile), dart_defines),
             flavor=flavor,
             target=target,
             obfuscate=obfuscate,
@@ -63,32 +77,14 @@ def _build_android_prod_apk_command(
     ]
 
 
-def _build_android_prod_aab_command(
-    *,
-    dart_defines=None,
-    flavor: str | None = None,
-    target: str | None = None,
-    obfuscate: bool = True,
-    split_debug_info: str | None = "obfsymbols",
-    no_shrink: bool = True,
-    no_pub: bool = True,
-    extra_args: list[str] | None = None,
-) -> list[str]:
-    return [
-        "flutter",
-        "build",
-        "appbundle",
-        *flutter_build_options(
-            dart_defines=merge_dart_defines({"ENV": "prod"}, dart_defines),
-            flavor=flavor,
-            target=target,
-            obfuscate=obfuscate,
-            split_debug_info=split_debug_info,
-            no_shrink=no_shrink,
-            no_pub=no_pub,
-            extra_args=extra_args,
-        ),
-    ]
+def _build_android_prod_apk_command(**kwargs) -> list[str]:
+    # Legacy flow helper keeps historical STORE=ru. Pipeline built-in android.build_apk does not.
+    dart_defines = merge_dart_defines({"STORE": "ru"}, kwargs.pop("dart_defines", None))
+    return _build_android_apk_command(profile="prod", dart_defines=dart_defines, **kwargs)
+
+
+def _build_android_prod_aab_command(**kwargs) -> list[str]:
+    return _build_android_aab_command(profile="prod", **kwargs)
 
 
 def _find_android_aab(project_root: Path) -> Path:
