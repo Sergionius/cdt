@@ -45,7 +45,22 @@ def legacy_pipeline_defs() -> dict[str, dict[str, Any]]:
                 {"android.build_aab": {"profile": "test", "artifact": "android_aab"}},
             ]
         },
-        "deploy": {"steps": ["web.build", "web.cache_bust", "web.copy", "git.commit_push", "notify.success"]},
+        "deploy": {
+            "steps": [
+                "git.prepare_clean_main",
+                {"web.build": {"env": "prod"}},
+                {
+                    "web.copy": {
+                        "repository": "${WEB_REPOSITORY}",
+                        "destination": "${WEB_BUILD_PLACE}",
+                        "inner": "${WEB_INNER}",
+                    }
+                },
+                {"web.cache_bust": {"destination": "${WEB_BUILD_PLACE}", "inner": "${WEB_INNER}"}},
+                {"git.commit_push": {"repository": "${WEB_REPOSITORY}", "message": "${flutter.version}"}},
+                "notify.success",
+            ]
+        },
         "ios-prod": {
             "steps": [
                 "flutter.increment_build_number",
