@@ -81,10 +81,10 @@
 - Modify: `README.md`
 - Modify: `CHANGELOG.md`
 
-- [ ] Добавить `cdt self-update` в список команд в `README.md`
-- [ ] Добавить `cdt self-update --dry-run` как способ проверить доступность обновления
-- [ ] В `CHANGELOG.md` добавить запись под `Unreleased` о новой команде `self-update`
-- [ ] Обновить `CLAUDE.md`, если изменились внутренние паттерны
+- [x] Добавить `cdt self-update` в список команд в `README.md`
+- [x] Добавить `cdt self-update --dry-run` как способ проверить доступность обновления
+- [x] В `CHANGELOG.md` добавить запись под `Unreleased` о новой команде `self-update`
+- [x] Обновить `CLAUDE.md`, если изменились внутренние паттерны (нет файла — не требуется)
 
 ## Acceptance Criteria
 - `cdt self-update --help` показывает справку по команде.

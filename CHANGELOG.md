@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added `cdt self-update` command to update the CLI to the latest GitHub release via `pipx`.
+- Added `cdt self-update --dry-run` to preview the available release tag and update command without executing it.
+
 ## v0.3.0 - 2026-07-06
 
 - Added step metadata for built-in and plugin pipeline steps.
