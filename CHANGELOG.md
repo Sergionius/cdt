@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v0.2.1 - 2026-07-06
+
+- Improved the `cdt-release` Agent Skill with explicit production confirmation, structured summaries, and observability guidance.
+- Added repository-level `AGENTS.md` instructions for AI agents.
+- Added `.agents/rules/cdt-release.md` with hard release safety rules.
+- Updated AI agent documentation and package manifest entries for agent skills/rules.
+- Replaced Hermes-specific setup text with generic Agent Skills guidance.
+
 ## v0.2.0 - 2026-07-06
 
 - Added the `cdt-release` Agent Skill for safer AI-assisted CDT test releases.
