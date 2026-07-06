@@ -5,9 +5,11 @@ import sys
 
 from typer.testing import CliRunner
 
+from cdt import __version__
 from cdt import self_update as self_update_module
 from cdt.cli import app
 from cdt.pipeline.registry import _clear_steps_for_tests
+from tests._helpers import FakeResponse
 
 runner = CliRunner()
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -15,20 +17,6 @@ ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 def _visible_text(output: str) -> str:
     return ANSI_RE.sub("", output)
-
-
-class _FakeResponse:
-    def __init__(self, body: bytes):
-        self._body = body
-
-    def read(self):
-        return self._body
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        return False
 
 
 def setup_function():
@@ -60,7 +48,7 @@ def test_root_version_flags():
         result = runner.invoke(app, [flag])
 
         assert result.exit_code == 0
-        assert result.output == "cdt 0.3.0\n"
+        assert result.output == f"cdt {__version__}\n"
 
 
 def test_python_module_version_flag():
@@ -72,7 +60,7 @@ def test_python_module_version_flag():
     )
 
     assert result.returncode == 0
-    assert result.stdout == "cdt 0.3.0\n"
+    assert result.stdout == f"cdt {__version__}\n"
 
 
 def test_command_help_lists_key_options():
@@ -104,7 +92,7 @@ def test_self_update_dry_run_shows_version_and_command(monkeypatch):
     result = runner.invoke(app, ["self-update", "--dry-run"])
 
     assert result.exit_code == 0
-    assert "Current version: 0.3.0" in result.output
+    assert f"Current version: {__version__}" in result.output
     assert "Latest release: v9.9.9" in result.output
     assert "pipx install --force git+https://github.com/Sergionius/cdt.git@v9.9.9" in result.output
     assert "Dry run" in result.output
@@ -127,7 +115,7 @@ def test_self_update_network_error_reports_failure(monkeypatch):
 def test_self_update_missing_tag_reports_failure(monkeypatch):
     monkeypatch.setattr(
         "urllib.request.urlopen",
-        lambda *args, **kwargs: _FakeResponse(json.dumps({}).encode("utf-8")),
+        lambda *args, **kwargs: FakeResponse(json.dumps({}).encode("utf-8")),
     )
 
     result = runner.invoke(app, ["self-update"])
@@ -144,6 +132,17 @@ def test_self_update_unknown_install_method_reports_failure(monkeypatch):
 
     assert result.exit_code != 0
     assert "Unable to detect" in result.output or "Unable to detect" in result.stderr
+
+
+def test_self_update_dry_run_unknown_install_method_reports_manual_command(monkeypatch):
+    monkeypatch.setattr(self_update_module, "_latest_release_tag", lambda owner, repo: "v9.9.9")
+    monkeypatch.setattr(self_update_module, "_detect_install_method", lambda: None)
+
+    result = runner.invoke(app, ["self-update", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert "Unable to detect" in result.output
+    assert "pipx install --force" in result.output
 
 
 def test_migrate_command_is_unavailable():
