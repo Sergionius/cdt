@@ -1,5 +1,6 @@
 import json
 import re
+import subprocess
 import sys
 
 from typer.testing import CliRunner
@@ -44,6 +45,18 @@ def test_root_version_flags():
 
         assert result.exit_code == 0
         assert result.output == "cdt 0.2.0\n"
+
+
+def test_python_module_version_flag():
+    result = subprocess.run(
+        [sys.executable, "-m", "cdt", "--version"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == "cdt 0.2.0\n"
 
 
 def test_command_help_lists_key_options():

@@ -36,6 +36,9 @@ Issues = "https://github.com/Sergionius/cdt/issues"
 [tool.setuptools.packages.find]
 include = ["cdt*"]
 
+[tool.setuptools.package-data]
+cdt = ["py.typed"]
+
 [tool.ruff]
 line-length = 120
 target-version = "py310"
