@@ -4,16 +4,25 @@ CDT is an AI-friendly release automation CLI built around project-local YAML pip
 
 ## Installation
 
+CDT is a CLI tool, so `pipx` is the recommended installation method.
+
 Install a specific GitHub release:
 
 ```bash
-pip install "git+https://github.com/Sergionius/cdt.git@v0.2.0"
+pipx install "git+https://github.com/Sergionius/cdt.git@v0.2.0"
 ```
 
 Or install the latest `main`:
 
 ```bash
-pip install "git+https://github.com/Sergionius/cdt.git"
+pipx install "git+https://github.com/Sergionius/cdt.git"
+```
+
+Upgrade or reinstall:
+
+```bash
+pipx uninstall cdt
+pipx install "git+https://github.com/Sergionius/cdt.git@v0.2.0"
 ```
 
 For local development:
@@ -22,7 +31,11 @@ For local development:
 git clone https://github.com/Sergionius/cdt.git
 cd cdt
 python -m pip install -e '.[dev]'
+# or reinstall the local checkout as a pipx CLI:
+scripts/reinstall.sh
 ```
+
+`pip install git+https://github.com/Sergionius/cdt.git@v0.2.0` also works, but `pipx` keeps the CLI isolated from project Python environments.
 
 Note: the `cdt` name on PyPI belongs to another project, so install this CDT from GitHub.
 
