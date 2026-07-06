@@ -1,5 +1,6 @@
 import json
 import re
+import site
 import subprocess
 import sys
 import urllib.error
@@ -12,6 +13,7 @@ from . import __version__
 
 _GITHUB_API_LATEST = "https://api.github.com/repos/{owner}/{repo}/releases/latest"
 _SAFE_TAG_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+_PIPX_VENV_MARKER = "/pipx/venvs/"
 
 
 class SelfUpdateError(Exception):
@@ -20,6 +22,8 @@ class SelfUpdateError(Exception):
 
 def _owner_repo_from_url(repo_url: str) -> tuple[str, str]:
     parsed = urlparse(repo_url)
+    if parsed.scheme != "https" or parsed.netloc != "github.com":
+        raise SelfUpdateError(f"Unsupported repository URL (only https://github.com URLs are accepted): {repo_url}")
     path = parsed.path.strip("/")
     if path.endswith(".git"):
         path = path[:-4]
@@ -27,6 +31,32 @@ def _owner_repo_from_url(repo_url: str) -> tuple[str, str]:
     if len(parts) != 2 or not parts[0] or not parts[1]:
         raise SelfUpdateError(f"Unable to parse owner/repo from repository URL: {repo_url}")
     return parts[0], parts[1]
+
+
+def _version_key(version: str) -> tuple[tuple[int, ...], int, tuple[str, ...]]:
+    """Return a sortable key for a simple semver-like version string.
+
+    A version without a pre-release segment is considered newer than the same
+    release with a pre-release segment, e.g. ``0.4.0`` > ``0.4.0-dev``.
+    """
+    version = version.lstrip("v")
+    tokens = re.split(r"[.-]", version)
+    release: list[int] = []
+    pre: list[str] = []
+    for token in tokens:
+        if not token:
+            continue
+        if token.isdigit() and not pre:
+            release.append(int(token))
+        else:
+            pre.append(token)
+    # A release without a pre-release segment sorts after the same release
+    # with a pre-release segment, so use a higher indicator for no pre-release.
+    return tuple(release), (1 if not pre else 0), tuple(pre)
+
+
+def _is_up_to_date(current: str, latest: str) -> bool:
+    return _version_key(current) >= _version_key(latest)
 
 
 def _latest_release_tag(owner: str, repo: str) -> str:
@@ -47,26 +77,47 @@ def _latest_release_tag(owner: str, repo: str) -> str:
     except json.JSONDecodeError as exc:
         raise SelfUpdateError("Unable to parse GitHub API response.") from exc
 
+    if not isinstance(data, dict):
+        raise SelfUpdateError("Unexpected GitHub API response format.")
+
     tag = data.get("tag_name")
     if not tag:
         raise SelfUpdateError("GitHub release does not contain a tag_name.")
     return tag
 
 
-def _detect_install_method() -> str | None:
+def _run_pip_show() -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-m", "pip", "show", "cdt"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        timeout=15,
+    )
+
+
+def _run_pipx_list() -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["pipx", "list", "--json"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        timeout=15,
+    )
+
+
+def _detect_install_method() -> tuple[str, bool] | None:
     executable = sys.executable
     lowered = executable.lower()
-    if "pipx" in lowered:
-        return "pipx"
+    if _PIPX_VENV_MARKER in lowered:
+        return "pipx", False
 
     try:
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "show", "cdt"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=15,
-        )
+        result = _run_pip_show()
         if result.returncode == 0:
             location = None
             editable = False
@@ -77,33 +128,36 @@ def _detect_install_method() -> str | None:
                     editable = True
             if editable:
                 return None
-            if location and "pipx" in location.lower():
-                return "pipx"
-            return "pip"
-    except (OSError, subprocess.TimeoutExpired):
+            if location:
+                lowered_location = location.lower()
+                if _PIPX_VENV_MARKER in lowered_location:
+                    return "pipx", False
+                is_user = bool(location.startswith(site.getusersitepackages()))
+                return "pip", is_user
+    except (OSError, subprocess.TimeoutExpired, UnicodeDecodeError):
         pass
 
     try:
-        result = subprocess.run(
-            ["pipx", "list", "--json"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=15,
-        )
+        result = _run_pipx_list()
         if result.returncode == 0:
             payload = json.loads(result.stdout)
+            if not isinstance(payload, dict):
+                return None
             venvs = payload.get("venvs", {})
+            if not isinstance(venvs, dict):
+                return None
             if any(name.lower() in {"cdt", "cdt-cli"} for name in venvs):
-                return "pipx"
+                return "pipx", False
             for venv_data in venvs.values():
-                try:
-                    packages = venv_data.get("metadata", {}).get("main_package", {})
-                except AttributeError:
+                if not isinstance(venv_data, dict):
                     continue
-                if isinstance(packages, dict) and packages.get("package") == "cdt":
-                    return "pipx"
-    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+                metadata = venv_data.get("metadata", {})
+                if not isinstance(metadata, dict):
+                    continue
+                main_package = metadata.get("main_package", {})
+                if isinstance(main_package, dict) and main_package.get("package") == "cdt":
+                    return "pipx", False
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError, UnicodeDecodeError):
         pass
 
     return None
@@ -114,23 +168,27 @@ def _validate_tag(tag: str) -> None:
         raise SelfUpdateError(f"Unsafe or invalid release tag: {tag}")
 
 
-def _update_command(tag: str, method: str, *, owner: str, repo: str) -> list[str]:
+def _update_command(tag: str, method: str, *, is_user: bool = False, owner: str, repo: str) -> list[str]:
     _validate_tag(tag)
     package_url = f"git+https://github.com/{owner}/{repo}.git@{tag}"
     if method == "pipx":
         return ["pipx", "install", "--force", package_url]
     if method == "pip":
-        return [sys.executable, "-m", "pip", "install", "--force-reinstall", package_url]
+        cmd = [sys.executable, "-m", "pip", "install", "--force-reinstall"]
+        if is_user:
+            cmd.append("--user")
+        cmd.append(package_url)
+        return cmd
     raise SelfUpdateError(f"Unsupported install method: {method}")
-
-
-def _normalized_version(tag_or_version: str) -> str:
-    return tag_or_version.lstrip("v")
 
 
 def _manual_update_command(tag: str, *, owner: str, repo: str) -> str:
     _validate_tag(tag)
-    return f"pipx install --force git+https://github.com/{owner}/{repo}.git@{tag}"
+    package_url = f"git+https://github.com/{owner}/{repo}.git@{tag}"
+    return (
+        f"pipx install --force {package_url}\n"
+        f"{sys.executable} -m pip install --force-reinstall {package_url}"
+    )
 
 
 def run_self_update(*, repo_url: str, dry_run: bool = False) -> int:
@@ -140,12 +198,12 @@ def run_self_update(*, repo_url: str, dry_run: bool = False) -> int:
     typer.echo(f"Current version: {__version__}")
     typer.echo(f"Latest release: {latest_tag}")
 
-    if _normalized_version(latest_tag) == _normalized_version(__version__):
+    if _is_up_to_date(__version__, latest_tag):
         typer.echo("Already up to date.")
         return 0
 
-    method = _detect_install_method()
-    if method is None:
+    method_info = _detect_install_method()
+    if method_info is None:
         manual_command = _manual_update_command(latest_tag, owner=owner, repo=repo)
         if dry_run:
             typer.echo(
@@ -161,7 +219,8 @@ def run_self_update(*, repo_url: str, dry_run: bool = False) -> int:
         )
         return 1
 
-    command = _update_command(latest_tag, method, owner=owner, repo=repo)
+    method, is_user = method_info
+    command = _update_command(latest_tag, method, is_user=is_user, owner=owner, repo=repo)
     typer.echo(f"Update command: {' '.join(command)}")
 
     if dry_run:

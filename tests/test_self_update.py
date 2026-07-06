@@ -10,6 +10,7 @@ from cdt import __version__, self_update
 from cdt.self_update import (
     SelfUpdateError,
     _detect_install_method,
+    _is_up_to_date,
     _latest_release_tag,
     _owner_repo_from_url,
     _update_command,
@@ -88,7 +89,7 @@ def test_latest_release_tag_invalid_json_raises():
 
 def test_detect_install_method_detects_pipx_from_executable(monkeypatch):
     monkeypatch.setattr(sys, "executable", "/home/user/.local/pipx/venvs/cdt/bin/python")
-    assert _detect_install_method() == "pipx"
+    assert _detect_install_method() == ("pipx", False)
 
 
 def test_detect_install_method_detects_pipx_from_pip_show(monkeypatch):
@@ -105,7 +106,7 @@ def test_detect_install_method_detects_pipx_from_pip_show(monkeypatch):
         return result
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    assert _detect_install_method() == "pipx"
+    assert _detect_install_method() == ("pipx", False)
 
 
 def test_detect_install_method_rejects_editable_install(monkeypatch):
@@ -144,7 +145,7 @@ def test_detect_install_method_falls_back_to_pip(monkeypatch):
         return result
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    assert _detect_install_method() == "pip"
+    assert _detect_install_method() == ("pip", False)
 
 
 def test_detect_install_method_detects_pipx_from_pipx_list(monkeypatch):
@@ -163,7 +164,7 @@ def test_detect_install_method_detects_pipx_from_pipx_list(monkeypatch):
         return result
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    assert _detect_install_method() == "pipx"
+    assert _detect_install_method() == ("pipx", False)
 
 
 def test_detect_install_method_detects_pipx_from_main_package(monkeypatch):
@@ -184,7 +185,7 @@ def test_detect_install_method_detects_pipx_from_main_package(monkeypatch):
         return result
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    assert _detect_install_method() == "pipx"
+    assert _detect_install_method() == ("pipx", False)
 
 
 def test_detect_install_method_returns_none_when_unknown(monkeypatch):
@@ -298,7 +299,7 @@ def test_run_self_update_dry_run_prints_command(monkeypatch, capsys):
     monkeypatch.setattr(
         self_update,
         "_detect_install_method",
-        lambda: "pipx",
+        lambda: ("pipx", False),
     )
 
     exit_code = run_self_update(repo_url="https://github.com/Sergionius/cdt", dry_run=True)
@@ -371,7 +372,7 @@ def test_run_self_update_executes_command(monkeypatch, capsys):
         return FakeResponse(github_latest_release_json("v0.4.0"))
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr(self_update, "_detect_install_method", lambda: "pipx")
+    monkeypatch.setattr(self_update, "_detect_install_method", lambda: ("pipx", False))
 
     recorded = []
 
@@ -397,7 +398,7 @@ def test_run_self_update_propagates_command_failure(monkeypatch, capsys):
         return FakeResponse(github_latest_release_json("v0.4.0"))
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr(self_update, "_detect_install_method", lambda: "pipx")
+    monkeypatch.setattr(self_update, "_detect_install_method", lambda: ("pipx", False))
 
     def fake_run(command, **kwargs):
         result = MagicMock()
@@ -418,7 +419,7 @@ def test_run_self_update_handles_missing_executable(monkeypatch, capsys):
         return FakeResponse(github_latest_release_json("v0.4.0"))
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr(self_update, "_detect_install_method", lambda: "pipx")
+    monkeypatch.setattr(self_update, "_detect_install_method", lambda: ("pipx", False))
 
     def fake_run(command, **kwargs):
         raise FileNotFoundError("pipx")
@@ -437,7 +438,7 @@ def test_run_self_update_handles_os_error(monkeypatch, capsys):
         return FakeResponse(github_latest_release_json("v0.4.0"))
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr(self_update, "_detect_install_method", lambda: "pipx")
+    monkeypatch.setattr(self_update, "_detect_install_method", lambda: ("pipx", False))
 
     def fake_run(command, **kwargs):
         raise PermissionError("denied")
@@ -456,7 +457,7 @@ def test_run_self_update_handles_timeout(monkeypatch, capsys):
         return FakeResponse(github_latest_release_json("v0.4.0"))
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr(self_update, "_detect_install_method", lambda: "pipx")
+    monkeypatch.setattr(self_update, "_detect_install_method", lambda: ("pipx", False))
 
     def fake_run(command, **kwargs):
         raise subprocess.TimeoutExpired("pipx", 300)
@@ -468,3 +469,128 @@ def test_run_self_update_handles_timeout(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert exit_code == 1
     assert "Update timed out" in captured.err
+
+
+def test_owner_repo_from_url_rejects_non_github():
+    with pytest.raises(SelfUpdateError, match="Unsupported repository URL"):
+        _owner_repo_from_url("https://gitlab.com/Sergionius/cdt")
+
+
+def test_owner_repo_from_url_rejects_http():
+    with pytest.raises(SelfUpdateError, match="Unsupported repository URL"):
+        _owner_repo_from_url("http://github.com/Sergionius/cdt")
+
+
+def test_latest_release_tag_non_dict_response_raises():
+    response = FakeResponse(json.dumps(["not", "a", "dict"]).encode("utf-8"))
+
+    with patch("urllib.request.urlopen", return_value=response):
+        with pytest.raises(SelfUpdateError, match="Unexpected GitHub API response format"):
+            _latest_release_tag("Sergionius", "cdt")
+
+
+def test_is_up_to_date_skips_newer_and_equal_versions():
+    assert _is_up_to_date("0.4.0", "0.3.0") is True
+    assert _is_up_to_date("0.3.0", "0.3.0") is True
+    assert _is_up_to_date("v0.3.0", "0.3.0") is True
+    assert _is_up_to_date("0.4.0-dev", "0.3.0") is True
+    assert _is_up_to_date("0.4.0", "0.4.0-beta") is True
+    assert _is_up_to_date("0.3.0", "0.4.0") is False
+
+
+def test_run_self_update_skips_when_current_newer(monkeypatch, capsys):
+    def fake_urlopen(url, **kwargs):
+        return FakeResponse(github_latest_release_json("v0.2.0"))
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    exit_code = run_self_update(repo_url="https://github.com/Sergionius/cdt", dry_run=False)
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Already up to date" in captured.out
+
+
+def test_detect_install_method_does_not_misdetect_pipx_from_unrelated_path(monkeypatch):
+    monkeypatch.setattr(sys, "executable", "/home/pipx_user/projects/venv/bin/python")
+
+    def fake_run(args, **kwargs):
+        result = MagicMock()
+        result.returncode = 0
+        result.stdout = (
+            "Name: cdt\nVersion: 0.3.0\n"
+            "Location: /home/pipx_user/projects/venv/lib/python3.12/site-packages\n"
+        )
+        result.stderr = ""
+        return result
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert _detect_install_method() == ("pip", False)
+
+
+def test_detect_install_method_detects_pip_user_install(monkeypatch):
+    monkeypatch.setattr(sys, "executable", "/usr/bin/python3")
+    monkeypatch.setattr(
+        self_update.site,
+        "getusersitepackages",
+        lambda: "/home/user/.local/lib/python3.12/site-packages",
+    )
+
+    def fake_run(args, **kwargs):
+        result = MagicMock()
+        result.returncode = 0
+        result.stdout = (
+            "Name: cdt\nVersion: 0.3.0\n"
+            "Location: /home/user/.local/lib/python3.12/site-packages/cdt\n"
+        )
+        result.stderr = ""
+        return result
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert _detect_install_method() == ("pip", True)
+
+
+def test_update_command_for_pip_includes_user_flag_when_requested():
+    cmd = _update_command("v0.4.0", "pip", is_user=True, owner="Sergionius", repo="cdt")
+    assert cmd[:3] == [sys.executable, "-m", "pip"]
+    assert "--force-reinstall" in cmd
+    assert "--user" in cmd
+    assert "git+https://github.com/Sergionius/cdt.git@v0.4.0" in cmd
+
+
+def test_detect_install_method_handles_non_dict_pipx_payload(monkeypatch):
+    monkeypatch.setattr(sys, "executable", "/usr/bin/python3")
+
+    def fake_run(args, **kwargs):
+        result = MagicMock()
+        if args[:3] == [sys.executable, "-m", "pip"]:
+            result.returncode = 1
+        elif args[:2] == ["pipx", "list"]:
+            result.returncode = 0
+            result.stdout = json.dumps(["not", "a", "dict"])
+        else:
+            result.returncode = 1
+        result.stderr = ""
+        return result
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert _detect_install_method() is None
+
+
+def test_detect_install_method_handles_non_dict_pipx_venvs(monkeypatch):
+    monkeypatch.setattr(sys, "executable", "/usr/bin/python3")
+
+    def fake_run(args, **kwargs):
+        result = MagicMock()
+        if args[:3] == [sys.executable, "-m", "pip"]:
+            result.returncode = 1
+        elif args[:2] == ["pipx", "list"]:
+            result.returncode = 0
+            result.stdout = json.dumps({"venvs": ["not", "a", "dict"]})
+        else:
+            result.returncode = 1
+        result.stderr = ""
+        return result
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert _detect_install_method() is None

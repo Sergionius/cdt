@@ -87,7 +87,7 @@ def test_self_update_help_available():
 
 def test_self_update_dry_run_shows_version_and_command(monkeypatch):
     monkeypatch.setattr(self_update_module, "_latest_release_tag", lambda owner, repo: "v9.9.9")
-    monkeypatch.setattr(self_update_module, "_detect_install_method", lambda: "pipx")
+    monkeypatch.setattr(self_update_module, "_detect_install_method", lambda: ("pipx", False))
 
     result = runner.invoke(app, ["self-update", "--dry-run"])
 
