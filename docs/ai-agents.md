@@ -3,6 +3,63 @@
 CDT exposes a CLI and JSON contract that agents can use without reading Python
 internals.
 
+## CDT Release Skill
+
+This repository includes an Agent Skill for release automation:
+
+```text
+skills/cdt-release/SKILL.md
+```
+
+Use it when an AI agent is asked to send a CDT test release, upload to
+TestFlight/AppTester/Firebase, or run commands such as `cdt run test` and
+`cdt run ios-test`. The skill instructs the agent to:
+
+- inspect `cdt.yaml` before running a pipeline;
+- use `cdt pipeline list` and `cdt pipeline inspect <pipeline>` as preflight;
+- avoid production-like pipelines unless the user explicitly asks for production;
+- capture long output in `.cdt/agent-release-<pipeline>.log`;
+- report concise success/failure summaries instead of pasting full build logs.
+
+### Install for Pi
+
+Pi can load skills from packages, local paths, or settings. To install the CDT
+repository as a Pi package:
+
+```sh
+pi install git:github.com/Sergionius/cdt
+```
+
+For a local checkout:
+
+```sh
+pi install /path/to/cdt
+```
+
+A project can also reference only the skill directory in `.pi/settings.json`:
+
+```json
+{
+  "skills": ["../cdt/skills"]
+}
+```
+
+Adjust the relative path so it points from the project settings file to the CDT
+checkout.
+
+### Install for Codex or other Agent Skills clients
+
+Copy or symlink `skills/cdt-release/` into the client skill directory, for
+example:
+
+```sh
+mkdir -p ~/.codex/skills
+ln -s /path/to/cdt/skills/cdt-release ~/.codex/skills/cdt-release
+```
+
+The skill follows the common `SKILL.md` directory layout and can be used by
+Agent Skills compatible clients.
+
 ## Add a Project Step
 
 Create a project-local plugin module and register a function with `@step`:

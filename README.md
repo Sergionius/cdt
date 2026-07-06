@@ -40,6 +40,20 @@ pipelines:
 
 See `examples/cdt.yaml` and `docs/pipelines.md` for a fuller prod pipeline, plugins, artifacts, and hooks.
 
+## AI agent skill
+
+CDT ships an Agent Skill at `skills/cdt-release/SKILL.md` for safer low-noise release runs by AI coding agents. It makes agents inspect `cdt.yaml`, avoid production pipelines unless explicitly requested, write long logs to `.cdt/agent-release-<pipeline>.log`, and return concise success/failure summaries.
+
+For Pi, install this repository as a package or point settings at the local skill directory:
+
+```bash
+pi install git:github.com/Sergionius/cdt
+# or, from a local checkout:
+pi install /path/to/cdt
+```
+
+See `docs/ai-agents.md` for Codex/Pi setup details.
+
 ## Built-in steps
 
 Use `cdt pipeline steps` for the complete list. Common built-ins:
