@@ -18,8 +18,6 @@ _RISK_ORDER = {
     "custom": 7,
 }
 
-_ARTIFACT_NAME_PRODUCING_TYPES = {"artifact", "ios_ipa", "android_aab", "android_apk", "web_build"}
-
 
 @dataclass
 class _PlanState:
@@ -29,7 +27,7 @@ class _PlanState:
     def copy(self) -> "_PlanState":
         return _PlanState(set(self.available_names), set(self.available_types))
 
-    def add_flow(self, flow: dict[str, list[str]]) -> None:
+    def add_flow(self, flow: dict[str, Any]) -> None:
         self.available_names.update(flow["produces_names"])
         self.available_types.update(flow["produces_types"])
 
@@ -135,34 +133,46 @@ def _compact_metadata(metadata: StepMetadata) -> dict[str, Any]:
     return payload
 
 
-def _artifact_flow(step: StepSpec, metadata: StepMetadata) -> dict[str, list[str]]:
-    artifact_name = _static_artifact_name(step.options)
-    requires_names: list[str] = []
+def _artifact_flow(step: StepSpec, metadata: StepMetadata) -> dict[str, Any]:
     produces_names: list[str] = []
+    produces_types: list[str] = []
+    for production in metadata.produces:
+        produces_types.append(production.result_type)
+        produces_names.extend(_static_names_from_options(step.options, production.name_options))
 
-    if artifact_name is not None and metadata.requires_artifacts:
-        requires_names.append(artifact_name)
-    if artifact_name is not None and set(metadata.produces) & _ARTIFACT_NAME_PRODUCING_TYPES:
-        produces_names.append(artifact_name)
+    requires: list[dict[str, Any]] = []
+    requires_names: list[str] = []
+    for requirement in metadata.requires:
+        names = _static_names_from_options(step.options, requirement.name_options)
+        requires_names.extend(names)
+        requires.append(
+            {
+                "types": list(requirement.result_types),
+                "mode": requirement.mode,
+                "names": names,
+            }
+        )
 
     return {
+        "requires": requires,
         "requires_names": requires_names,
         "produces_names": produces_names,
-        "requires_types": list(metadata.requires_artifacts),
-        "produces_types": list(metadata.produces),
+        "produces_types": produces_types,
     }
 
 
-def _static_artifact_name(options: dict[str, Any]) -> str | None:
-    value = options.get("artifact")
-    if not isinstance(value, str) or "${" in value:
-        return None
-    return value
+def _static_names_from_options(options: dict[str, Any], name_options: tuple[str, ...]) -> list[str]:
+    names: list[str] = []
+    for option_name in name_options:
+        value = options.get(option_name)
+        if isinstance(value, str) and "${" not in value:
+            names.append(value)
+    return names
 
 
 def _warn_for_missing_artifacts(
     step_name: str,
-    artifact_flow: dict[str, list[str]],
+    artifact_flow: dict[str, Any],
     state: _PlanState,
     warnings: list[dict[str, str]],
     path: str,
@@ -170,31 +180,32 @@ def _warn_for_missing_artifacts(
     sibling_produced_names: set[str] | None = None,
 ) -> None:
     sibling_produced_names = sibling_produced_names or set()
-    for artifact_name in artifact_flow["requires_names"]:
-        if artifact_name in state.available_names:
-            continue
-        if artifact_name in sibling_produced_names:
+    for requirement in artifact_flow["requires"]:
+        for artifact_name in requirement["names"]:
+            if artifact_name in state.available_names:
+                continue
+            if artifact_name in sibling_produced_names:
+                warnings.append(
+                    {
+                        "code": "parallel_artifact_dependency",
+                        "message": (
+                            f"Step {step_name} requires artifact name {artifact_name} from the same parallel group; "
+                            "parallel branches start together."
+                        ),
+                        "path": path,
+                    }
+                )
+                continue
             warnings.append(
                 {
-                    "code": "parallel_artifact_dependency",
+                    "code": "missing_required_artifact",
                     "message": (
-                        f"Step {step_name} requires artifact name {artifact_name} from the same parallel group; "
-                        "parallel branches start together."
+                        f"Step {step_name} requires artifact name {artifact_name}, "
+                        "but no previous step declares it."
                     ),
                     "path": path,
                 }
             )
-            continue
-        warnings.append(
-            {
-                "code": "missing_required_artifact",
-                "message": (
-                    f"Step {step_name} requires artifact name {artifact_name}, "
-                    "but no previous step declares it."
-                ),
-                "path": path,
-            }
-        )
 
 
 def _strip_internal_path(node: dict[str, Any]) -> dict[str, Any]:

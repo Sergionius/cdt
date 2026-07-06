@@ -3,6 +3,8 @@ import typer
 
 from cdt.pipeline.builtins import register_builtin_steps
 from cdt.pipeline.registry import (
+    ResultProduction,
+    ResultRequirement,
     StepMetadata,
     _clear_steps_for_tests,
     get_step_factory,
@@ -62,17 +64,48 @@ def test_builtin_metadata_registration():
     ios_ipa = get_step_metadata("ios.flutter_build_ipa")
     android_aab = get_step_metadata("android.build_aab")
     android_apk = get_step_metadata("android.build_apk")
+    firebase = get_step_metadata("firebase.upload_app_distribution")
 
     assert flutter.category == "flutter"
     assert flutter.risk == "safe"
     assert flutter.external_tools == ("flutter",)
     assert appstore.category == "appstore"
     assert appstore.risk == "upload"
-    assert appstore.requires_artifacts == ("ios_ipa",)
-    assert appstore.produces == ("upload_result",)
-    assert ios_ipa.produces == ("ios_ipa",)
-    assert android_aab.produces == ("android_aab",)
-    assert android_apk.produces == ("android_apk",)
+    assert appstore.requires == (ResultRequirement(("ios_ipa",), name_options=("artifact",)),)
+    assert appstore.produces == (ResultProduction("upload_result"),)
+    assert ios_ipa.produces == (ResultProduction("ios_ipa", name_options=("artifact",)),)
+    assert android_aab.produces == (ResultProduction("android_aab", name_options=("artifact",)),)
+    assert android_apk.produces == (ResultProduction("android_apk", name_options=("artifact",)),)
+    assert firebase.requires == (
+        ResultRequirement(("android_aab", "android_apk"), mode="any", name_options=("artifact",)),
+    )
+
+
+def test_step_metadata_to_dict_is_structured():
+    metadata = StepMetadata(
+        name="demo.step",
+        description="Demo step",
+        category="demo",
+        risk="safe",
+        requires=(ResultRequirement(("ios_ipa",), name_options=("artifact",)),),
+        produces=(ResultProduction("upload_result"),),
+        external_tools=("demo",),
+    )
+
+    assert metadata.to_dict() == {
+        "name": "demo.step",
+        "description": "Demo step",
+        "category": "demo",
+        "risk": "safe",
+        "requires": [
+            {"result_types": ["ios_ipa"], "mode": "all", "name_options": ["artifact"]},
+        ],
+        "produces": [
+            {"result_type": "upload_result", "name_options": []},
+        ],
+        "external_tools": ["demo"],
+        "plugin": False,
+    }
 
 
 def test_duplicate_step_registration_errors():
@@ -90,7 +123,13 @@ def test_unknown_step_error_lists_available_steps():
 
 
 def test_sdk_step_accepts_keyword_metadata():
-    @sdk_step("demo.fetch", description="Fetch demo data", category="demo", risk="safe", produces=("json",))
+    @sdk_step(
+        "demo.fetch",
+        description="Fetch demo data",
+        category="demo",
+        risk="safe",
+        produces=[ResultProduction("json")],
+    )
     def fetch(ctx, output: str) -> None:
         pass
 
@@ -98,8 +137,32 @@ def test_sdk_step_accepts_keyword_metadata():
     assert metadata.description == "Fetch demo data"
     assert metadata.category == "demo"
     assert metadata.risk == "safe"
-    assert metadata.produces == ("json",)
+    assert metadata.produces == (ResultProduction("json"),)
     assert metadata.plugin is True
+
+
+def test_sdk_step_accepts_requires_and_produces():
+    @sdk_step(
+        "demo.upload",
+        requires=[ResultRequirement(("ios_ipa",), name_options=("artifact",))],
+        produces=[ResultProduction("upload_result")],
+    )
+    def upload(ctx, output: str) -> None:
+        pass
+
+    metadata = get_step_metadata("demo.upload")
+    assert metadata.requires == (ResultRequirement(("ios_ipa",), name_options=("artifact",)),)
+    assert metadata.produces == (ResultProduction("upload_result"),)
+    assert metadata.plugin is True
+
+
+def test_sdk_step_rejects_metadata_with_requires_or_produces():
+    given = StepMetadata(name="demo.fetch")
+
+    with pytest.raises(TypeError, match="Cannot pass both 'metadata' and 'requires'/'produces'"):
+        @sdk_step("demo.fetch", metadata=given, requires=[ResultRequirement(("ios_ipa",))])
+        def fetch(ctx, output: str) -> None:
+            pass
 
 
 def test_sdk_step_accepts_metadata_object():

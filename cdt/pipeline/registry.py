@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from difflib import get_close_matches
 
 import typer
@@ -10,28 +10,76 @@ StepFactory = Callable[..., Step]
 
 
 @dataclass(frozen=True)
+class ResultRequirement:
+    """Describes a result/artifact that a step needs from previous steps.
+
+    result_types: static result/artifact types the step consumes.
+    mode:        "all" if every type is required, "any" if at least one is enough.
+    name_options: YAML option keys whose values provide the configured artifact
+                  name(s) for this requirement. Empty means no static name
+                  inference is possible.
+    """
+
+    result_types: tuple[str, ...]
+    mode: str = "all"
+    name_options: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict:
+        return {
+            "result_types": list(self.result_types),
+            "mode": self.mode,
+            "name_options": list(self.name_options),
+        }
+
+
+@dataclass(frozen=True)
+class ResultProduction:
+    """Describes a result/artifact that a step produces.
+
+    result_type: static result/artifact type the step creates.
+    name_options: YAML option keys whose values provide the configured artifact
+                  name(s). Empty means the step does not expose a configurable
+                  artifact name.
+    """
+
+    result_type: str
+    name_options: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict:
+        return {
+            "result_type": self.result_type,
+            "name_options": list(self.name_options),
+        }
+
+
+@dataclass(frozen=True)
 class StepMetadata:
     """Static step metadata used for planning and preflight checks.
 
-    requires_artifacts and produces describe artifact/result types, not configured
-    pipeline-local artifact names.
+    `requires` and `produces` use structured dataclasses. They describe static
+    result/artifact types, not configured pipeline-local artifact names.
     """
 
     name: str
     description: str = ""
     category: str = "custom"
     risk: str = "custom"
-    requires_artifacts: tuple[str, ...] = ()
-    produces: tuple[str, ...] = ()
+    requires: tuple[ResultRequirement, ...] = ()
+    produces: tuple[ResultProduction, ...] = ()
     external_tools: tuple[str, ...] = ()
     plugin: bool = False
 
     def to_dict(self) -> dict:
-        payload = asdict(self)
-        payload["requires_artifacts"] = list(self.requires_artifacts)
-        payload["produces"] = list(self.produces)
-        payload["external_tools"] = list(self.external_tools)
-        return payload
+        return {
+            "name": self.name,
+            "description": self.description,
+            "category": self.category,
+            "risk": self.risk,
+            "requires": [req.to_dict() for req in self.requires],
+            "produces": [prod.to_dict() for prod in self.produces],
+            "external_tools": list(self.external_tools),
+            "plugin": self.plugin,
+        }
 
 
 _STEP_FACTORIES: dict[str, StepFactory] = {}
@@ -85,8 +133,21 @@ def _normalize_metadata(name: str, metadata: StepMetadata | None) -> StepMetadat
         description=metadata.description,
         category=metadata.category,
         risk=metadata.risk,
-        requires_artifacts=tuple(metadata.requires_artifacts),
-        produces=tuple(metadata.produces),
+        requires=tuple(
+            ResultRequirement(
+                result_types=tuple(req.result_types),
+                mode=req.mode,
+                name_options=tuple(req.name_options),
+            )
+            for req in metadata.requires
+        ),
+        produces=tuple(
+            ResultProduction(
+                result_type=prod.result_type,
+                name_options=tuple(prod.name_options),
+            )
+            for prod in metadata.produces
+        ),
         external_tools=tuple(metadata.external_tools),
         plugin=metadata.plugin,
     )

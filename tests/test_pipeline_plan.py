@@ -61,22 +61,24 @@ def test_pipeline_plan_json_includes_risks_and_parallel_steps(tmp_path, monkeypa
     assert payload["steps"][1]["type"] == "parallel"
     assert payload["steps"][1]["risk"] == "build"
     assert payload["steps"][1]["steps"][0]["artifact_flow"] == {
+        "requires": [],
         "requires_names": [],
         "produces_names": ["ios_ipa"],
-        "requires_types": [],
         "produces_types": ["ios_ipa"],
     }
     assert payload["steps"][1]["steps"][1]["artifact_flow"] == {
+        "requires": [],
         "requires_names": [],
         "produces_names": ["android_aab"],
-        "requires_types": [],
         "produces_types": ["android_aab"],
     }
     assert payload["steps"][2]["risk"] == "upload"
     assert payload["steps"][2]["artifact_flow"] == {
+        "requires": [
+            {"types": ["ios_ipa"], "mode": "all", "names": ["ios_ipa"]},
+        ],
         "requires_names": ["ios_ipa"],
         "produces_names": [],
-        "requires_types": ["ios_ipa"],
         "produces_types": ["upload_result"],
     }
     assert payload["warnings"] == []
@@ -252,6 +254,33 @@ def test_pipeline_plan_json_ignores_dynamic_or_non_string_artifact_options(tmp_p
     assert payload["steps"][0]["artifact_flow"]["requires_names"] == []
     assert payload["steps"][1]["artifact_flow"]["requires_names"] == []
     assert payload["warnings"] == []
+
+
+def test_pipeline_plan_json_artifact_flow_grouped_requires(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  demo:",
+                "    steps:",
+                "      - firebase.upload_app_distribution:",
+                "          artifact: android_aab",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["pipeline", "plan", "demo", "--json"])
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0
+    assert payload["steps"][0]["artifact_flow"]["requires"] == [
+        {"types": ["android_aab", "android_apk"], "mode": "any", "names": ["android_aab"]}
+    ]
+    assert payload["steps"][0]["artifact_flow"]["requires_names"] == ["android_aab"]
 
 
 def test_run_executes_steps_without_dry_run(tmp_path, monkeypatch):

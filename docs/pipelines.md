@@ -42,7 +42,17 @@ cdt pipeline plan prod --json
 
 `cdt run <pipeline> --dry-run` uses the same planner and does not call step execution code. It is intended as a safe preflight before real release, upload, deploy, or git-push work.
 
-JSON plans include compact step metadata plus `artifact_flow` for each step. `requires_types` and `produces_types` come from `StepMetadata.requires_artifacts` and `StepMetadata.produces`; these are static artifact/result types such as `ios_ipa`, `android_aab`, `web_build`, `version`, or `upload_result`, not configured artifact names. `requires_names` and `produces_names` are best-effort names inferred from a static string `artifact` option in `cdt.yaml`.
+JSON plans include compact step metadata plus `artifact_flow` for each step. `artifact_flow.produces_types` lists static result types a step creates, such as `ios_ipa`, `android_aab`, `web_build`, `version`, `upload_result`, `notification`, `tracker_comment`, or `file`. `artifact_flow.requires` is a list of grouped requirement entries:
+
+```json
+{
+  "types": ["ios_ipa"],
+  "mode": "all",
+  "names": ["ios_ipa"]
+}
+```
+
+`mode` is `all` when every listed type is required, or `any` when at least one is acceptable. `names` are best-effort artifact names inferred from static string options in `cdt.yaml` (for example, `artifact: ios_ipa`). Dynamic interpolations such as `${values.ios_artifact}` are ignored for static analysis. `artifact_flow.requires_names` and `produces_names` are flattened convenience lists.
 
 Artifact-flow warnings are preflight hints and do not block execution by themselves. A missing required artifact warning means a step refers to an artifact name that no previous sequential step declares. Parallel branches start together, so a branch cannot consume an artifact produced by a sibling branch; produce the artifact before the parallel group or consume it after the group completes.
 
