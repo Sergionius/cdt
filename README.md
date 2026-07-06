@@ -99,9 +99,9 @@ pi install git:github.com/Sergionius/cdt
 pi install /path/to/cdt
 ```
 
-Hermes users can load the skill with `/skill cdt-release` after exposing this repository's `skills/` directory. Claude Code and similar agents should start from `AGENTS.md`.
+Other Agent Skills compatible clients can use `skills/cdt-release/SKILL.md` by copying or linking the skill directory according to their own installation mechanism. Claude Code and similar agents should start from `AGENTS.md`.
 
-See `docs/ai-agents.md` for Codex/Pi/Hermes/Claude Code setup details.
+See `docs/ai-agents.md` for Pi, Codex, Claude Code, and generic Agent Skills setup details.
 
 ## Built-in steps
 

@@ -5,7 +5,10 @@
 ```bash
 pytest
 ruff check .
+python -m build
 ```
+
+Use `python -m build` before packaging or release changes to verify package metadata and included files. For release notes, check or update `CHANGELOG.md`.
 
 Use focused tests while editing, for example:
 

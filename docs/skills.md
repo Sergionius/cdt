@@ -36,15 +36,6 @@ pi install /path/to/cdt
 
 Pi discovers the conventional `skills/` directory automatically.
 
-## Hermes setup
-
-Install or expose this repository's `skills/` directory to Hermes, then load the
-release skill in a session with:
-
-```text
-/skill cdt-release
-```
-
 ## Codex and other Agent Skills clients
 
 Copy or symlink the skill directory into the client's skills location:
@@ -56,6 +47,11 @@ ln -s /path/to/cdt/skills/cdt-release ~/.codex/skills/cdt-release
 
 After installation, requests like “отправь тестовую сборку через cdt” should load
 `cdt-release` automatically when the client supports skill discovery.
+
+## Other Agent Skills clients
+
+Other clients that support the `SKILL.md` directory layout can use
+`skills/cdt-release/` according to their own installation mechanism.
 
 ## Claude Code and repository-level agents
 

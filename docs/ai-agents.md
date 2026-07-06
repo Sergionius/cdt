@@ -92,14 +92,6 @@ A project can also reference only the skill directory in `.pi/settings.json`:
 Adjust the relative path so it points from the project settings file to the CDT
 checkout.
 
-### Install for Hermes
-
-Expose this repository's `skills/` directory to Hermes, then load the skill with:
-
-```text
-/skill cdt-release
-```
-
 ### Install for Codex or other Agent Skills clients
 
 Copy or symlink `skills/cdt-release/` into the client skill directory, for
@@ -112,6 +104,12 @@ ln -s /path/to/cdt/skills/cdt-release ~/.codex/skills/cdt-release
 
 The skill follows the common `SKILL.md` directory layout and can be used by
 Agent Skills compatible clients.
+
+### Other Agent Skills clients
+
+Other Agent Skills compatible clients can use `skills/cdt-release/SKILL.md` by
+copying or linking `skills/cdt-release/` according to their own skill
+installation mechanism.
 
 ### Claude Code
 
