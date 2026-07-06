@@ -11,9 +11,12 @@ from .pipeline.planning import plan_payload
 from .pipeline.registry import list_steps
 from .pipeline.runner import run_configured_pipeline
 from .pipeline.validation import inspect_payload, step_tree, steps_payload, validate_payload, validate_pipeline
+from .self_update import run_self_update
 
 app = typer.Typer(no_args_is_help=True)
 pipeline_app = typer.Typer(no_args_is_help=True)
+
+_DEFAULT_REPO_URL = "https://github.com/Sergionius/cdt"
 
 
 def _version_callback(value: bool) -> None:
@@ -35,6 +38,15 @@ def main(
 ):
     """CDT CLI entry point."""
     return
+
+
+@app.command(name="self-update")
+def self_update(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show latest release and update command without executing"),
+):
+    """Update CDT to the latest release from GitHub."""
+    exit_code = run_self_update(repo_url=_DEFAULT_REPO_URL, dry_run=dry_run)
+    raise typer.Exit(code=exit_code)
 
 
 @app.command(name="run")

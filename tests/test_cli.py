@@ -5,6 +5,7 @@ import sys
 
 from typer.testing import CliRunner
 
+from cdt import self_update as self_update_module
 from cdt.cli import app
 from cdt.pipeline.registry import _clear_steps_for_tests
 
@@ -35,6 +36,7 @@ def test_root_help_lists_commands():
     for command in (
         "run",
         "pipeline",
+        "self-update",
     ):
         assert command in result.output
 
@@ -72,6 +74,26 @@ def test_command_help_lists_key_options():
         assert result.exit_code == 0
         for option in options:
             assert option in output
+
+
+def test_self_update_help_available():
+    result = runner.invoke(app, ["self-update", "--help"])
+
+    assert result.exit_code == 0
+    assert "--dry-run" in result.output
+
+
+def test_self_update_dry_run_shows_version_and_command(monkeypatch):
+    monkeypatch.setattr(self_update_module, "_latest_release_tag", lambda owner, repo: "v9.9.9")
+    monkeypatch.setattr(self_update_module, "_detect_install_method", lambda: "pipx")
+
+    result = runner.invoke(app, ["self-update", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert "Current version: 0.3.0" in result.output
+    assert "Latest release: v9.9.9" in result.output
+    assert "pipx install --force git+https://github.com/Sergionius/cdt.git@v9.9.9" in result.output
+    assert "Dry run" in result.output
 
 
 def test_migrate_command_is_unavailable():
