@@ -1,6 +1,4 @@
-# CDT
-
-[![CI](https://github.com/Sergionius/cdt/actions/workflows/ci.yml/badge.svg)](https://github.com/Sergionius/cdt/actions/workflows/ci.yml)
+# <img src="site/assets/logo.png" alt="" width="28">&nbsp;CDT &nbsp;[![CI](https://github.com/Sergionius/cdt/actions/workflows/ci.yml/badge.svg)](https://github.com/Sergionius/cdt/actions/workflows/ci.yml)
 
 CDT is an AI-friendly release automation CLI built around project-local YAML pipelines, safe preflight checks, and reusable steps for mobile, web, and custom deployments.
 
@@ -13,7 +11,7 @@ CDT is a CLI tool, so `pipx` is the recommended installation method.
 Install a specific GitHub release:
 
 ```bash
-pipx install "git+https://github.com/Sergionius/cdt.git@v0.2.0"
+pipx install "git+https://github.com/Sergionius/cdt.git@v0.2.1"
 ```
 
 Or install the latest `main`:
@@ -26,7 +24,7 @@ Upgrade or reinstall:
 
 ```bash
 pipx uninstall cdt
-pipx install "git+https://github.com/Sergionius/cdt.git@v0.2.0"
+pipx install "git+https://github.com/Sergionius/cdt.git@v0.2.1"
 ```
 
 For local development:
@@ -39,7 +37,7 @@ python -m pip install -e '.[dev]'
 scripts/reinstall.sh
 ```
 
-`pip install git+https://github.com/Sergionius/cdt.git@v0.2.0` also works, but `pipx` keeps the CLI isolated from project Python environments.
+`pip install git+https://github.com/Sergionius/cdt.git@v0.2.1` also works, but `pipx` keeps the CLI isolated from project Python environments.
 
 Note: the `cdt` name on PyPI belongs to another project, so install this CDT from GitHub.
 
