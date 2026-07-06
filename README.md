@@ -46,8 +46,10 @@ Note: the `cdt` name on PyPI belongs to another project, so install this CDT fro
 ```bash
 cdt --version
 cdt run <pipeline>
+cdt run <pipeline> --dry-run
 cdt pipeline list
 cdt pipeline inspect <pipeline> --json
+cdt pipeline plan <pipeline> --json
 cdt pipeline validate [pipeline]
 cdt pipeline steps
 ```

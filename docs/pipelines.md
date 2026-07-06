@@ -4,8 +4,10 @@ CDT 0.2 uses `cdt.yaml` as the only automation model. Run pipelines with:
 
 ```bash
 cdt run prod
+cdt run prod --dry-run
 cdt pipeline list
 cdt pipeline inspect prod --json
+cdt pipeline plan prod --json
 cdt pipeline validate
 cdt pipeline steps
 ```
@@ -28,6 +30,17 @@ pipelines:
 ```
 
 Top-level fields are `version`, optional `plugins`, and `pipelines`. Legacy top-level lifecycle keys and default pipelines are not supported.
+
+## Planning and dry runs
+
+Use `cdt pipeline plan <pipeline>` to show the static step tree, parallel groups, options, and risk classification without executing any step. Use `--json` for agent- and CI-friendly output.
+
+```bash
+cdt pipeline plan prod
+cdt pipeline plan prod --json
+```
+
+`cdt run <pipeline> --dry-run` uses the same planner and does not call step execution code. It is intended as a safe preflight before real release, upload, deploy, or git-push work.
 
 ## Steps and parallel groups
 

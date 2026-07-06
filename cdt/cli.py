@@ -7,6 +7,7 @@ from . import __version__
 from .config import _load_project_env, _set_ui_mode
 from .pipeline.builtins import register_builtin_steps
 from .pipeline.config import load_pipeline_config, load_plugins
+from .pipeline.planning import plan_payload
 from .pipeline.registry import list_steps
 from .pipeline.runner import run_configured_pipeline
 from .pipeline.validation import inspect_payload, step_tree, steps_payload, validate_payload, validate_pipeline
@@ -40,9 +41,13 @@ def main(
 def run_pipeline(
     name: str = typer.Argument(..., help="Pipeline name from cdt.yaml"),
     id: list[str] = typer.Option([], "--id", help="Repeatable: --id A --id B"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show pipeline plan without executing steps"),
 ):
     """Run a pipeline from cdt.yaml."""
     cwd = Path.cwd()
+    if dry_run:
+        _pipeline_plan(cwd, name, json_output=False)
+        return
     env = _load_project_env(cwd)
     _set_ui_mode(env)
     run_configured_pipeline(cwd, env, name, ids=id)
@@ -97,6 +102,15 @@ def pipeline_inspect(
         for error in errors:
             typer.echo(f"  {error.get('path', '')}: {error['message']}")
         raise typer.Exit(code=1)
+
+
+@pipeline_app.command(name="plan")
+def pipeline_plan(
+    name: str = typer.Argument(..., help="Pipeline name from cdt.yaml"),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+):
+    """Show the static execution plan without running steps."""
+    _pipeline_plan(Path.cwd(), name, json_output=json_output)
 
 
 @pipeline_app.command(name="validate")
@@ -159,6 +173,45 @@ def pipeline_steps(json_output: bool = typer.Option(False, "--json", help="Emit 
 app.add_typer(pipeline_app, name="pipeline")
 
 
+def _pipeline_plan(cwd: Path, name: str, *, json_output: bool) -> None:
+    if json_output:
+        register_builtin_steps()
+        config, errors = _load_config_for_json(cwd)
+        if config is not None:
+            errors.extend(_load_plugins_for_json(config.plugins))
+            errors.extend(validate_pipeline(config, name))
+            _echo_json(plan_payload(config, name, errors=errors))
+        else:
+            _echo_json(_error_payload(name, errors))
+        if errors:
+            raise typer.Exit(code=1)
+        return
+
+    config = load_pipeline_config(cwd)
+    register_builtin_steps()
+    load_plugins(config.plugins)
+    errors = validate_pipeline(config, name)
+    payload = plan_payload(config, name, errors=errors)
+    if name not in config.pipelines:
+        available = ", ".join(sorted(config.pipelines)) or "none"
+        raise typer.BadParameter(f"Unknown pipeline: {name}. Available pipelines: {available}")
+    typer.echo(f"Pipeline: {name}")
+    typer.echo(f"Overall risk: {payload['overall_risk']}")
+    typer.echo("Steps:")
+    _echo_plan_tree(payload["steps"])
+    if payload["warnings"]:
+        typer.echo("")
+        typer.echo("Warnings:")
+        for warning in payload["warnings"]:
+            typer.echo(f"  {warning['message']}")
+    if errors:
+        typer.echo("")
+        typer.echo("Errors:")
+        for error in errors:
+            typer.echo(f"  {error.get('path', '')}: {error['message']}")
+        raise typer.Exit(code=1)
+
+
 def _echo_json(payload: dict) -> None:
     typer.echo(json.dumps(payload, indent=2, sort_keys=True))
 
@@ -197,6 +250,19 @@ def _echo_step_tree(nodes: list[dict], indent: int = 1) -> None:
             _echo_step_tree(node["steps"], indent + 1)
             continue
         typer.echo(f"{prefix}- {node['name']}")
+        if node["options"]:
+            for key, value in node["options"].items():
+                typer.echo(f"{prefix}    {key}: {value}")
+
+
+def _echo_plan_tree(nodes: list[dict], indent: int = 1) -> None:
+    prefix = "  " * indent
+    for node in nodes:
+        if node["type"] == "parallel":
+            typer.echo(f"{prefix}- parallel [{node['risk']}]")
+            _echo_plan_tree(node["steps"], indent + 1)
+            continue
+        typer.echo(f"{prefix}- {node['name']} [{node['risk']}]")
         if node["options"]:
             for key, value in node["options"].items():
                 typer.echo(f"{prefix}    {key}: {value}")

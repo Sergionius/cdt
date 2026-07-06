@@ -61,7 +61,7 @@ def test_python_module_version_flag():
 
 def test_command_help_lists_key_options():
     cases = {
-        "run": ("--id",),
+        "run": ("--id", "--dry-run"),
         "pipeline": (),
     }
 
@@ -193,3 +193,7 @@ def test_pipeline_steps_json_includes_plugin_steps(tmp_path, monkeypatch):
     assert payload["schema_version"] == 1
     assert "flutter.pub_get" in payload["registered_steps"]
     assert "offline.fetch_config" in payload["registered_steps"]
+    steps = {step["name"]: step for step in payload["steps"]}
+    assert steps["flutter.pub_get"]["risk"] == "safe"
+    assert steps["offline.fetch_config"]["risk"] == "custom"
+    assert steps["offline.fetch_config"]["plugin"] is True

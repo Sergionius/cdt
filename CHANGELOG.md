@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added step metadata for built-in and plugin pipeline steps.
+- Added `cdt pipeline plan <pipeline>` with JSON output and static risk classification.
+- Added `cdt run <pipeline> --dry-run` as a non-executing planning preflight.
+
 ## v0.2.1 - 2026-07-06
 
 - Improved the `cdt-release` Agent Skill with explicit production confirmation, structured summaries, and observability guidance.

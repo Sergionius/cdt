@@ -16,7 +16,7 @@ TestFlight/AppTester/Firebase, or run commands such as `cdt run test` and
 `cdt run ios-test`. The skill instructs the agent to:
 
 - inspect `cdt.yaml` before running a pipeline;
-- use `cdt pipeline list` and `cdt pipeline inspect <pipeline>` as preflight;
+- use `cdt pipeline list`, `cdt pipeline inspect <pipeline>`, and `cdt pipeline plan <pipeline> --json` as preflight;
 - avoid production-like pipelines unless the user explicitly asks for production
   and confirms the exact command;
 - capture long output in `.cdt/agent-release-<pipeline>.log`;
@@ -148,12 +148,12 @@ pipelines:
 
 ## Validate Before Running
 
-Use JSON validation to check schema, plugin imports, and registered step names
-without executing deploy or upload work:
+Use JSON validation and planning to check schema, plugin imports, registered step names, and risk classification without executing deploy or upload work:
 
 ```sh
 cdt pipeline validate offline-test --json
 cdt pipeline inspect offline-test --json
+cdt pipeline plan offline-test --json
 cdt pipeline steps --json
 ```
 

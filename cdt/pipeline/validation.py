@@ -5,7 +5,7 @@ from difflib import get_close_matches
 from typing import Any
 
 from .config import ParallelSpec, PipelineConfig, PipelineItemSpec, PipelineSpec, StepSpec
-from .registry import get_step_factory, list_steps
+from .registry import get_step_factory, list_step_metadata, list_steps
 
 
 def pipeline_names(config: PipelineConfig) -> list[str]:
@@ -77,6 +77,7 @@ def steps_payload(config: PipelineConfig | None, *, errors: list[dict[str, str]]
         "pipelines": pipeline_names(config) if config is not None else [],
         "plugins": list(config.plugins) if config is not None else [],
         "registered_steps": list_steps(),
+        "steps": [metadata.to_dict() for metadata in list_step_metadata()],
         "errors": errors or [],
     }
 
