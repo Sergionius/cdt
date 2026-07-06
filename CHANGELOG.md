@@ -4,6 +4,7 @@
 
 - Added step metadata for built-in and plugin pipeline steps.
 - Added `cdt pipeline plan <pipeline>` with JSON output and static risk classification.
+- Added compact plan metadata, `artifact_flow`, and non-blocking artifact dependency warnings to `cdt pipeline plan --json`.
 - Added `cdt run <pipeline> --dry-run` as a non-executing planning preflight.
 - Extended `cdt.sdk.step` decorator to accept `StepMetadata` and keyword metadata arguments.
 

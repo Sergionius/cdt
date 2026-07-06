@@ -11,6 +11,12 @@ StepFactory = Callable[..., Step]
 
 @dataclass(frozen=True)
 class StepMetadata:
+    """Static step metadata used for planning and preflight checks.
+
+    requires_artifacts and produces describe artifact/result types, not configured
+    pipeline-local artifact names.
+    """
+
     name: str
     description: str = ""
     category: str = "custom"

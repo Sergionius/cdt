@@ -59,13 +59,20 @@ def test_builtin_metadata_registration():
 
     flutter = get_step_metadata("flutter.pub_get")
     appstore = get_step_metadata("appstore.upload_testflight")
+    ios_ipa = get_step_metadata("ios.flutter_build_ipa")
+    android_aab = get_step_metadata("android.build_aab")
+    android_apk = get_step_metadata("android.build_apk")
 
     assert flutter.category == "flutter"
     assert flutter.risk == "safe"
     assert flutter.external_tools == ("flutter",)
     assert appstore.category == "appstore"
     assert appstore.risk == "upload"
-    assert appstore.requires_artifacts == ("artifact",)
+    assert appstore.requires_artifacts == ("ios_ipa",)
+    assert appstore.produces == ("upload_result",)
+    assert ios_ipa.produces == ("ios_ipa",)
+    assert android_aab.produces == ("android_aab",)
+    assert android_apk.produces == ("android_apk",)
 
 
 def test_duplicate_step_registration_errors():

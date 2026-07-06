@@ -55,9 +55,31 @@ def test_pipeline_plan_json_includes_risks_and_parallel_steps(tmp_path, monkeypa
     assert payload["errors"] == []
     assert payload["steps"][0]["name"] == "flutter.pub_get"
     assert payload["steps"][0]["risk"] == "safe"
+    assert "name" not in payload["steps"][0]["metadata"]
+    assert "category" not in payload["steps"][0]["metadata"]
+    assert "risk" not in payload["steps"][0]["metadata"]
     assert payload["steps"][1]["type"] == "parallel"
     assert payload["steps"][1]["risk"] == "build"
+    assert payload["steps"][1]["steps"][0]["artifact_flow"] == {
+        "requires_names": [],
+        "produces_names": ["ios_ipa"],
+        "requires_types": [],
+        "produces_types": ["ios_ipa"],
+    }
+    assert payload["steps"][1]["steps"][1]["artifact_flow"] == {
+        "requires_names": [],
+        "produces_names": ["android_aab"],
+        "requires_types": [],
+        "produces_types": ["android_aab"],
+    }
     assert payload["steps"][2]["risk"] == "upload"
+    assert payload["steps"][2]["artifact_flow"] == {
+        "requires_names": ["ios_ipa"],
+        "produces_names": [],
+        "requires_types": ["ios_ipa"],
+        "produces_types": ["upload_result"],
+    }
+    assert payload["warnings"] == []
 
 
 def test_pipeline_plan_json_reports_unknown_step(tmp_path, monkeypatch):
@@ -131,6 +153,105 @@ def test_pipeline_plan_marks_plugin_step_as_custom(tmp_path, monkeypatch):
     assert payload["steps"][0]["name"] == "demo.touch"
     assert payload["steps"][0]["metadata"]["plugin"] is True
     assert payload["warnings"][0]["code"] == "custom_step_risk"
+
+
+def test_pipeline_plan_json_warns_for_missing_artifact_name(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  demo:",
+                "    steps:",
+                "      - appstore.upload_testflight:",
+                "          artifact: ios_ipa",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["pipeline", "plan", "demo", "--json"])
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0
+    assert payload["warnings"] == [
+        {
+            "code": "missing_required_artifact",
+            "message": (
+                "Step appstore.upload_testflight requires artifact name ios_ipa, "
+                "but no previous step declares it."
+            ),
+            "path": "pipelines.demo.steps[0]",
+        }
+    ]
+
+
+def test_pipeline_plan_json_warns_for_parallel_sibling_artifact_dependency(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  demo:",
+                "    steps:",
+                "      - parallel:",
+                "          steps:",
+                "            - ios.flutter_build_ipa:",
+                "                artifact: ios_ipa",
+                "            - appstore.upload_testflight:",
+                "                artifact: ios_ipa",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["pipeline", "plan", "demo", "--json"])
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0
+    assert payload["warnings"] == [
+        {
+            "code": "parallel_artifact_dependency",
+            "message": (
+                "Step appstore.upload_testflight requires artifact name ios_ipa from the same parallel group; "
+                "parallel branches start together."
+            ),
+            "path": "pipelines.demo.steps[0].parallel.steps[1]",
+        }
+    ]
+
+
+def test_pipeline_plan_json_ignores_dynamic_or_non_string_artifact_options(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  demo:",
+                "    steps:",
+                "      - appstore.upload_testflight:",
+                "          artifact: ${values.ios_artifact}",
+                "      - firebase.upload_app_distribution:",
+                "          artifact:",
+                "            - android_aab",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["pipeline", "plan", "demo", "--json"])
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0
+    assert payload["steps"][0]["artifact_flow"]["requires_names"] == []
+    assert payload["steps"][1]["artifact_flow"]["requires_names"] == []
+    assert payload["warnings"] == []
 
 
 def test_run_executes_steps_without_dry_run(tmp_path, monkeypatch):

@@ -40,7 +40,7 @@ _BUILTIN_METADATA: dict[str, StepMetadata] = {
         description="Build an Android App Bundle artifact with Flutter.",
         category="android",
         risk="build",
-        produces=("artifact",),
+        produces=("android_aab",),
         external_tools=("flutter",),
     ),
     "android.build_apk": StepMetadata(
@@ -48,7 +48,7 @@ _BUILTIN_METADATA: dict[str, StepMetadata] = {
         description="Build an Android APK artifact with Flutter.",
         category="android",
         risk="build",
-        produces=("artifact",),
+        produces=("android_apk",),
         external_tools=("flutter",),
     ),
     "appstore.upload_testflight": StepMetadata(
@@ -56,7 +56,8 @@ _BUILTIN_METADATA: dict[str, StepMetadata] = {
         description="Upload an IPA artifact to TestFlight.",
         category="appstore",
         risk="upload",
-        requires_artifacts=("artifact",),
+        requires_artifacts=("ios_ipa",),
+        produces=("upload_result",),
         external_tools=("xcrun",),
     ),
     "artifact.copy_to_downloads": StepMetadata(
@@ -86,7 +87,8 @@ _BUILTIN_METADATA: dict[str, StepMetadata] = {
         description="Upload an app artifact to Firebase App Distribution.",
         category="firebase",
         risk="upload",
-        requires_artifacts=("artifact",),
+        requires_artifacts=("android_aab", "android_apk"),
+        produces=("upload_result",),
         external_tools=("firebase",),
     ),
     "flutter.increment_build_number": StepMetadata(
@@ -130,7 +132,7 @@ _BUILTIN_METADATA: dict[str, StepMetadata] = {
         description="Build an iOS IPA artifact with Flutter.",
         category="ios",
         risk="build",
-        produces=("artifact",),
+        produces=("ios_ipa",),
         external_tools=("flutter",),
     ),
     "ios.xcode_build_ipa": StepMetadata(
@@ -138,7 +140,7 @@ _BUILTIN_METADATA: dict[str, StepMetadata] = {
         description="Build an iOS IPA artifact with xcodebuild.",
         category="ios",
         risk="build",
-        produces=("artifact",),
+        produces=("ios_ipa",),
         external_tools=("xcodebuild",),
     ),
     "hook.python_script": StepMetadata(
@@ -153,19 +155,21 @@ _BUILTIN_METADATA: dict[str, StepMetadata] = {
         description="Send or play a success notification.",
         category="notify",
         risk="safe",
+        produces=("notification",),
     ),
     "tracker.comment": StepMetadata(
         name="tracker.comment",
         description="Post a release comment to an issue tracker.",
         category="tracker",
         risk="upload",
+        produces=("tracker_comment",),
     ),
     "web.build": StepMetadata(
         name="web.build",
         description="Build a Flutter web bundle.",
         category="web",
         risk="build",
-        produces=("artifact",),
+        produces=("web_build",),
         external_tools=("flutter",),
     ),
     "web.cache_bust": StepMetadata(
@@ -179,7 +183,7 @@ _BUILTIN_METADATA: dict[str, StepMetadata] = {
         description="Copy a web build to its deployment location.",
         category="web",
         risk="deploy",
-        requires_artifacts=("artifact",),
+        produces=("file",),
     ),
 }
 

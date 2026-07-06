@@ -42,6 +42,10 @@ cdt pipeline plan prod --json
 
 `cdt run <pipeline> --dry-run` uses the same planner and does not call step execution code. It is intended as a safe preflight before real release, upload, deploy, or git-push work.
 
+JSON plans include compact step metadata plus `artifact_flow` for each step. `requires_types` and `produces_types` come from `StepMetadata.requires_artifacts` and `StepMetadata.produces`; these are static artifact/result types such as `ios_ipa`, `android_aab`, `web_build`, `version`, or `upload_result`, not configured artifact names. `requires_names` and `produces_names` are best-effort names inferred from a static string `artifact` option in `cdt.yaml`.
+
+Artifact-flow warnings are preflight hints and do not block execution by themselves. A missing required artifact warning means a step refers to an artifact name that no previous sequential step declares. Parallel branches start together, so a branch cannot consume an artifact produced by a sibling branch; produce the artifact before the parallel group or consume it after the group completes.
+
 ## Steps and parallel groups
 
 Each item in `steps` is one of:
@@ -57,6 +61,7 @@ Parallel context limitations:
 - `ctx.artifacts` registration is thread-safe.
 - Writing to `ctx.values` from parallel branches is not guaranteed to be thread-safe.
 - Parallel branches should not depend on each other through `ctx.values`; produce values before the parallel group or join via explicit artifacts/steps after it.
+- Parallel artifact dependencies follow the same rule: branches can only consume artifacts that existed before the group started, while artifacts produced by branches become available after the group completes.
 
 ## Built-ins
 

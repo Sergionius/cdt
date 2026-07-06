@@ -161,6 +161,14 @@ Do not expect validation to resolve `${values.*}` or `${artifact.*}` that are
 created by previous runtime steps. Those references are lazy and are resolved
 when the consuming step runs.
 
+For `cdt pipeline plan --json`, each step includes `artifact_flow` with static
+artifact/result types and best-effort configured artifact names. Treat
+`missing_required_artifact` and `parallel_artifact_dependency` warnings as
+preflight hints: they do not block execution, but they usually deserve review
+before running upload, deploy, or release pipelines. Parallel branches start
+together, so a branch should not consume an artifact produced by a sibling in
+the same group.
+
 ## Run Trusted Pipelines
 
 CDT treats project pipeline code as trusted. When an agent calls `cdt run`, CDT
