@@ -197,5 +197,15 @@ def test_pipeline_steps_json_includes_plugin_steps(tmp_path, monkeypatch):
     assert steps["flutter.pub_get"]["name"] == "flutter.pub_get"
     assert steps["flutter.pub_get"]["category"] == "flutter"
     assert steps["flutter.pub_get"]["risk"] == "safe"
+    firebase = steps["firebase.upload_app_distribution"]
+    assert "requires_artifacts" not in firebase
+    assert firebase["requires"] == [
+        {
+            "result_types": ["android_aab", "android_apk"],
+            "mode": "any",
+            "name_options": ["artifact"],
+        }
+    ]
+    assert firebase["produces"] == [{"result_type": "upload_result", "name_options": []}]
     assert steps["offline.fetch_config"]["risk"] == "custom"
     assert steps["offline.fetch_config"]["plugin"] is True

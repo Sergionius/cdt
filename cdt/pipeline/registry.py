@@ -9,6 +9,18 @@ from .step import Step
 StepFactory = Callable[..., Step]
 
 
+def _string_tuple(value: object, field_name: str) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return (value,)
+    try:
+        items = tuple(value)  # type: ignore[arg-type]
+    except TypeError as exc:
+        raise ValueError(f"{field_name} must contain strings") from exc
+    if not all(isinstance(item, str) and item for item in items):
+        raise ValueError(f"{field_name} must contain non-empty strings")
+    return items
+
+
 @dataclass(frozen=True)
 class ResultRequirement:
     """Describes a result/artifact that a step needs from previous steps.
@@ -23,6 +35,15 @@ class ResultRequirement:
     result_types: tuple[str, ...]
     mode: str = "all"
     name_options: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        result_types = _string_tuple(self.result_types, "ResultRequirement.result_types")
+        if not result_types:
+            raise ValueError("ResultRequirement.result_types cannot be empty")
+        if self.mode not in {"all", "any"}:
+            raise ValueError("ResultRequirement.mode must be 'all' or 'any'")
+        object.__setattr__(self, "result_types", result_types)
+        object.__setattr__(self, "name_options", _string_tuple(self.name_options, "ResultRequirement.name_options"))
 
     def to_dict(self) -> dict:
         return {
@@ -44,6 +65,11 @@ class ResultProduction:
 
     result_type: str
     name_options: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.result_type, str) or not self.result_type:
+            raise ValueError("ResultProduction.result_type cannot be empty")
+        object.__setattr__(self, "name_options", _string_tuple(self.name_options, "ResultProduction.name_options"))
 
     def to_dict(self) -> dict:
         return {

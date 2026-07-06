@@ -108,6 +108,30 @@ def test_step_metadata_to_dict_is_structured():
     }
 
 
+def test_result_requirement_rejects_invalid_mode():
+    with pytest.raises(ValueError, match="mode must be 'all' or 'any'"):
+        ResultRequirement(("ios_ipa",), mode="some")
+
+
+def test_result_requirement_rejects_empty_result_types():
+    with pytest.raises(ValueError, match="result_types cannot be empty"):
+        ResultRequirement(())
+
+
+def test_result_production_rejects_empty_result_type():
+    with pytest.raises(ValueError, match="result_type cannot be empty"):
+        ResultProduction("")
+
+
+def test_result_metadata_normalizes_string_lists_to_tuples():
+    requirement = ResultRequirement(["ios_ipa"], name_options=["artifact"])
+    production = ResultProduction("upload_result", name_options=["artifact"])
+
+    assert requirement.result_types == ("ios_ipa",)
+    assert requirement.name_options == ("artifact",)
+    assert production.name_options == ("artifact",)
+
+
 def test_duplicate_step_registration_errors():
     register_step("demo.step", DummyStep)
 

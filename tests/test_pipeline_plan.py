@@ -11,12 +11,14 @@ runner = CliRunner()
 
 def setup_function():
     _clear_steps_for_tests()
+    sys.modules.pop("cdt_steps.artifacts", None)
     sys.modules.pop("cdt_steps.side_effect", None)
     sys.modules.pop("cdt_steps", None)
 
 
 def teardown_function():
     _clear_steps_for_tests()
+    sys.modules.pop("cdt_steps.artifacts", None)
     sys.modules.pop("cdt_steps.side_effect", None)
     sys.modules.pop("cdt_steps", None)
 
@@ -283,6 +285,118 @@ def test_pipeline_plan_json_artifact_flow_grouped_requires(tmp_path, monkeypatch
     assert payload["steps"][0]["artifact_flow"]["requires_names"] == ["android_aab"]
 
 
+def test_pipeline_plan_json_any_requirement_allows_one_available_name(tmp_path, monkeypatch):
+    _write_any_artifact_plugin(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "plugins:",
+                "  - cdt_steps.artifacts",
+                "pipelines:",
+                "  demo:",
+                "    steps:",
+                "      - demo.produce_a:",
+                "          artifact_a: app_a",
+                "      - demo.consume_any:",
+                "          artifact_a: app_a",
+                "          artifact_b: app_b",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["pipeline", "plan", "demo", "--json"])
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0
+    assert payload["warnings"] == []
+
+
+def test_pipeline_plan_json_any_requirement_warns_once_for_parallel_sibling_names(tmp_path, monkeypatch):
+    _write_any_artifact_plugin(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "plugins:",
+                "  - cdt_steps.artifacts",
+                "pipelines:",
+                "  demo:",
+                "    steps:",
+                "      - parallel:",
+                "          steps:",
+                "            - demo.produce_a:",
+                "                artifact_a: app_a",
+                "            - demo.consume_any:",
+                "                artifact_a: app_a",
+                "                artifact_b: app_b",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["pipeline", "plan", "demo", "--json"])
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0
+    assert payload["warnings"] == [
+        {
+            "code": "parallel_artifact_dependency",
+            "message": (
+                "Step demo.consume_any requires one of artifact names: app_a, app_b, "
+                "but matching artifacts are produced in the same parallel group; "
+                "parallel branches start together."
+            ),
+            "path": "pipelines.demo.steps[0].parallel.steps[1]",
+        }
+    ]
+
+
+def test_pipeline_plan_json_any_requirement_warns_once_for_missing_names(tmp_path, monkeypatch):
+    _write_any_artifact_plugin(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "plugins:",
+                "  - cdt_steps.artifacts",
+                "pipelines:",
+                "  demo:",
+                "    steps:",
+                "      - demo.consume_any:",
+                "          artifact_a: app_a",
+                "          artifact_b: app_b",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["pipeline", "plan", "demo", "--json"])
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0
+    assert payload["warnings"] == [
+        {
+            "code": "missing_required_artifact",
+            "message": (
+                "Step demo.consume_any requires one of artifact names: app_a, app_b, "
+                "but no previous step declares any of them."
+            ),
+            "path": "pipelines.demo.steps[0]",
+        }
+    ]
+
+
 def test_run_executes_steps_without_dry_run(tmp_path, monkeypatch):
     package = tmp_path / "cdt_steps"
     package.mkdir()
@@ -369,3 +483,42 @@ def test_run_dry_run_does_not_execute_steps(tmp_path, monkeypatch):
     assert "Pipeline: demo" in result.output
     assert "demo.touch [custom]" in result.output
     assert not (tmp_path / "touched.txt").exists()
+
+
+def _write_any_artifact_plugin(tmp_path):
+    package = tmp_path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "artifacts.py").write_text(
+        "\n".join(
+            [
+                "from cdt.sdk import ResultProduction, ResultRequirement, step",
+                "",
+                "@step(",
+                "    'demo.produce_a',",
+                "    category='demo',",
+                "    risk='artifact',",
+                "    produces=[ResultProduction('demo_artifact', name_options=['artifact_a'])],",
+                ")",
+                "def produce_a(ctx, artifact_a: str):",
+                "    pass",
+                "",
+                "@step(",
+                "    'demo.consume_any',",
+                "    category='demo',",
+                "    risk='upload',",
+                "    requires=[",
+                "        ResultRequirement(",
+                "            ('demo_artifact_a', 'demo_artifact_b'),",
+                "            mode='any',",
+                "            name_options=['artifact_a', 'artifact_b'],",
+                "        )",
+                "    ],",
+                ")",
+                "def consume_any(ctx, artifact_a: str, artifact_b: str):",
+                "    pass",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )

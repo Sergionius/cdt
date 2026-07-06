@@ -181,31 +181,86 @@ def _warn_for_missing_artifacts(
 ) -> None:
     sibling_produced_names = sibling_produced_names or set()
     for requirement in artifact_flow["requires"]:
-        for artifact_name in requirement["names"]:
-            if artifact_name in state.available_names:
-                continue
-            if artifact_name in sibling_produced_names:
-                warnings.append(
-                    {
-                        "code": "parallel_artifact_dependency",
-                        "message": (
-                            f"Step {step_name} requires artifact name {artifact_name} from the same parallel group; "
-                            "parallel branches start together."
-                        ),
-                        "path": path,
-                    }
-                )
-                continue
+        names = requirement["names"]
+        if not names:
+            continue
+        if requirement["mode"] == "any":
+            _warn_for_any_artifact_requirement(step_name, names, state, warnings, path, sibling_produced_names)
+            continue
+        _warn_for_all_artifact_requirement(step_name, names, state, warnings, path, sibling_produced_names)
+
+
+def _warn_for_all_artifact_requirement(
+    step_name: str,
+    artifact_names: list[str],
+    state: _PlanState,
+    warnings: list[dict[str, str]],
+    path: str,
+    sibling_produced_names: set[str],
+) -> None:
+    for artifact_name in artifact_names:
+        if artifact_name in state.available_names:
+            continue
+        if artifact_name in sibling_produced_names:
             warnings.append(
                 {
-                    "code": "missing_required_artifact",
+                    "code": "parallel_artifact_dependency",
                     "message": (
-                        f"Step {step_name} requires artifact name {artifact_name}, "
-                        "but no previous step declares it."
+                        f"Step {step_name} requires artifact name {artifact_name} from the same parallel group; "
+                        "parallel branches start together."
                     ),
                     "path": path,
                 }
             )
+            continue
+        warnings.append(
+            {
+                "code": "missing_required_artifact",
+                "message": (
+                    f"Step {step_name} requires artifact name {artifact_name}, "
+                    "but no previous step declares it."
+                ),
+                "path": path,
+            }
+        )
+
+
+def _warn_for_any_artifact_requirement(
+    step_name: str,
+    artifact_names: list[str],
+    state: _PlanState,
+    warnings: list[dict[str, str]],
+    path: str,
+    sibling_produced_names: set[str],
+) -> None:
+    if any(artifact_name in state.available_names for artifact_name in artifact_names):
+        return
+
+    joined_names = ", ".join(artifact_names)
+    sibling_names = [artifact_name for artifact_name in artifact_names if artifact_name in sibling_produced_names]
+    if sibling_names:
+        warnings.append(
+            {
+                "code": "parallel_artifact_dependency",
+                "message": (
+                    f"Step {step_name} requires one of artifact names: {joined_names}, "
+                    "but matching artifacts are produced in the same parallel group; parallel branches start together."
+                ),
+                "path": path,
+            }
+        )
+        return
+
+    warnings.append(
+        {
+            "code": "missing_required_artifact",
+            "message": (
+                f"Step {step_name} requires one of artifact names: {joined_names}, "
+                "but no previous step declares any of them."
+            ),
+            "path": path,
+        }
+    )
 
 
 def _strip_internal_path(node: dict[str, Any]) -> dict[str, Any]:
