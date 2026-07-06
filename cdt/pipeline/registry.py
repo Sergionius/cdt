@@ -161,16 +161,16 @@ def _normalize_metadata(name: str, metadata: StepMetadata | None) -> StepMetadat
         risk=metadata.risk,
         requires=tuple(
             ResultRequirement(
-                result_types=tuple(req.result_types),
+                result_types=req.result_types,
                 mode=req.mode,
-                name_options=tuple(req.name_options),
+                name_options=req.name_options,
             )
             for req in metadata.requires
         ),
         produces=tuple(
             ResultProduction(
                 result_type=prod.result_type,
-                name_options=tuple(prod.name_options),
+                name_options=prod.name_options,
             )
             for prod in metadata.produces
         ),

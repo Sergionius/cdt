@@ -26,15 +26,15 @@
 
 ```python
 @dataclass(frozen=True)
-class ArtifactRequirement:
-    types: tuple[str, ...]
+class ResultRequirement:
+    result_types: tuple[str, ...]
     mode: str = "all"  # "all" | "any"
     name_options: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
-class ArtifactProduction:
-    type: str
+class ResultProduction:
+    result_type: str
     name_options: tuple[str, ...] = ()
 ```
 
@@ -47,8 +47,8 @@ class StepMetadata:
     description: str = ""
     category: str = "custom"
     risk: str = "custom"
-    requires: tuple[ArtifactRequirement, ...] = ()
-    produces: tuple[ArtifactProduction, ...] = ()
+    requires: tuple[ResultRequirement, ...] = ()
+    produces: tuple[ResultProduction, ...] = ()
     external_tools: tuple[str, ...] = ()
     plugin: bool = False
 ```
@@ -58,35 +58,35 @@ class StepMetadata:
 ## Built-in metadata updates
 
 - `ios.flutter_build_ipa`, `ios.xcode_build_ipa`:
-  - `produces=(ArtifactProduction("ios_ipa", name_options=("artifact",)),)`
+  - `produces=(ResultProduction("ios_ipa", name_options=("artifact",)),)`
 - `android.build_aab`:
-  - `produces=(ArtifactProduction("android_aab", name_options=("artifact",)),)`
+  - `produces=(ResultProduction("android_aab", name_options=("artifact",)),)`
 - `android.build_apk`:
-  - `produces=(ArtifactProduction("android_apk", name_options=("artifact",)),)`
+  - `produces=(ResultProduction("android_apk", name_options=("artifact",)),)`
 - `web.build`:
-  - `produces=(ArtifactProduction("web_build", name_options=("artifact",)),)` if applicable to current config; otherwise no name option.
+  - `produces=(ResultProduction("web_build"),)` because the current step does not expose a configured artifact name option.
 - `appstore.upload_testflight`:
-  - `requires=(ArtifactRequirement(("ios_ipa",), name_options=("artifact",)),)`
-  - `produces=(ArtifactProduction("upload_result"),)`
+  - `requires=(ResultRequirement(("ios_ipa",), name_options=("artifact",)),)`
+  - `produces=(ResultProduction("upload_result"),)`
 - `firebase.upload_app_distribution`:
-  - `requires=(ArtifactRequirement(("android_aab", "android_apk"), mode="any", name_options=("artifact",)),)`
-  - `produces=(ArtifactProduction("upload_result"),)`
+  - `requires=(ResultRequirement(("android_aab", "android_apk"), mode="any", name_options=("artifact",)),)`
+  - `produces=(ResultProduction("upload_result"),)`
 - `artifact.copy_to_downloads`:
-  - `requires=(ArtifactRequirement(("artifact",), name_options=("artifact",)),)`
-  - `produces=(ArtifactProduction("file"),)`
+  - `requires=(ResultRequirement(("artifact",), name_options=("artifact",)),)`
+  - `produces=(ResultProduction("file"),)`
 - `web.copy`:
-  - if modeled as consuming web build: `requires=(ArtifactRequirement(("web_build",),),)`
-  - `produces=(ArtifactProduction("file"),)`
+  - if modeled as consuming web build: `requires=(ResultRequirement(("web_build",),),)`
+  - `produces=(ResultProduction("file"),)`
 - `notify.success`:
-  - `produces=(ArtifactProduction("notification"),)`
+  - `produces=(ResultProduction("notification"),)`
 - `tracker.comment`:
-  - `produces=(ArtifactProduction("tracker_comment"),)`
+  - `produces=(ResultProduction("tracker_comment"),)`
 
 ## Planner changes
 
 - Remove `_ARTIFACT_NAME_PRODUCING_TYPES`.
-- Infer `artifact_flow.requires_names` from `ArtifactRequirement.name_options`.
-- Infer `artifact_flow.produces_names` from `ArtifactProduction.name_options`.
+- Infer `artifact_flow.requires_names` from `ResultRequirement.name_options`.
+- Infer `artifact_flow.produces_names` from `ResultProduction.name_options`.
 - Derive `requires_types` from structured requirement groups.
 - Derive `produces_types` from structured productions.
 - Preserve current warning behavior:
@@ -105,14 +105,14 @@ Example metadata shape:
   "description": "Upload an app artifact to Firebase App Distribution.",
   "requires": [
     {
-      "types": ["android_aab", "android_apk"],
+      "result_types": ["android_aab", "android_apk"],
       "mode": "any",
       "name_options": ["artifact"]
     }
   ],
   "produces": [
     {
-      "type": "upload_result",
+      "result_type": "upload_result",
       "name_options": []
     }
   ],
@@ -153,7 +153,7 @@ Document this as a breaking SDK/JSON contract change.
 ## Docs updates
 
 - Update `docs/pipelines.md`:
-  - explain `ArtifactRequirement` groups;
+  - explain `ResultRequirement` groups;
   - explain `mode="all"` vs `mode="any"`;
   - explain `name_options` and static artifact-name inference.
 - Update README if it mentions metadata or JSON plan shape.

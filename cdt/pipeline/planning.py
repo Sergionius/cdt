@@ -22,14 +22,12 @@ _RISK_ORDER = {
 @dataclass
 class _PlanState:
     available_names: set[str] = field(default_factory=set)
-    available_types: set[str] = field(default_factory=set)
 
     def copy(self) -> "_PlanState":
-        return _PlanState(set(self.available_names), set(self.available_types))
+        return _PlanState(set(self.available_names))
 
     def add_flow(self, flow: dict[str, Any]) -> None:
         self.available_names.update(flow["produces_names"])
-        self.available_types.update(flow["produces_types"])
 
 
 def plan_payload(config: PipelineConfig, name: str, *, errors: list[dict[str, str]] | None = None) -> dict[str, Any]:
