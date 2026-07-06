@@ -17,6 +17,20 @@ def _visible_text(output: str) -> str:
     return ANSI_RE.sub("", output)
 
 
+class _FakeResponse:
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
 def setup_function():
     _clear_steps_for_tests()
     sys.modules.pop("cdt_steps.offline", None)
@@ -94,6 +108,42 @@ def test_self_update_dry_run_shows_version_and_command(monkeypatch):
     assert "Latest release: v9.9.9" in result.output
     assert "pipx install --force git+https://github.com/Sergionius/cdt.git@v9.9.9" in result.output
     assert "Dry run" in result.output
+
+
+def test_self_update_network_error_reports_failure(monkeypatch):
+    import urllib.error
+
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(urllib.error.URLError("no route")),
+    )
+
+    result = runner.invoke(app, ["self-update"])
+
+    assert result.exit_code != 0
+    assert "Network error" in result.output or "Network error" in result.stderr
+
+
+def test_self_update_missing_tag_reports_failure(monkeypatch):
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *args, **kwargs: _FakeResponse(json.dumps({}).encode("utf-8")),
+    )
+
+    result = runner.invoke(app, ["self-update"])
+
+    assert result.exit_code != 0
+    assert "tag_name" in result.output or "tag_name" in result.stderr
+
+
+def test_self_update_unknown_install_method_reports_failure(monkeypatch):
+    monkeypatch.setattr(self_update_module, "_latest_release_tag", lambda owner, repo: "v9.9.9")
+    monkeypatch.setattr(self_update_module, "_detect_install_method", lambda: None)
+
+    result = runner.invoke(app, ["self-update"])
+
+    assert result.exit_code != 0
+    assert "Unable to detect" in result.output or "Unable to detect" in result.stderr
 
 
 def test_migrate_command_is_unavailable():

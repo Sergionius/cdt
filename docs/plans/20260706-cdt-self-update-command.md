@@ -63,10 +63,10 @@
 - Modify: `tests/test_self_update.py`
 - Modify: `tests/test_cli.py`
 
-- [ ] Добавить тест на сетевую ошибку GitHub API (mock `urlopen` выбрасывает `URLError`)
-- [ ] Добавить тест на отсутствие release-тега в ответе API
-- [ ] Добавить тест на недетектируемый метод установки (ожидается понятное сообщение и ненулевой exit code)
-- [ ] Запустить `pytest tests/test_self_update.py tests/test_cli.py` — должен пройти
+- [x] Добавить тест на сетевую ошибку GitHub API (mock `urlopen` выбрасывает `URLError`)
+- [x] Добавить тест на отсутствие release-тега в ответе API
+- [x] Добавить тест на недетектируемый метод установки (ожидается понятное сообщение и ненулевой exit code)
+- [x] Запустить `pytest tests/test_self_update.py tests/test_cli.py` — должен пройти
 
 ### Task 4: Verify acceptance criteria
 

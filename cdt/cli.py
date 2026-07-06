@@ -11,7 +11,7 @@ from .pipeline.planning import plan_payload
 from .pipeline.registry import list_steps
 from .pipeline.runner import run_configured_pipeline
 from .pipeline.validation import inspect_payload, step_tree, steps_payload, validate_payload, validate_pipeline
-from .self_update import run_self_update
+from .self_update import SelfUpdateError, run_self_update
 
 app = typer.Typer(no_args_is_help=True)
 pipeline_app = typer.Typer(no_args_is_help=True)
@@ -45,7 +45,11 @@ def self_update(
     dry_run: bool = typer.Option(False, "--dry-run", help="Show latest release and update command without executing"),
 ):
     """Update CDT to the latest release from GitHub."""
-    exit_code = run_self_update(repo_url=_DEFAULT_REPO_URL, dry_run=dry_run)
+    try:
+        exit_code = run_self_update(repo_url=_DEFAULT_REPO_URL, dry_run=dry_run)
+    except SelfUpdateError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
     raise typer.Exit(code=exit_code)
 
 
