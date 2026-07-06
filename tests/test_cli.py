@@ -44,7 +44,7 @@ def test_root_version_flags():
         result = runner.invoke(app, [flag])
 
         assert result.exit_code == 0
-        assert result.output == "cdt 0.2.1\n"
+        assert result.output == "cdt 0.3.0\n"
 
 
 def test_python_module_version_flag():
@@ -56,7 +56,7 @@ def test_python_module_version_flag():
     )
 
     assert result.returncode == 0
-    assert result.stdout == "cdt 0.2.1\n"
+    assert result.stdout == "cdt 0.3.0\n"
 
 
 def test_command_help_lists_key_options():

@@ -11,7 +11,7 @@ CDT is a CLI tool, so `pipx` is the recommended installation method.
 Install a specific GitHub release:
 
 ```bash
-pipx install "git+https://github.com/Sergionius/cdt.git@v0.2.1"
+pipx install "git+https://github.com/Sergionius/cdt.git@v0.3.0"
 ```
 
 Or install the latest `main`:
@@ -24,7 +24,7 @@ Upgrade or reinstall:
 
 ```bash
 pipx uninstall cdt
-pipx install "git+https://github.com/Sergionius/cdt.git@v0.2.1"
+pipx install "git+https://github.com/Sergionius/cdt.git@v0.3.0"
 ```
 
 For local development:
@@ -37,7 +37,7 @@ python -m pip install -e '.[dev]'
 scripts/reinstall.sh
 ```
 
-`pip install git+https://github.com/Sergionius/cdt.git@v0.2.1` also works, but `pipx` keeps the CLI isolated from project Python environments.
+`pip install git+https://github.com/Sergionius/cdt.git@v0.3.0` also works, but `pipx` keeps the CLI isolated from project Python environments.
 
 Note: the `cdt` name on PyPI belongs to another project, so install this CDT from GitHub.
 
@@ -53,6 +53,8 @@ cdt pipeline plan <pipeline> --json
 cdt pipeline validate [pipeline]
 cdt pipeline steps
 ```
+
+Version 0.3.0 adds static planning metadata: `cdt pipeline plan <pipeline>` and `cdt run <pipeline> --dry-run` show the step tree, risk, warnings, and artifact flow without executing steps.
 
 ## Minimal `cdt.yaml`
 

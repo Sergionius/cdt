@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.3.0 - 2026-07-06
+
 - Added step metadata for built-in and plugin pipeline steps.
 - Added `cdt pipeline plan <pipeline>` with JSON output and static risk classification.
 - Added `cdt run <pipeline> --dry-run` as a non-executing planning preflight.
@@ -11,7 +13,9 @@
   `requires_artifacts` / `produces` strings.
 - `cdt pipeline plan --json` now exposes grouped `artifact_flow.requires` entries with
   `types`, `mode` (`all` or `any`), and `names` inferred from static YAML options.
-
+- Breaking: SDK/plugin authors must migrate from `requires_artifacts` and flat string
+  `produces` metadata to `ResultRequirement` / `ResultProduction`; CI/tools parsing
+  `cdt pipeline plan --json` metadata must handle the structured metadata shape.
 
 ## v0.2.1 - 2026-07-06
 
