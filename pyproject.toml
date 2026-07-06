@@ -1,12 +1,12 @@
 [project]
 name = "cdt"
 version = "0.2.0"
-description = "Command line toolkit for Flutter release workflows and YAML pipelines"
+description = "AI-friendly release automation CLI for project-local YAML pipelines"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 dependencies = ["typer>=0.12", "python-dotenv>=1.0.1", "pyjwt[crypto]>=2.10.1", "rich>=13.0.0", "PyYAML>=6.0.0"]
-keywords = ["flutter", "release", "deploy", "cli", "pipeline"]
+keywords = ["ai", "release", "deploy", "cli", "pipeline", "automation", "mobile"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",

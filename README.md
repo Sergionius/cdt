@@ -1,6 +1,30 @@
 # CDT
 
-CDT is a command line toolkit for Flutter release workflows driven by project-local YAML pipelines.
+CDT is an AI-friendly release automation CLI built around project-local YAML pipelines, safe preflight checks, and reusable steps for mobile, web, and custom deployments.
+
+## Installation
+
+Install a specific GitHub release:
+
+```bash
+pip install "git+https://github.com/Sergionius/cdt.git@v0.2.0"
+```
+
+Or install the latest `main`:
+
+```bash
+pip install "git+https://github.com/Sergionius/cdt.git"
+```
+
+For local development:
+
+```bash
+git clone https://github.com/Sergionius/cdt.git
+cd cdt
+python -m pip install -e '.[dev]'
+```
+
+Note: the `cdt` name on PyPI belongs to another project, so install this CDT from GitHub.
 
 ## Commands
 
