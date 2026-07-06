@@ -22,7 +22,10 @@ def test_cdt_release_skill_is_agent_skill_compatible():
         "cdt pipeline list",
         "cdt pipeline inspect <pipeline>",
         "Never run production pipelines",
+        "Production Confirmation",
+        "status: success",
         ".cdt/agent-release-<pipeline>.log",
+        ".cdt/agent-release-<pipeline>.json",
         "Do not immediately retry if `pubspec.yaml` or version files changed",
     ]
     for phrase in required_phrases:
@@ -35,3 +38,16 @@ def test_ai_agent_docs_link_to_cdt_release_skill():
     assert "skills/cdt-release/SKILL.md" in (root / "docs" / "ai-agents.md").read_text(encoding="utf-8")
     assert "skills/cdt-release/SKILL.md" in (root / "docs" / "skills.md").read_text(encoding="utf-8")
     assert "skills/cdt-release/SKILL.md" in (root / "README.md").read_text(encoding="utf-8")
+
+
+def test_repository_agent_rules_reference_cdt_release_skill():
+    root = Path(__file__).resolve().parents[1]
+    agents = (root / "AGENTS.md").read_text(encoding="utf-8")
+    rules = (root / ".agents" / "rules" / "cdt-release.md").read_text(encoding="utf-8")
+    manifest = (root / "MANIFEST.in").read_text(encoding="utf-8")
+
+    assert "skills/cdt-release/SKILL.md" in agents
+    assert ".agents/rules/cdt-release.md" in agents
+    assert "Load `skills/cdt-release/SKILL.md`" in rules
+    assert "Подтверждаю production release: cdt run <pipeline>" in rules
+    assert "recursive-include .agents *.md" in manifest

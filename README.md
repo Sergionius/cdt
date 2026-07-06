@@ -87,7 +87,9 @@ See [`CHANGELOG.md`](CHANGELOG.md) for release notes.
 
 ## AI agent skill
 
-CDT ships an Agent Skill at `skills/cdt-release/SKILL.md` for safer low-noise release runs by AI coding agents. It makes agents inspect `cdt.yaml`, avoid production pipelines unless explicitly requested, write long logs to `.cdt/agent-release-<pipeline>.log`, and return concise success/failure summaries.
+CDT ships an Agent Skill at `skills/cdt-release/SKILL.md` for safer low-noise release runs by AI coding agents. It makes agents inspect `cdt.yaml`, avoid production pipelines unless explicitly requested and confirmed, write long logs to `.cdt/agent-release-<pipeline>.log`, and return concise structured success/failure summaries.
+
+Repository-level agent guidance lives in `AGENTS.md`; hard release safety rules live in `.agents/rules/cdt-release.md`.
 
 For Pi, install this repository as a package or point settings at the local skill directory:
 
@@ -97,7 +99,9 @@ pi install git:github.com/Sergionius/cdt
 pi install /path/to/cdt
 ```
 
-See `docs/ai-agents.md` for Codex/Pi setup details.
+Hermes users can load the skill with `/skill cdt-release` after exposing this repository's `skills/` directory. Claude Code and similar agents should start from `AGENTS.md`.
+
+See `docs/ai-agents.md` for Codex/Pi/Hermes/Claude Code setup details.
 
 ## Built-in steps
 

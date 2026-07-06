@@ -17,9 +17,54 @@ TestFlight/AppTester/Firebase, or run commands such as `cdt run test` and
 
 - inspect `cdt.yaml` before running a pipeline;
 - use `cdt pipeline list` and `cdt pipeline inspect <pipeline>` as preflight;
-- avoid production-like pipelines unless the user explicitly asks for production;
+- avoid production-like pipelines unless the user explicitly asks for production
+  and confirms the exact command;
 - capture long output in `.cdt/agent-release-<pipeline>.log`;
-- report concise success/failure summaries instead of pasting full build logs.
+- report concise structured success/failure summaries instead of pasting full
+  build logs.
+
+Agents that support repository-level rules should also read:
+
+```text
+.agents/rules/cdt-release.md
+```
+
+`AGENTS.md` at the repository root is the cross-platform entry point for agents
+such as Claude Code, Codex, and Pi-compatible harnesses.
+
+### Human-in-the-loop production safety
+
+CDT treats `cdt run` as real execution. There is no extra built-in `--yes`,
+`--confirm`, or `--dry-run` prompt for deploy, upload, git push, or plugin code
+execution. Agents must therefore pause before production-like pipelines and ask
+for exact human confirmation, for example:
+
+```text
+Подтверждаю production release: cdt run <pipeline>
+```
+
+Ambiguous replies such as `ok`, `да`, `go`, or `continue` are not enough for a
+production run.
+
+### Structured run summary
+
+After each run, agents should summarize using these fields:
+
+```yaml
+status: success | failed | blocked
+pipeline: <pipeline>
+version: <version/build or unknown>
+artifacts:
+  - <artifact path or upload result>
+log: .cdt/agent-release-<pipeline>.log
+working_tree:
+  - <git status --short entries or clean>
+next_actions:
+  - <action, only if needed>
+```
+
+A JSON report at `.cdt/agent-release-<pipeline>.json` is optional and should be
+created only when useful for automation.
 
 ### Install for Pi
 
@@ -47,6 +92,14 @@ A project can also reference only the skill directory in `.pi/settings.json`:
 Adjust the relative path so it points from the project settings file to the CDT
 checkout.
 
+### Install for Hermes
+
+Expose this repository's `skills/` directory to Hermes, then load the skill with:
+
+```text
+/skill cdt-release
+```
+
 ### Install for Codex or other Agent Skills clients
 
 Copy or symlink `skills/cdt-release/` into the client skill directory, for
@@ -59,6 +112,12 @@ ln -s /path/to/cdt/skills/cdt-release ~/.codex/skills/cdt-release
 
 The skill follows the common `SKILL.md` directory layout and can be used by
 Agent Skills compatible clients.
+
+### Claude Code
+
+Claude Code can use the root `AGENTS.md` file as the entry point. For release
+work, it points the agent to `skills/cdt-release/SKILL.md` and
+`.agents/rules/cdt-release.md`.
 
 ## Add a Project Step
 
