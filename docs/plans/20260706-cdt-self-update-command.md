@@ -36,13 +36,13 @@
 **Files:**
 - Create: `cdt/self_update.py`
 
-- [ ] Реализовать `_latest_release_tag(owner: str, repo: str) -> str` через `urllib.request` + `json.loads`
-- [ ] Обработать ошибки сети/API и отсутствие release-тега с понятными сообщениями (`typer.BadParameter` или кастомные исключения)
-- [ ] Реализовать `_detect_install_method() -> str | None`, определяющий `pipx`/`pip` по `sys.executable` / `pipx` metadata / `pip list`
-- [ ] Реализовать `_update_command(tag: str, method: str) -> list[str]`, возвращающий аргументы для `pipx install --force git+https://github.com/{owner}/{repo}.git@{tag}` (или аналог для `pip`)
-- [ ] Реализовать `run_self_update(*, repo_url: str, dry_run: bool = False) -> None`, который выводит текущую и новую версию, формирует команду и выполняет через `subprocess.run(...)` (или только печатает при `dry_run=True`)
-- [ ] Написать unit-тесты для парсинга ответа GitHub API, определения метода установки и формирования команды обновления
-- [ ] Запустить `pytest tests/test_self_update.py` — должен пройти
+- [x] Реализовать `_latest_release_tag(owner: str, repo: str) -> str` через `urllib.request` + `json.loads`
+- [x] Обработать ошибки сети/API и отсутствие release-тега с понятными сообщениями (`typer.BadParameter` или кастомные исключения)
+- [x] Реализовать `_detect_install_method() -> str | None`, определяющий `pipx`/`pip` по `sys.executable` / `pipx` metadata / `pip list`
+- [x] Реализовать `_update_command(tag: str, method: str) -> list[str]`, возвращающий аргументы для `pipx install --force git+https://github.com/{owner}/{repo}.git@{tag}` (или аналог для `pip`)
+- [x] Реализовать `run_self_update(*, repo_url: str, dry_run: bool = False) -> None`, который выводит текущую и новую версию, формирует команду и выполняет через `subprocess.run(...)` (или только печатает при `dry_run=True`)
+- [x] Написать unit-тесты для парсинга ответа GitHub API, определения метода установки и формирования команды обновления
+- [x] Запустить `pytest tests/test_self_update.py` — должен пройти
 
 ### Task 2: Добавить команду `cdt self-update` в CLI
 
