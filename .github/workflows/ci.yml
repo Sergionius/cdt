@@ -41,8 +41,8 @@ jobs:
 
       - name: CLI smoke
         run: |
-          python -m cdt.cli --version
-          python -m cdt.cli --help
-          python -m cdt.cli run --help
-          python -m cdt.cli pipeline --help
-          python -m cdt.cli pipeline steps --help
+          python -m cdt --version
+          python -m cdt --help
+          python -m cdt run --help
+          python -m cdt pipeline --help
+          python -m cdt pipeline steps --help
