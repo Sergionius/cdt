@@ -81,6 +81,10 @@ pipelines:
 
 See `examples/cdt.yaml` and `docs/pipelines.md` for a fuller prod pipeline, plugins, artifacts, and hooks.
 
+## Release notes
+
+See [`CHANGELOG.md`](CHANGELOG.md) for release notes.
+
 ## AI agent skill
 
 CDT ships an Agent Skill at `skills/cdt-release/SKILL.md` for safer low-noise release runs by AI coding agents. It makes agents inspect `cdt.yaml`, avoid production pipelines unless explicitly requested, write long logs to `.cdt/agent-release-<pipeline>.log`, and return concise success/failure summaries.
