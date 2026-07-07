@@ -3,28 +3,36 @@ import re
 import site
 import subprocess
 import sys
+import textwrap
 import urllib.error
 import urllib.request
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import typer
 
 from . import __version__
 
 _GITHUB_API_LATEST = "https://api.github.com/repos/{owner}/{repo}/releases/latest"
-_SAFE_TAG_RE = re.compile(r"^[A-Za-z0-9._-]+$")
-_PIPX_VENV_MARKER = "/pipx/venvs/"
+_SAFE_TAG_RE = re.compile(r"^[A-Za-z0-9._+-]+$")
 
 
 class SelfUpdateError(Exception):
     """Raised when self-update cannot proceed."""
 
 
+def _is_pipx_path(path: str) -> bool:
+    parts = path.replace("\\", "/").lower().split("/")
+    for i, part in enumerate(parts[:-1]):
+        if part == "pipx" and parts[i + 1] == "venvs":
+            return True
+    return False
+
+
 def _owner_repo_from_url(repo_url: str) -> tuple[str, str]:
     parsed = urlparse(repo_url)
-    if parsed.scheme != "https" or parsed.netloc != "github.com":
+    if parsed.scheme != "https" or parsed.hostname != "github.com":
         raise SelfUpdateError(f"Unsupported repository URL (only https://github.com URLs are accepted): {repo_url}")
-    path = parsed.path.strip("/")
+    path = unquote(parsed.path).strip("/")
     if path.endswith(".git"):
         path = path[:-4]
     parts = path.split("/")
@@ -33,11 +41,12 @@ def _owner_repo_from_url(repo_url: str) -> tuple[str, str]:
     return parts[0], parts[1]
 
 
-def _version_key(version: str) -> tuple[tuple[int, ...], int, tuple[str, ...]]:
+def _version_key(version: str) -> tuple[tuple[int, ...], int, tuple[tuple[int, int, str], ...]]:
     """Return a sortable key for a simple semver-like version string.
 
     A version without a pre-release segment is considered newer than the same
     release with a pre-release segment, e.g. ``0.4.0`` > ``0.4.0-dev``.
+    Numeric pre-release identifiers are compared numerically.
     """
     version = version.lstrip("v")
     tokens = re.split(r"[.-]", version)
@@ -50,9 +59,19 @@ def _version_key(version: str) -> tuple[tuple[int, ...], int, tuple[str, ...]]:
             release.append(int(token))
         else:
             pre.append(token)
+
+    def _pre_key(identifiers: list[str]) -> list[tuple[int, int, str]]:
+        result: list[tuple[int, int, str]] = []
+        for ident in identifiers:
+            if ident.isdigit():
+                result.append((0, int(ident), ""))
+            else:
+                result.append((1, 0, ident))
+        return result
+
     # A release without a pre-release segment sorts after the same release
     # with a pre-release segment, so use a higher indicator for no pre-release.
-    return tuple(release), (1 if not pre else 0), tuple(pre)
+    return tuple(release), (1 if not pre else 0), tuple(_pre_key(pre))
 
 
 def _is_up_to_date(current: str, latest: str) -> bool:
@@ -74,6 +93,8 @@ def _latest_release_tag(owner: str, repo: str) -> str:
         raise SelfUpdateError(f"Network error while contacting GitHub: {exc.reason}") from exc
     except TimeoutError as exc:
         raise SelfUpdateError("GitHub API request timed out.") from exc
+    except UnicodeDecodeError as exc:
+        raise SelfUpdateError("Unable to decode GitHub API response.") from exc
     except json.JSONDecodeError as exc:
         raise SelfUpdateError("Unable to parse GitHub API response.") from exc
 
@@ -81,43 +102,26 @@ def _latest_release_tag(owner: str, repo: str) -> str:
         raise SelfUpdateError("Unexpected GitHub API response format.")
 
     tag = data.get("tag_name")
-    if not tag:
-        raise SelfUpdateError("GitHub release does not contain a tag_name.")
+    if not isinstance(tag, str) or not tag.strip():
+        raise SelfUpdateError("GitHub release does not contain a valid tag_name.")
     return tag
-
-
-def _run_pip_show() -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, "-m", "pip", "show", "cdt"],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-        timeout=15,
-    )
-
-
-def _run_pipx_list() -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["pipx", "list", "--json"],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-        timeout=15,
-    )
 
 
 def _detect_install_method() -> tuple[str, bool] | None:
     executable = sys.executable
-    lowered = executable.lower()
-    if _PIPX_VENV_MARKER in lowered:
+    if _is_pipx_path(executable):
         return "pipx", False
 
     try:
-        result = _run_pip_show()
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "show", "cdt"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=15,
+        )
         if result.returncode == 0:
             location = None
             editable = False
@@ -129,16 +133,24 @@ def _detect_install_method() -> tuple[str, bool] | None:
             if editable:
                 return None
             if location:
-                lowered_location = location.lower()
-                if _PIPX_VENV_MARKER in lowered_location:
+                if _is_pipx_path(location):
                     return "pipx", False
-                is_user = bool(location.startswith(site.getusersitepackages()))
+                user_site = site.getusersitepackages()
+                is_user = bool(user_site and location.startswith(user_site))
                 return "pip", is_user
     except (OSError, subprocess.TimeoutExpired, UnicodeDecodeError):
         pass
 
     try:
-        result = _run_pipx_list()
+        result = subprocess.run(
+            ["pipx", "list", "--json"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=15,
+        )
         if result.returncode == 0:
             payload = json.loads(result.stdout)
             if not isinstance(payload, dict):
@@ -164,7 +176,7 @@ def _detect_install_method() -> tuple[str, bool] | None:
 
 
 def _validate_tag(tag: str) -> None:
-    if not tag or not _SAFE_TAG_RE.match(tag):
+    if not isinstance(tag, str) or not tag.strip() or not _SAFE_TAG_RE.match(tag):
         raise SelfUpdateError(f"Unsafe or invalid release tag: {tag}")
 
 
@@ -187,7 +199,9 @@ def _manual_update_command(tag: str, *, owner: str, repo: str) -> str:
     package_url = f"git+https://github.com/{owner}/{repo}.git@{tag}"
     return (
         f"pipx install --force {package_url}\n"
-        f"{sys.executable} -m pip install --force-reinstall {package_url}"
+        f"{sys.executable} -m pip install --force-reinstall {package_url}\n"
+        f"{sys.executable} -m pip install --force-reinstall --user {package_url}  "
+        "# if installed with --user"
     )
 
 
@@ -205,16 +219,17 @@ def run_self_update(*, repo_url: str, dry_run: bool = False) -> int:
     method_info = _detect_install_method()
     if method_info is None:
         manual_command = _manual_update_command(latest_tag, owner=owner, repo=repo)
+        indented = textwrap.indent(manual_command, "  ")
         if dry_run:
             typer.echo(
                 "Unable to detect installation method. "
-                f"Manual update command:\n  {manual_command}"
+                f"Manual update command:\n{indented}"
             )
             return 0
         typer.echo(
             "Unable to detect installation method. "
             "Please reinstall manually with:\n"
-            f"  {manual_command}",
+            f"{indented}",
             err=True,
         )
         return 1
