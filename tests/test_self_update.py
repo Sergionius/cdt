@@ -12,6 +12,7 @@ from cdt.self_update import (
     _detect_install_method,
     _is_up_to_date,
     _latest_release_tag,
+    _manual_update_command,
     _owner_repo_from_url,
     _update_command,
     run_self_update,
@@ -43,6 +44,15 @@ def test_latest_release_tag_parses_tag_name():
     request = mock_urlopen.call_args[0][0]
     assert "Sergionius/cdt" in request.full_url
     assert request.headers.get("User-agent", "").startswith("cdt/")
+
+
+def test_latest_release_tag_strips_whitespace():
+    response = FakeResponse(github_latest_release_json("  v0.4.0  "))
+
+    with patch("urllib.request.urlopen", return_value=response):
+        tag = _latest_release_tag("Sergionius", "cdt")
+
+    assert tag == "v0.4.0"
 
 
 def test_latest_release_tag_missing_tag_name_raises():
@@ -291,6 +301,14 @@ def test_update_command_rejects_unsafe_tag():
         _update_command("v0.4.0 evil", "pipx", owner="Sergionius", repo="cdt")
 
 
+def test_manual_update_command_quotes_url_and_python(monkeypatch):
+    monkeypatch.setattr(sys, "executable", "/path with spaces/python3")
+    command = _manual_update_command("v0.4.0", owner="Sergionius", repo="cdt")
+    assert "'/path with spaces/python3'" in command
+    assert "pipx install --force git+https://github.com/Sergionius/cdt.git@v0.4.0" in command
+    assert "git+https://github.com/Sergionius/cdt.git@v0.4.0" in command
+
+
 def test_run_self_update_dry_run_prints_command(monkeypatch, capsys):
     def fake_urlopen(url, **kwargs):
         return FakeResponse(github_latest_release_json("v0.4.0"))
@@ -310,6 +328,26 @@ def test_run_self_update_dry_run_prints_command(monkeypatch, capsys):
     assert "Latest release: v0.4.0" in captured.out
     assert "pipx install --force" in captured.out
     assert "Dry run" in captured.out
+
+
+def test_run_self_update_uses_shell_safe_command_join(monkeypatch, capsys):
+    def fake_urlopen(url, **kwargs):
+        return FakeResponse(github_latest_release_json("v0.4.0"))
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr(sys, "executable", "/path with spaces/python3")
+    monkeypatch.setattr(
+        self_update,
+        "_detect_install_method",
+        lambda: ("pip", False),
+    )
+
+    exit_code = run_self_update(repo_url="https://github.com/Sergionius/cdt", dry_run=True)
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "'/path with spaces/python3'" in captured.out
+    assert "git+https://github.com/Sergionius/cdt.git@v0.4.0" in captured.out
 
 
 def test_run_self_update_dry_run_without_detected_method_shows_manual_command(monkeypatch, capsys):
@@ -481,6 +519,11 @@ def test_owner_repo_from_url_rejects_http():
         _owner_repo_from_url("http://github.com/Sergionius/cdt")
 
 
+def test_owner_repo_from_url_rejects_nonstandard_port():
+    with pytest.raises(SelfUpdateError, match="Unsupported repository URL"):
+        _owner_repo_from_url("https://github.com:8443/Sergionius/cdt")
+
+
 def test_latest_release_tag_non_dict_response_raises():
     response = FakeResponse(json.dumps(["not", "a", "dict"]).encode("utf-8"))
 
@@ -496,6 +539,13 @@ def test_is_up_to_date_skips_newer_and_equal_versions():
     assert _is_up_to_date("0.4.0-dev", "0.3.0") is True
     assert _is_up_to_date("0.4.0", "0.4.0-beta") is True
     assert _is_up_to_date("0.3.0", "0.4.0") is False
+
+
+def test_is_up_to_date_pads_release_segments():
+    assert _is_up_to_date("0.3", "0.3.0") is True
+    assert _is_up_to_date("0.3", "0.3.0-beta") is True
+    assert _is_up_to_date("0.3.0", "0.3.1") is False
+    assert _is_up_to_date("0.3.0", "0.3.0-beta") is True
 
 
 def test_run_self_update_skips_when_current_newer(monkeypatch, capsys):

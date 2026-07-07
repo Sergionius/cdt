@@ -1,5 +1,6 @@
 import json
 import re
+import shlex
 import site
 import subprocess
 import sys
@@ -30,7 +31,7 @@ def _is_pipx_path(path: str) -> bool:
 
 def _owner_repo_from_url(repo_url: str) -> tuple[str, str]:
     parsed = urlparse(repo_url)
-    if parsed.scheme != "https" or parsed.hostname != "github.com":
+    if parsed.scheme != "https" or parsed.hostname != "github.com" or parsed.port not in (None, 443):
         raise SelfUpdateError(f"Unsupported repository URL (only https://github.com URLs are accepted): {repo_url}")
     path = unquote(parsed.path).strip("/")
     if path.endswith(".git"):
@@ -75,7 +76,12 @@ def _version_key(version: str) -> tuple[tuple[int, ...], int, tuple[tuple[int, i
 
 
 def _is_up_to_date(current: str, latest: str) -> bool:
-    return _version_key(current) >= _version_key(latest)
+    c_rel, c_pre_ind, c_pre = _version_key(current)
+    l_rel, l_pre_ind, l_pre = _version_key(latest)
+    length = max(len(c_rel), len(l_rel))
+    c_rel = c_rel + (0,) * (length - len(c_rel))
+    l_rel = l_rel + (0,) * (length - len(l_rel))
+    return (c_rel, c_pre_ind, c_pre) >= (l_rel, l_pre_ind, l_pre)
 
 
 def _latest_release_tag(owner: str, repo: str) -> str:
@@ -104,7 +110,7 @@ def _latest_release_tag(owner: str, repo: str) -> str:
     tag = data.get("tag_name")
     if not isinstance(tag, str) or not tag.strip():
         raise SelfUpdateError("GitHub release does not contain a valid tag_name.")
-    return tag
+    return tag.strip()
 
 
 def _detect_install_method() -> tuple[str, bool] | None:
@@ -197,10 +203,12 @@ def _update_command(tag: str, method: str, *, is_user: bool = False, owner: str,
 def _manual_update_command(tag: str, *, owner: str, repo: str) -> str:
     _validate_tag(tag)
     package_url = f"git+https://github.com/{owner}/{repo}.git@{tag}"
+    quoted_url = shlex.quote(package_url)
+    quoted_python = shlex.quote(sys.executable)
     return (
-        f"pipx install --force {package_url}\n"
-        f"{sys.executable} -m pip install --force-reinstall {package_url}\n"
-        f"{sys.executable} -m pip install --force-reinstall --user {package_url}  "
+        f"pipx install --force {quoted_url}\n"
+        f"{quoted_python} -m pip install --force-reinstall {quoted_url}\n"
+        f"{quoted_python} -m pip install --force-reinstall --user {quoted_url}  "
         "# if installed with --user"
     )
 
@@ -236,7 +244,7 @@ def run_self_update(*, repo_url: str, dry_run: bool = False) -> int:
 
     method, is_user = method_info
     command = _update_command(latest_tag, method, is_user=is_user, owner=owner, repo=repo)
-    typer.echo(f"Update command: {' '.join(command)}")
+    typer.echo(f"Update command: {shlex.join(command)}")
 
     if dry_run:
         typer.echo("Dry run: not executing update command.")
