@@ -3,7 +3,7 @@
 Install CDT from a GitHub release with `pipx`:
 
 ```bash
-pipx install "git+https://github.com/Sergionius/cdt.git@v0.3.3"
+pipx install "git+https://github.com/Sergionius/cdt.git@v0.3.5"
 ```
 
 Verify the CLI:

@@ -9,6 +9,13 @@ from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+RELEASE_TAG_EXAMPLE_FILES = (
+    ROOT / "README.md",
+    ROOT / "docs" / "getting-started.md",
+)
+GITHUB_TAG_INSTALL_RE = re.compile(
+    r'(git\+https://github\.com/Sergionius/cdt\.git@)v\d+\.\d+\.\d+(?:[.-][A-Za-z0-9]+)?'
+)
 
 
 def main() -> int:
@@ -35,6 +42,7 @@ def main() -> int:
     if args.dry_run:
         print(f"Would bump version to {args.version}")
         print(f"Would prepend CHANGELOG section {tag}")
+        print("Would update README/docs GitHub install examples")
         print("Would run: ruff check ., pytest -q, clean dist, python -m build")
         print(f"Would commit and create annotated tag {tag}")
         if args.push:
@@ -47,6 +55,7 @@ def main() -> int:
     for path, pattern, replacement in changes:
         text = path.read_text(encoding="utf-8")
         path.write_text(re.sub(pattern, replacement, text, count=1), encoding="utf-8")
+    update_release_tag_examples(args.version)
 
     changelog = ROOT / "CHANGELOG.md"
     text = changelog.read_text(encoding="utf-8")
@@ -63,8 +72,15 @@ def main() -> int:
     clean_dist()
     run(["python", "-m", "build"])
 
-    run(["git", "diff", "--", "pyproject.toml", "cdt/__init__.py", "CHANGELOG.md"])
-    run(["git", "add", "pyproject.toml", "cdt/__init__.py", "CHANGELOG.md"])
+    release_files = [
+        "pyproject.toml",
+        "cdt/__init__.py",
+        "CHANGELOG.md",
+        "README.md",
+        "docs/getting-started.md",
+    ]
+    run(["git", "diff", "--", *release_files])
+    run(["git", "add", *release_files])
     if has_staged_changes():
         run(["git", "commit", "-m", f"Release {tag}"])
     else:
@@ -79,6 +95,13 @@ def main() -> int:
         print(f"Prepared local release commit and tag {tag}.")
         print("Nothing was pushed. Re-run with --push after explicit confirmation to publish the release.")
     return 0
+
+
+def update_release_tag_examples(version: str) -> None:
+    tag = f"v{version}"
+    for path in RELEASE_TAG_EXAMPLE_FILES:
+        text = path.read_text(encoding="utf-8")
+        path.write_text(GITHUB_TAG_INSTALL_RE.sub(rf"\g<1>{tag}", text), encoding="utf-8")
 
 
 def run(command: list[str]) -> None:

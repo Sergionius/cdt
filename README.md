@@ -11,7 +11,7 @@ CDT is a CLI tool, so `pipx` is the recommended installation method.
 Install a specific GitHub release:
 
 ```bash
-pipx install "git+https://github.com/Sergionius/cdt.git@v0.3.3"
+pipx install "git+https://github.com/Sergionius/cdt.git@v0.3.5"
 ```
 
 Or install the latest `main`:
@@ -32,7 +32,7 @@ Or manually:
 
 ```bash
 pipx uninstall cdt
-pipx install "git+https://github.com/Sergionius/cdt.git@v0.3.3"
+pipx install "git+https://github.com/Sergionius/cdt.git@v0.3.5"
 ```
 
 For local development:
@@ -45,7 +45,7 @@ python -m pip install -e '.[dev]'
 scripts/reinstall.sh
 ```
 
-`pip install git+https://github.com/Sergionius/cdt.git@v0.3.3` also works, but `pipx` keeps the CLI isolated from project Python environments.
+`pip install git+https://github.com/Sergionius/cdt.git@v0.3.5` also works, but `pipx` keeps the CLI isolated from project Python environments.
 
 Note: the `cdt` name on PyPI belongs to another project, so install this CDT from GitHub.
 
@@ -105,7 +105,7 @@ See [`CHANGELOG.md`](CHANGELOG.md) for release notes.
 
 ## Releasing
 
-Releases are GitHub-only. After updating versions and the changelog, push a `v*` tag (for example `v0.3.3`). GitHub Actions runs lint, tests, build, `twine check`, publishes a GitHub Release, and attaches the wheel and source archive from `dist/`. Use `python scripts/release.py <version>` to prepare the release commit and annotated tag locally. Use `python scripts/release.py <version> --push` only after explicit confirmation to rebase, push the commit, and push the tag.
+Releases are GitHub-only. After updating versions and the changelog, push a `v*` tag (for example `v0.3.5`). GitHub Actions runs lint, tests, build, `twine check`, publishes a GitHub Release, and attaches the wheel and source archive from `dist/`. Use `python scripts/release.py <version>` to prepare the release commit and annotated tag locally. Use `python scripts/release.py <version> --push` only after explicit confirmation to rebase, push the commit, and push the tag.
 
 ## AI agent skill
 
