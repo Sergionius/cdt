@@ -27,7 +27,7 @@ jobs:
         run: ruff check .
 
       - name: Tests
-        run: pytest
+        run: pytest -q
 
       - name: Build
         run: python -m build
@@ -58,5 +58,13 @@ jobs:
       - name: Install from GitHub tag and smoke test
         run: |
           python -m venv /tmp/cdt-tag-smoke
-          /tmp/cdt-tag-smoke/bin/python -m pip install 'git+https://github.com/Sergionius/cdt.git@${{ github.ref_name }}'
+          for attempt in 1 2 3; do
+            if /tmp/cdt-tag-smoke/bin/python -m pip install 'git+https://github.com/Sergionius/cdt.git@${{ github.ref_name }}'; then
+              break
+            fi
+            if [ "$attempt" = "3" ]; then
+              exit 1
+            fi
+            sleep 10
+          done
           /tmp/cdt-tag-smoke/bin/cdt --version

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 import urllib.error
@@ -61,9 +62,12 @@ def run_doctor(cwd: Path, *, json_output: bool = False) -> int:
 
 def _github_check() -> dict[str, Any]:
     try:
+        headers = {"User-Agent": f"cdt/{__version__}"}
+        if token := os.environ.get("GITHUB_TOKEN"):
+            headers["Authorization"] = f"Bearer {token}"
         request = urllib.request.Request(
             "https://api.github.com/rate_limit",
-            headers={"User-Agent": f"cdt/{__version__}"},
+            headers=headers,
         )
         with urllib.request.urlopen(request, timeout=5) as response:
             ok = 200 <= getattr(response, "status", 200) < 400

@@ -31,6 +31,31 @@ def test_doctor_reports_environment(tmp_path, monkeypatch):
     assert "cdt_yaml_valid" in result.output
 
 
+def test_doctor_uses_github_token(monkeypatch):
+    captured = {}
+    monkeypatch.setenv("GITHUB_TOKEN", "secret-token")
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_urlopen(request, **kwargs):
+        captured["authorization"] = request.get_header("Authorization")
+        return Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    result = runner.invoke(app, ["doctor"], catch_exceptions=False)
+
+    assert captured["authorization"] == "Bearer secret-token"
+    assert "github_api" in result.output
+
+
 def test_doctor_fails_on_invalid_yaml(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "cdt.yaml").write_text("version: [\n", encoding="utf-8")

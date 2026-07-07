@@ -2,9 +2,12 @@
 
 ## Unreleased
 
+- Nothing yet.
+
 ## v0.3.3 - 2026-07-07
 
 - Automated release pipeline via GitHub Actions.
+- Hardened the release helper with explicit push mode, safer changelog formatting, and pre-push rebase.
 - Added PR build, twine, and wheel smoke checks.
 - Added `cdt self-update --check`, `--json`, explicit `--manager`, rate-limit errors, and `uv` support.
 - Added `cdt doctor` and a getting-started guide.

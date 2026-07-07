@@ -105,7 +105,7 @@ See [`CHANGELOG.md`](CHANGELOG.md) for release notes.
 
 ## Releasing
 
-Releases are GitHub-only. After updating versions and the changelog, push a `v*` tag (for example `v0.3.3`). GitHub Actions runs lint, tests, build, `twine check`, publishes a GitHub Release, and attaches the wheel and source archive from `dist/`. Use `python scripts/release.py <version>` to prepare and push the release commit and annotated tag.
+Releases are GitHub-only. After updating versions and the changelog, push a `v*` tag (for example `v0.3.3`). GitHub Actions runs lint, tests, build, `twine check`, publishes a GitHub Release, and attaches the wheel and source archive from `dist/`. Use `python scripts/release.py <version>` to prepare the release commit and annotated tag locally. Use `python scripts/release.py <version> --push` only after explicit confirmation to rebase, push the commit, and push the tag.
 
 ## AI agent skill
 
