@@ -20,7 +20,7 @@ def doctor_payload(cwd: Path) -> dict[str, Any]:
     manager = manager_info[0] if manager_info else "unknown"
     config_path = cwd / "cdt.yaml"
     checks: list[dict[str, Any]] = [
-        {"name": "python", "ok": sys.version_info >= (3, 11), "message": sys.version.split()[0]},
+        {"name": "python", "ok": sys.version_info >= (3, 10), "message": sys.version.split()[0]},
         {"name": "cdt", "ok": True, "message": __version__},
         {"name": "install_manager", "ok": manager != "unknown", "message": manager, "critical": False},
         {
