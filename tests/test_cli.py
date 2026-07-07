@@ -80,9 +80,10 @@ def test_command_help_lists_key_options():
 
 def test_self_update_help_available():
     result = runner.invoke(app, ["self-update", "--help"])
+    normalized_output = re.sub(r"\s+", "", _visible_text(result.output))
 
     assert result.exit_code == 0
-    assert "--dry-run" in result.output
+    assert "--dry-run" in normalized_output
 
 
 def test_self_update_dry_run_shows_version_and_command(monkeypatch):
