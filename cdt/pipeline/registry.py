@@ -93,7 +93,12 @@ class StepMetadata:
     requires: tuple[ResultRequirement, ...] = ()
     produces: tuple[ResultProduction, ...] = ()
     external_tools: tuple[str, ...] = ()
+    requires_env: tuple[str, ...] = ()
     plugin: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "external_tools", _string_tuple(self.external_tools, "StepMetadata.external_tools"))
+        object.__setattr__(self, "requires_env", _string_tuple(self.requires_env, "StepMetadata.requires_env"))
 
     def to_dict(self) -> dict:
         return {
@@ -104,6 +109,7 @@ class StepMetadata:
             "requires": [req.to_dict() for req in self.requires],
             "produces": [prod.to_dict() for prod in self.produces],
             "external_tools": list(self.external_tools),
+            "requires_env": list(self.requires_env),
             "plugin": self.plugin,
         }
 
@@ -175,6 +181,7 @@ def _normalize_metadata(name: str, metadata: StepMetadata | None) -> StepMetadat
             for prod in metadata.produces
         ),
         external_tools=tuple(metadata.external_tools),
+        requires_env=tuple(metadata.requires_env),
         plugin=metadata.plugin,
     )
 

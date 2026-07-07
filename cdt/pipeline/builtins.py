@@ -59,6 +59,7 @@ _BUILTIN_METADATA: dict[str, StepMetadata] = {
         requires=(ResultRequirement(("ios_ipa",), name_options=("artifact",)),),
         produces=(ResultProduction("upload_result"),),
         external_tools=("xcrun",),
+        requires_env=("ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_PRIVATE_KEY_PATH", "IOS_BUNDLE_ID"),
     ),
     "artifact.copy_to_downloads": StepMetadata(
         name="artifact.copy_to_downloads",
@@ -96,6 +97,7 @@ _BUILTIN_METADATA: dict[str, StepMetadata] = {
         ),
         produces=(ResultProduction("upload_result"),),
         external_tools=("firebase",),
+        requires_env=("FIREBASE_APP_ID_ANDROID", "FIREBASE_TOKEN"),
     ),
     "flutter.increment_build_number": StepMetadata(
         name="flutter.increment_build_number",
@@ -169,6 +171,7 @@ _BUILTIN_METADATA: dict[str, StepMetadata] = {
         category="tracker",
         risk="upload",
         produces=(ResultProduction("tracker_comment"),),
+        requires_env=("TRACKER_OAUTH_TOKEN", "TRACKER_ORG_ID"),
     ),
     "web.build": StepMetadata(
         name="web.build",

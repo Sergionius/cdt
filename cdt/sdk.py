@@ -59,6 +59,7 @@ def _build_metadata(
             requires=tuple(metadata.requires),
             produces=tuple(metadata.produces),
             external_tools=tuple(metadata.external_tools),
+            requires_env=tuple(metadata.requires_env),
             plugin=True,
         )
 

@@ -26,3 +26,12 @@ class BuildArtifact:
         if self.step:
             payload["step"] = self.step
         return payload
+
+    @classmethod
+    def from_json(cls, payload: dict[str, str]) -> "BuildArtifact":
+        return cls(
+            kind=ArtifactKind(payload["kind"]),
+            path=Path(payload["path"]),
+            label=payload.get("label") or payload.get("name") or payload["kind"],
+            step=payload.get("step"),
+        )
