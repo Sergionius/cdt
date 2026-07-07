@@ -17,6 +17,35 @@ Use focused tests while editing, for example:
 pytest tests/test_skills.py
 ```
 
+## Branch naming
+
+When creating branches, use short intent-based names:
+
+- `feature/<short-kebab-feature>`
+- `fix/<short-kebab-bug>`
+- `docs/<short-kebab-topic>`
+- `chore/<short-kebab-task>`
+
+Rules:
+
+- use at most 3-4 meaningful words after the prefix;
+- do not include dates;
+- do not copy full plan titles;
+- avoid implementation details unless they are the user-facing feature name;
+- branch from latest `main`;
+- keep one PR focused on one coherent feature, fix, or docs task.
+
+Before pushing, check:
+
+```bash
+git branch --show-current
+git merge-base --is-ancestor origin/main HEAD
+git diff --name-only origin/main...HEAD
+```
+
+Good examples: `feature/agent-release`, `feature/run-status-file`, `fix/release-worker-exit`.
+Bad examples: `feature/agent-release-token-efficient-cicd`, `feature/2026-07-07-token-efficient-cdt-releases-cicd-robustness`.
+
 ## Agent skills
 
 When asked to send, publish, upload, or run a release through CDT, load:
