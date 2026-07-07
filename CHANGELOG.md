@@ -4,6 +4,13 @@
 
 - Nothing yet.
 
+## v0.3.5 - 2026-07-07
+
+- Added `cdt run --resume-from` and `--skip-completed` to resume long pipeline runs from status JSON.
+- Added child-level parallel runtime status fields: `running_steps`, `parallel_completed`, and `parallel_failed`.
+- Added `cdt pipeline validate --strict` to fail on planner warnings during safer CI preflight.
+- Added metadata-driven `requires_env` and `cdt pipeline preflight <pipeline>` for selected-pipeline tool/env checks.
+
 ## v0.3.4 - 2026-07-07
 
 - Added `cdt agent-release start/status/stop` for token-efficient long-running release automation.

@@ -511,6 +511,29 @@ def test_pipeline_validate_strict_fails_on_plan_warnings(tmp_path, monkeypatch):
     assert payload["errors"][0]["code"] == "strict_missing_required_artifact"
 
 
+def test_pipeline_validate_strict_text_prints_warning_once(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  demo:",
+                "    steps:",
+                "      - appstore.upload_testflight:",
+                "          artifact: ios_ipa",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["pipeline", "validate", "demo", "--strict"])
+
+    assert result.exit_code == 1
+    assert result.output.count("requires artifact name ios_ipa") == 1
+
+
 def test_pipeline_preflight_checks_selected_pipeline_tools_and_env(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(preflight.shutil, "which", lambda tool: None)

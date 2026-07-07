@@ -222,8 +222,6 @@ def pipeline_validate(
         warnings = _strict_warnings(config, name)
         errors.extend(_strict_errors(warnings))
     if errors:
-        for warning in warnings:
-            typer.echo(f"{warning.get('path', '')}: {warning['message']}", err=True)
         for error in errors:
             typer.echo(f"{error.get('path', '')}: {error['message']}", err=True)
         raise typer.Exit(code=1)
