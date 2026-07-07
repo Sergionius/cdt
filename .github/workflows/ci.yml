@@ -46,6 +46,10 @@ jobs:
           python -m cdt --version
           python -m cdt --help
           python -m cdt run --help
+          python -m cdt agent-release --help
+          python -m cdt agent-release start --help
+          python -m cdt agent-release status --help
+          python -m cdt agent-release stop --help
           python -m cdt pipeline --help
           python -m cdt pipeline plan --help
           python -m cdt pipeline steps --help

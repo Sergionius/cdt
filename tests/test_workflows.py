@@ -18,6 +18,18 @@ def test_all_workflow_pytest_commands_are_quiet():
                 assert " -q" in stripped or stripped.endswith("pytest -q"), workflow
 
 
+def test_ci_cli_smoke_covers_agent_release_help():
+    text = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+
+    for command in (
+        "python -m cdt agent-release --help",
+        "python -m cdt agent-release start --help",
+        "python -m cdt agent-release status --help",
+        "python -m cdt agent-release stop --help",
+    ):
+        assert command in text
+
+
 def test_release_github_tag_smoke_retries_with_sleep():
     text = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
 

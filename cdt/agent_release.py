@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 
 def artifact_paths(pipeline: str) -> dict[str, Path]:
     base = Path.cwd() / ".cdt"
@@ -61,6 +63,7 @@ def start_release(pipeline: str, ids: list[str] | None = None) -> dict[str, Any]
         "exit_file": str(paths["exit"]),
         "started_at": _now(),
         "command": ["cdt", "run", pipeline, *sum((["--id", value] for value in ids), [])],
+        "worker_command": cmd,
     }
     _write_json(paths["meta"], meta)
     return release_status(pipeline)
@@ -120,7 +123,7 @@ def wait_for_release(
         if payload["status"] in {"success", "failed", "stale", "unknown"}:
             return payload
         if deadline is not None and time.monotonic() >= deadline:
-            payload["status"] = "timeout"
+            payload["wait_status"] = "timeout"
             return payload
         time.sleep(interval_seconds)
 
@@ -175,18 +178,7 @@ def parse_duration(value: str) -> int:
 
 
 def format_yamlish(payload: dict[str, Any]) -> str:
-    lines: list[str] = []
-    for key, value in payload.items():
-        if isinstance(value, list):
-            lines.append(f"{key}:")
-            for item in value:
-                lines.append(f"  - {item}")
-        elif isinstance(value, dict):
-            lines.append(f"{key}: {json.dumps(value, ensure_ascii=False, sort_keys=True)}")
-        else:
-            rendered = "null" if value is None else str(value)
-            lines.append(f"{key}: {rendered}")
-    return "\n".join(lines)
+    return yaml.safe_dump(payload, allow_unicode=True, sort_keys=False).strip()
 
 
 def _read_pid(path: Path) -> int | None:

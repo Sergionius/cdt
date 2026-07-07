@@ -1,6 +1,7 @@
 import argparse
 import subprocess
 import sys
+import traceback
 from pathlib import Path
 
 
@@ -19,11 +20,19 @@ def main() -> int:
 
     log_path = Path(args.log)
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    with log_path.open("ab") as log:
-        process = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT)
-        exit_code = process.wait()
-
-    Path(args.exit_file).write_text(f"{exit_code}\n", encoding="utf-8")
+    exit_file = Path(args.exit_file)
+    exit_file.parent.mkdir(parents=True, exist_ok=True)
+    exit_code = 1
+    try:
+        with log_path.open("ab") as log:
+            process = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT)
+            exit_code = process.wait()
+    except Exception:
+        with log_path.open("a", encoding="utf-8") as log:
+            log.write("\nagent_release_worker failed before or during cdt run startup:\n")
+            log.write(traceback.format_exc())
+    finally:
+        exit_file.write_text(f"{exit_code}\n", encoding="utf-8")
     return exit_code
 
 
