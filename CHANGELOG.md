@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Nothing yet.
+
+## v0.3.4 - 2026-07-07
+
 - Added `cdt agent-release start/status/stop` for token-efficient long-running release automation.
 - Added `cdt run --status-file` for machine-readable pipeline status.
 - Hardened CI/CD checks with clean `dist` builds, quiet pytest, and tag smoke retry regressions.
