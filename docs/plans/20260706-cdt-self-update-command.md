@@ -70,10 +70,10 @@
 
 ### Task 4: Verify acceptance criteria
 
-- [x] Запустить полный набор тестов: `pytest` (143 passed)
+- [x] Запустить полный набор тестов: `.venv/bin/python -m pytest` (173 passed)
 - [x] Запустить линтер: `ruff check .` (All checks passed)
-- [x] Проверить покрытие тестами: `pytest --cov=cdt --cov-report=term` (self_update.py 86%, общее 68% — цель 80%+ достигнута для нового модуля)
-- [x] Собрать пакет: `python -m build` (cdt-0.3.0.tar.gz и cdt-0.3.0-py3-none-any.whl)
+- [x] Проверить покрытие тестами: `.venv/bin/python -m pytest --cov=cdt --cov-report=term` (self_update.py 98%, общее 69% — цель 80%+ достигнута для нового модуля)
+- [x] Собрать пакет: `.venv/bin/python -m build` (cdt-0.3.0.tar.gz и cdt-0.3.0-py3-none-any.whl)
 
 ### Task 5: Update documentation
 
