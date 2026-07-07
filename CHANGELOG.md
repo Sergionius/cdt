@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.3.1 - 2026-07-07
+
+- Added `cdt self-update` command to update the CLI to the latest GitHub release via `pipx`.
+- Added `cdt self-update --dry-run` to preview the available release tag and update command without executing it.
+- Moved planning documents from `plans/` to `docs/plans/`.
+
 ## v0.3.0 - 2026-07-06
 
 - Added step metadata for built-in and plugin pipeline steps.

@@ -23,6 +23,13 @@ pipx install "git+https://github.com/Sergionius/cdt.git"
 Upgrade or reinstall:
 
 ```bash
+cdt self-update
+cdt self-update --dry-run  # preview the release tag and command without running it
+```
+
+Or manually:
+
+```bash
 pipx uninstall cdt
 pipx install "git+https://github.com/Sergionius/cdt.git@v0.3.0"
 ```
@@ -52,9 +59,13 @@ cdt pipeline inspect <pipeline> --json
 cdt pipeline plan <pipeline> --json
 cdt pipeline validate [pipeline]
 cdt pipeline steps
+cdt self-update
+cdt self-update --dry-run
 ```
 
 Version 0.3.0 adds static planning metadata: `cdt pipeline plan <pipeline>` and `cdt run <pipeline> --dry-run` show the step tree, risk, warnings, and artifact flow without executing steps.
+
+`cdt self-update` updates the installed CLI to the latest GitHub release (works with `pipx` or `pip` installations). Use `cdt self-update --dry-run` to see the available release tag and the update command without running it. The command requires outbound HTTPS access to `api.github.com`.
 
 ## Minimal `cdt.yaml`
 

@@ -1,6 +1,6 @@
 [project]
 name = "cdt"
-version = "0.3.0"
+version = "0.3.1"
 description = "AI-friendly release automation CLI for mobile, web, and custom deployments"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -23,6 +23,7 @@ classifiers = [
 dev = [
     "build>=1.2",
     "pytest>=8.0",
+    "pytest-cov>=6.0",
     "ruff>=0.8",
     "twine>=5.0",
 ]
