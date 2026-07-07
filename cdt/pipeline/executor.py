@@ -1,6 +1,8 @@
+import re
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from typing import Any
 
 import typer
 
@@ -35,4 +37,36 @@ class ParallelStepGroup:
 class PipelineExecutor:
     def run(self, steps: Sequence[Step], ctx: PipelineContext) -> None:
         for step in steps:
-            step.run(ctx)
+            before_artifacts = set(ctx.artifacts)
+            try:
+                step.run(ctx)
+            except typer.BadParameter as exc:
+                produced = sorted(set(ctx.artifacts) - before_artifacts)
+                step_name = getattr(step, "name", step.__class__.__name__)
+                command = _step_command(step)
+                artifacts = ", ".join(produced) or "none"
+                exit_code = _exit_code(str(exc))
+                summary = (
+                    f"Failed step: {step_name}; command: {command}; "
+                    f"exit code: {exit_code}; artifacts produced: {artifacts}"
+                )
+                raise typer.BadParameter(f"{exc}. {summary}") from exc
+
+
+def _exit_code(message: str) -> str:
+    match = re.search(r"exit code\s+(-?\d+)", message, flags=re.IGNORECASE)
+    return match.group(1) if match else "unknown"
+
+
+def _step_command(step: Any) -> str:
+    options = getattr(step, "options", None)
+    if isinstance(options, dict):
+        for key in ("command", "script"):
+            value = options.get(key)
+            if isinstance(value, str):
+                return value
+    for key in ("command", "script"):
+        value = getattr(step, key, None)
+        if isinstance(value, str):
+            return value
+    return "unknown"

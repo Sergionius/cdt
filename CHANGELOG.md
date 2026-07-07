@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v0.3.3 - 2026-07-07
+
+- Automated release pipeline via GitHub Actions.
+- Added PR build, twine, and wheel smoke checks.
+- Added `cdt self-update --check`, `--json`, explicit `--manager`, rate-limit errors, and `uv` support.
+- Added `cdt doctor` and a getting-started guide.
+- Improved pipeline YAML, unknown-step, and failed-step error messages.
+
 ## v0.3.2 - 2026-07-07
 
 - Fixed README install examples to point to the latest release tag.

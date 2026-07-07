@@ -1,12 +1,15 @@
 import json
+import os
 import re
 import shlex
+import shutil
 import site
 import subprocess
 import sys
 import textwrap
 import urllib.error
 import urllib.request
+from datetime import UTC, datetime
 from urllib.parse import unquote, urlparse
 
 import typer
@@ -21,6 +24,41 @@ _GITHUB_REPO_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 class SelfUpdateError(Exception):
     """Raised when self-update cannot proceed."""
+
+
+class RateLimitError(SelfUpdateError):
+    """Raised when GitHub API rate limit prevents checking releases."""
+
+    def __init__(self, remaining: str, reset: str | None):
+        self.remaining = remaining
+        self.reset = reset
+        super().__init__(_rate_limit_message(remaining, reset))
+
+
+def _header(response: object, name: str) -> str | None:
+    headers = getattr(response, "headers", None)
+    if headers is not None:
+        value = headers.get(name)
+        if value is not None:
+            return str(value)
+    info = getattr(response, "info", None)
+    if callable(info):
+        value = info().get(name)
+        if value is not None:
+            return str(value)
+    return None
+
+
+def _rate_limit_message(remaining: str, reset: str | None) -> str:
+    message = f"GitHub API rate limit exceeded (remaining calls: {remaining})."
+    if reset:
+        try:
+            utc_dt = datetime.fromtimestamp(int(reset), UTC)
+            local_dt = utc_dt.astimezone()
+            message += f" Resets at {utc_dt:%Y-%m-%d %H:%M:%S %Z} ({local_dt:%Y-%m-%d %H:%M:%S %Z} local)."
+        except (TypeError, ValueError, OSError):
+            message += f" Reset timestamp: {reset}."
+    return message + " Retry later or set GITHUB_TOKEN to increase the limit."
 
 
 def _is_pipx_path(path: str) -> bool:
@@ -93,14 +131,20 @@ def _is_up_to_date(current: str, latest: str) -> bool:
 
 def _latest_release_tag(owner: str, repo: str) -> str:
     url = _GITHUB_API_LATEST.format(owner=owner, repo=repo)
-    request = urllib.request.Request(
-        url,
-        headers={"User-Agent": f"cdt/{__version__}"},
-    )
+    headers = {"User-Agent": f"cdt/{__version__}"}
+    if token := os.environ.get("GITHUB_TOKEN"):
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(request, timeout=15) as response:
+            remaining = _header(response, "X-RateLimit-Remaining")
+            if remaining == "0":
+                raise RateLimitError(remaining, _header(response, "X-RateLimit-Reset"))
             data = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
+        remaining = _header(exc, "X-RateLimit-Remaining")
+        if exc.code == 403 and remaining == "0":
+            raise RateLimitError(remaining, _header(exc, "X-RateLimit-Reset")) from exc
         raise SelfUpdateError(f"GitHub API error: {exc.code} {exc.reason}") from exc
     except urllib.error.URLError as exc:
         raise SelfUpdateError(f"Network error while contacting GitHub: {exc.reason}") from exc
@@ -204,6 +248,10 @@ def _update_command(tag: str, method: str, *, is_user: bool = False, owner: str,
             cmd.append("--user")
         cmd.append(package_url)
         return cmd
+    if method == "uv":
+        if shutil.which("uv") is None:
+            raise SelfUpdateError("uv is not available in PATH. Install uv or use --manager pipx/pip.")
+        return ["uv", "tool", "install", "--force", package_url]
     raise SelfUpdateError(f"Unsupported install method: {method}")
 
 
@@ -216,60 +264,131 @@ def _manual_update_command(tag: str, *, owner: str, repo: str) -> str:
         f"pipx install --force {quoted_url}\n"
         f"{quoted_python} -m pip install --force-reinstall {quoted_url}\n"
         f"{quoted_python} -m pip install --force-reinstall --user {quoted_url}  "
-        "# if installed with --user"
+        "# if installed with --user\n"
+        f"uv tool install --force {quoted_url}"
     )
 
 
-def run_self_update(*, repo_url: str, dry_run: bool = False) -> int:
-    owner, repo = _owner_repo_from_url(repo_url)
-    latest_tag = _latest_release_tag(owner, repo)
+def run_self_update(
+    *,
+    repo_url: str,
+    dry_run: bool = False,
+    check: bool = False,
+    json_output: bool = False,
+    manager: str | None = None,
+) -> int:
+    payload: dict[str, object] = {"current": __version__, "latest": None, "update_available": False, "status": "error"}
+    try:
+        owner, repo = _owner_repo_from_url(repo_url)
+        latest_tag = _latest_release_tag(owner, repo)
+        update_available = not _is_up_to_date(__version__, latest_tag)
+        payload.update({"latest": latest_tag, "update_available": update_available})
+    except SelfUpdateError as exc:
+        payload.update({"message": str(exc), "error": str(exc)})
+        if json_output:
+            typer.echo(json.dumps(payload, sort_keys=True))
+            return 1
+        raise
 
-    typer.echo(f"Current version: {__version__}")
-    typer.echo(f"Latest release: {latest_tag}")
+    if json_output:
+        if check or not update_available:
+            payload["status"] = "update_available" if update_available else "up_to_date"
+            payload["message"] = "Update available." if update_available else "Already up to date."
+            typer.echo(json.dumps(payload, sort_keys=True))
+            return 0
+    else:
+        typer.echo(f"Current version: {__version__}")
+        typer.echo(f"Latest release: {latest_tag}")
 
-    if _is_up_to_date(__version__, latest_tag):
-        typer.echo("Already up to date.")
+    if not update_available:
+        if not json_output:
+            typer.echo("Already up to date.")
         return 0
 
-    method_info = _detect_install_method()
+    if check:
+        if not json_output:
+            typer.echo("Update available.")
+        return 0
+
+    if manager is not None:
+        method_info = (manager, False)
+    else:
+        method_info = _detect_install_method()
     if method_info is None:
         manual_command = _manual_update_command(latest_tag, owner=owner, repo=repo)
         indented = textwrap.indent(manual_command, "  ")
+        message = "Unable to detect installation method. Please specify --manager pipx, --manager pip, or --manager uv."
         if dry_run:
-            typer.echo(
-                "Unable to detect installation method. "
-                f"Manual update command:\n{indented}"
-            )
+            if json_output:
+                payload.update({"status": "manual", "message": message})
+                typer.echo(json.dumps(payload, sort_keys=True))
+            else:
+                typer.echo(f"{message} Manual update command:\n{indented}")
             return 0
-        typer.echo(
-            "Unable to detect installation method. "
-            "Please reinstall manually with:\n"
-            f"{indented}",
-            err=True,
-        )
+        if json_output:
+            payload.update({"status": "error", "message": message, "error": message})
+            typer.echo(json.dumps(payload, sort_keys=True))
+        else:
+            typer.echo(f"{message}\nManual commands:\n{indented}", err=True)
         return 1
 
     method, is_user = method_info
-    command = _update_command(latest_tag, method, is_user=is_user, owner=owner, repo=repo)
-    typer.echo(f"Update command: {shlex.join(command)}")
+    try:
+        command = _update_command(latest_tag, method, is_user=is_user, owner=owner, repo=repo)
+    except SelfUpdateError as exc:
+        payload.update({"message": str(exc), "error": str(exc)})
+        if json_output:
+            typer.echo(json.dumps(payload, sort_keys=True))
+            return 1
+        raise
+    if not json_output:
+        typer.echo(f"Update command: {shlex.join(command)}")
 
     if dry_run:
-        typer.echo("Dry run: not executing update command.")
+        if json_output:
+            payload.update({"status": "dry_run", "message": "Dry run: not executing update command."})
+            typer.echo(json.dumps(payload, sort_keys=True))
+        else:
+            typer.echo("Dry run: not executing update command.")
         return 0
 
-    typer.echo("Running update...")
+    if not json_output:
+        typer.echo("Running update...")
     try:
         result = subprocess.run(command, check=False, timeout=300)
     except FileNotFoundError as exc:
-        typer.echo(f"Update failed: command not found: {exc.filename}", err=True)
+        message = f"Update failed: command not found: {exc.filename}"
+        if json_output:
+            payload.update({"status": "error", "message": message, "error": message})
+            typer.echo(json.dumps(payload, sort_keys=True))
+        else:
+            typer.echo(message, err=True)
         return 1
     except OSError as exc:
-        typer.echo(f"Update failed: {exc}", err=True)
+        message = f"Update failed: {exc}"
+        if json_output:
+            payload.update({"status": "error", "message": message, "error": message})
+            typer.echo(json.dumps(payload, sort_keys=True))
+        else:
+            typer.echo(message, err=True)
         return 1
     except subprocess.TimeoutExpired:
-        typer.echo("Update timed out.", err=True)
+        message = "Update timed out."
+        if json_output:
+            payload.update({"status": "error", "message": message, "error": message})
+            typer.echo(json.dumps(payload, sort_keys=True))
+        else:
+            typer.echo(message, err=True)
         return 1
 
     if result.returncode != 0:
-        typer.echo("Update command failed.", err=True)
+        message = f"Update command failed with exit code {result.returncode}."
+        if json_output:
+            payload.update({"status": "error", "message": message, "error": message})
+            typer.echo(json.dumps(payload, sort_keys=True))
+        else:
+            typer.echo("Update command failed.", err=True)
+    elif json_output:
+        payload.update({"status": "updated", "updated_to": latest_tag, "message": f"Updated to {latest_tag}."})
+        typer.echo(json.dumps(payload, sort_keys=True))
     return result.returncode

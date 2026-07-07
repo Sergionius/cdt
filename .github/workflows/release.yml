@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dev dependencies
+        run: python -m pip install -e '.[dev]'
+
+      - name: Ruff
+        run: ruff check .
+
+      - name: Tests
+        run: pytest
+
+      - name: Build
+        run: python -m build
+
+      - name: Twine check
+        run: twine check dist/*
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+          generate_release_notes: true
+          body: |
+            Release ${{ github.ref_name }}.
+
+            Built and checked by GitHub Actions. See CHANGELOG.md for details.
+
+  github-tag-smoke:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install from GitHub tag and smoke test
+        run: |
+          python -m venv /tmp/cdt-tag-smoke
+          /tmp/cdt-tag-smoke/bin/python -m pip install 'git+https://github.com/Sergionius/cdt.git@${{ github.ref_name }}'
+          /tmp/cdt-tag-smoke/bin/cdt --version

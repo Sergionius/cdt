@@ -66,7 +66,16 @@ def load_pipeline_config(cwd: Path, filename: str = "cdt.yaml") -> PipelineConfi
     if yaml is None:
         raise typer.BadParameter("PyYAML is required to read cdt.yaml. Install package dependency: PyYAML")
 
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as exc:  # type: ignore[attr-defined]
+        mark = getattr(exc, "problem_mark", None)
+        location = f" line {mark.line + 1}, column {mark.column + 1}" if mark is not None else ""
+        example = (
+            "Example: version: 1\\npipelines:\\n  test:\\n    steps:\\n"
+            "      - hook.python_script: {script: scripts/test.py}"
+        )
+        raise typer.BadParameter(f"YAML parse error in {path}{location}: {exc}. {example}") from exc
     if not isinstance(data, dict):
         raise typer.BadParameter("cdt.yaml must contain a mapping")
 

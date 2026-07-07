@@ -5,6 +5,7 @@ import typer
 
 from . import __version__
 from .config import _load_project_env, _set_ui_mode
+from .doctor import run_doctor
 from .pipeline.builtins import register_builtin_steps
 from .pipeline.config import load_pipeline_config, load_plugins
 from .pipeline.planning import plan_payload
@@ -43,14 +44,47 @@ def main(
 @app.command(name="self-update")
 def self_update(
     dry_run: bool = typer.Option(False, "--dry-run", help="Show latest release and update command without executing"),
+    check: bool = typer.Option(False, "--check", help="Check for updates without changing anything"),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+    manager: str | None = typer.Option(None, "--manager", help="Install manager to use: pipx, pip, or uv"),
 ):
     """Update CDT to the latest release from GitHub."""
+    if manager is not None and manager not in {"pipx", "pip", "uv"}:
+        typer.echo("Error: --manager must be one of: pipx, pip, uv", err=True)
+        raise typer.Exit(code=1)
     try:
-        exit_code = run_self_update(repo_url=_DEFAULT_REPO_URL, dry_run=dry_run)
+        exit_code = run_self_update(
+            repo_url=_DEFAULT_REPO_URL,
+            dry_run=dry_run,
+            check=check,
+            json_output=json_output,
+            manager=manager,
+        )
     except SelfUpdateError as exc:
-        typer.echo(f"Error: {exc}", err=True)
+        if json_output:
+            typer.echo(
+                json.dumps(
+                    {
+                        "current": __version__,
+                        "latest": None,
+                        "update_available": False,
+                        "status": "error",
+                        "message": str(exc),
+                        "error": str(exc),
+                    },
+                    sort_keys=True,
+                )
+            )
+        else:
+            typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     raise typer.Exit(code=exit_code)
+
+
+@app.command(name="doctor")
+def doctor(json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON")):
+    """Check CDT environment health."""
+    raise typer.Exit(code=run_doctor(Path.cwd(), json_output=json_output))
 
 
 @app.command(name="run")

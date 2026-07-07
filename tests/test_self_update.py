@@ -310,6 +310,12 @@ def test_update_command_for_pip():
 
 def test_update_command_unsupported_method_raises():
     with pytest.raises(SelfUpdateError, match="Unsupported"):
+        _update_command("v0.4.0", "unknown", owner="Sergionius", repo="cdt")
+
+
+def test_update_command_for_uv_requires_uv(monkeypatch):
+    monkeypatch.setattr(self_update.shutil, "which", lambda name: None)
+    with pytest.raises(SelfUpdateError, match="uv is not available"):
         _update_command("v0.4.0", "uv", owner="Sergionius", repo="cdt")
 
 

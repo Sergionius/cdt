@@ -11,7 +11,7 @@ CDT is a CLI tool, so `pipx` is the recommended installation method.
 Install a specific GitHub release:
 
 ```bash
-pipx install "git+https://github.com/Sergionius/cdt.git@v0.3.2"
+pipx install "git+https://github.com/Sergionius/cdt.git@v0.3.3"
 ```
 
 Or install the latest `main`:
@@ -23,7 +23,8 @@ pipx install "git+https://github.com/Sergionius/cdt.git"
 Upgrade or reinstall:
 
 ```bash
-cdt self-update
+cdt self-update --check
+cdt self-update --manager pipx
 cdt self-update --dry-run  # preview the release tag and command without running it
 ```
 
@@ -31,7 +32,7 @@ Or manually:
 
 ```bash
 pipx uninstall cdt
-pipx install "git+https://github.com/Sergionius/cdt.git@v0.3.2"
+pipx install "git+https://github.com/Sergionius/cdt.git@v0.3.3"
 ```
 
 For local development:
@@ -44,7 +45,7 @@ python -m pip install -e '.[dev]'
 scripts/reinstall.sh
 ```
 
-`pip install git+https://github.com/Sergionius/cdt.git@v0.3.2` also works, but `pipx` keeps the CLI isolated from project Python environments.
+`pip install git+https://github.com/Sergionius/cdt.git@v0.3.3` also works, but `pipx` keeps the CLI isolated from project Python environments.
 
 Note: the `cdt` name on PyPI belongs to another project, so install this CDT from GitHub.
 
@@ -59,13 +60,17 @@ cdt pipeline inspect <pipeline> --json
 cdt pipeline plan <pipeline> --json
 cdt pipeline validate [pipeline]
 cdt pipeline steps
-cdt self-update
-cdt self-update --dry-run
+cdt doctor
+cdt self-update --check
+cdt self-update --manager pipx
+cdt self-update --json --check
 ```
 
-Version 0.3.0 adds static planning metadata: `cdt pipeline plan <pipeline>` and `cdt run <pipeline> --dry-run` show the step tree, risk, warnings, and artifact flow without executing steps.
+Static planning commands (`cdt pipeline plan <pipeline>` and `cdt run <pipeline> --dry-run`) show the step tree, risk, warnings, and artifact flow without executing steps.
 
-`cdt self-update` updates the installed CLI to the latest GitHub release. It works for GitHub-based `pipx` or `pip` installations; editable/local installs should be updated manually. Use `cdt self-update --dry-run` to see the available release tag and the update command without running it. The command requires outbound HTTPS access to `api.github.com`.
+`cdt self-update` updates the installed CLI to the latest GitHub release. It supports `--manager pipx`, `--manager pip`, and `--manager uv`; editable/local installs should be updated manually. Use `cdt self-update --check` to check without changing files, `--json` for machine-readable output, and `--dry-run` to see the release tag and update command without running it. The command requires outbound HTTPS access to `api.github.com`.
+
+For a quick first run, see [Getting started in 5 minutes](docs/getting-started.md).
 
 ## Minimal `cdt.yaml`
 
@@ -97,6 +102,10 @@ See `examples/cdt.yaml` and `docs/pipelines.md` for a fuller prod pipeline, plug
 ## Release notes
 
 See [`CHANGELOG.md`](CHANGELOG.md) for release notes.
+
+## Releasing
+
+Releases are GitHub-only. After updating versions and the changelog, push a `v*` tag (for example `v0.3.3`). GitHub Actions runs lint, tests, build, `twine check`, publishes a GitHub Release, and attaches the wheel and source archive from `dist/`. Use `python scripts/release.py <version>` to prepare and push the release commit and annotated tag.
 
 ## AI agent skill
 

@@ -38,6 +38,7 @@ def test_root_help_lists_commands():
     for command in (
         "run",
         "pipeline",
+        "doctor",
         "self-update",
     ):
         assert command in result.output
@@ -84,6 +85,9 @@ def test_self_update_help_available():
 
     assert result.exit_code == 0
     assert "--dry-run" in normalized_output
+    assert "--check" in normalized_output
+    assert "--json" in normalized_output
+    assert "--manager" in normalized_output
 
 
 def test_self_update_dry_run_shows_version_and_command(monkeypatch):
@@ -99,6 +103,30 @@ def test_self_update_dry_run_shows_version_and_command(monkeypatch):
     assert "Dry run" in result.output
 
 
+def test_self_update_check_reports_available(monkeypatch):
+    monkeypatch.setattr(self_update_module, "_latest_release_tag", lambda owner, repo: "v9.9.9")
+
+    result = runner.invoke(app, ["self-update", "--check"])
+
+    assert result.exit_code == 0
+    assert f"Current version: {__version__}" in result.output
+    assert "Latest release: v9.9.9" in result.output
+    assert "Update available" in result.output
+
+
+def test_self_update_check_json_reports_available(monkeypatch):
+    monkeypatch.setattr(self_update_module, "_latest_release_tag", lambda owner, repo: "v9.9.9")
+
+    result = runner.invoke(app, ["self-update", "--check", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["current"] == __version__
+    assert payload["latest"] == "v9.9.9"
+    assert payload["update_available"] is True
+    assert payload["status"] == "update_available"
+
+
 def test_self_update_network_error_reports_failure(monkeypatch):
     import urllib.error
 
@@ -111,6 +139,25 @@ def test_self_update_network_error_reports_failure(monkeypatch):
 
     assert result.exit_code != 0
     assert "Network error" in result.output or "Network error" in result.stderr
+
+
+def test_self_update_rate_limit_reports_failure(monkeypatch):
+    import urllib.error
+
+    error = urllib.error.HTTPError(
+        "https://api.github.com/repos/Sergionius/cdt/releases/latest",
+        403,
+        "Forbidden",
+        {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1893456000"},
+        None,
+    )
+    monkeypatch.setattr("urllib.request.urlopen", lambda *args, **kwargs: (_ for _ in ()).throw(error))
+
+    result = runner.invoke(app, ["self-update"])
+
+    assert result.exit_code != 0
+    assert "rate limit" in result.output.lower() or "rate limit" in result.stderr.lower()
+    assert "GITHUB_TOKEN" in result.output or "GITHUB_TOKEN" in result.stderr
 
 
 def test_self_update_missing_tag_reports_failure(monkeypatch):
