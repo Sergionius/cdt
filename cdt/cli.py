@@ -4,6 +4,7 @@ from pathlib import Path
 import typer
 
 from . import __version__
+from .agent_release import format_yamlish, parse_duration, release_status, start_release, stop_release, wait_for_release
 from .config import _load_project_env, _set_ui_mode
 from .doctor import run_doctor
 from .pipeline.builtins import register_builtin_steps
@@ -16,6 +17,7 @@ from .self_update import SelfUpdateError, run_self_update
 
 app = typer.Typer(no_args_is_help=True)
 pipeline_app = typer.Typer(no_args_is_help=True)
+agent_release_app = typer.Typer(no_args_is_help=True)
 
 _DEFAULT_REPO_URL = "https://github.com/Sergionius/cdt"
 
@@ -92,6 +94,7 @@ def run_pipeline(
     name: str = typer.Argument(..., help="Pipeline name from cdt.yaml"),
     id: list[str] = typer.Option([], "--id", help="Repeatable: --id A --id B"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show pipeline plan without executing steps"),
+    status_file: Path | None = typer.Option(None, "--status-file", help="Write machine-readable run status JSON"),
 ):
     """Run a pipeline from cdt.yaml."""
     cwd = Path.cwd()
@@ -100,7 +103,7 @@ def run_pipeline(
         return
     env = _load_project_env(cwd)
     _set_ui_mode(env)
-    run_configured_pipeline(cwd, env, name, ids=id)
+    run_configured_pipeline(cwd, env, name, ids=id, status_file=status_file)
 
 
 @pipeline_app.command(name="list")
@@ -220,7 +223,42 @@ def pipeline_steps(json_output: bool = typer.Option(False, "--json", help="Emit 
         typer.echo(step_name)
 
 
+@agent_release_app.command(name="start")
+def agent_release_start(
+    pipeline: str = typer.Argument(..., help="Pipeline name from cdt.yaml"),
+    id: list[str] = typer.Option([], "--id", help="Repeatable: --id A --id B"),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+):
+    """Start a pipeline in the background with agent-friendly log/status files."""
+    payload = start_release(pipeline, ids=id)
+    _echo_json(payload) if json_output else typer.echo(format_yamlish(payload))
+
+
+@agent_release_app.command(name="status")
+def agent_release_status(
+    pipeline: str = typer.Argument(..., help="Pipeline name from cdt.yaml"),
+    wait: bool = typer.Option(False, "--wait", help="Wait until the release finishes"),
+    timeout: str = typer.Option("40m", "--timeout", help="Wait timeout, e.g. 30s, 40m, 1h"),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+):
+    """Print a compact release status without reading the build log."""
+    payload = wait_for_release(pipeline, parse_duration(timeout)) if wait else release_status(pipeline)
+    _echo_json(payload) if json_output else typer.echo(format_yamlish(payload))
+
+
+@agent_release_app.command(name="stop")
+def agent_release_stop(
+    pipeline: str = typer.Argument(..., help="Pipeline name from cdt.yaml"),
+    timeout: str = typer.Option("30s", "--timeout", help="Graceful stop timeout, e.g. 30s, 2m"),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+):
+    """Stop a background agent release."""
+    payload = stop_release(pipeline, timeout_seconds=parse_duration(timeout))
+    _echo_json(payload) if json_output else typer.echo(format_yamlish(payload))
+
+
 app.add_typer(pipeline_app, name="pipeline")
+app.add_typer(agent_release_app, name="agent-release")
 
 
 def _pipeline_plan(cwd: Path, name: str, *, json_output: bool) -> None:

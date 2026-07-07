@@ -25,7 +25,10 @@ Ambiguous replies such as `ok`, `да`, `go`, or `continue` are not enough for p
 ## Logging and observability
 
 - Always write long command output to `.cdt/agent-release-<pipeline>.log`.
+- Prefer `cdt agent-release start <pipeline>` and `cdt agent-release status <pipeline> --wait` for long releases.
 - Do not paste full logs into chat.
+- Do not read `tail`/`grep` from the release log during healthy long-running releases; use compact agent-release status output instead.
+- Do not post repetitive progress narration such as "still waiting" while a release is healthy.
 - On failure, show only the relevant error or the last 40-80 log lines.
 - Summaries must include: `status`, `pipeline`, `artifacts`, `log`, `working_tree`, and `next_actions`.
 - A JSON report at `.cdt/agent-release-<pipeline>.json` is optional and should be created only when useful for automation.

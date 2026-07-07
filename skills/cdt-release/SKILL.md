@@ -53,25 +53,34 @@ Do not accept ambiguous confirmations such as "ok", "да", "go", or "continue" 
 
 If CDT later provides a dry-run or confirmation flag for the requested operation, prefer using it before the real run. Do not invent unsupported flags.
 
-## Running Low-Noise
+## Token-Efficient Long-Running Protocol
 
-Use a log file instead of streaming output:
+After the preflight checklist, run long releases through the agent helper instead of streaming `cdt run` directly:
+
+```bash
+cdt agent-release start <pipeline> --id <ID>
+cdt agent-release status <pipeline> --wait --timeout 40m
+```
+
+In chat, say only the start line and the final summary:
+
+```text
+Выполняю: cdt agent-release start <pipeline> (лог: .cdt/agent-release-<pipeline>.log)
+```
+
+Hard rules for normal long-running releases:
+
+- Do not use `tail`, `grep`, or full log reads while the process is healthy.
+- Do not narrate polling/progress messages such as "всё ещё ждём".
+- Use `cdt agent-release status <pipeline>` for compact checks and `--wait` whenever possible so polling happens outside the chat loop.
+- Build the final response from `.cdt/agent-release-<pipeline>.status.json`, meta/status output, and `git status --short`; read the log only on failure or explicit debug.
+- If `status` reports `timeout`, `stale`, or a missing/stale PID, stop and ask before killing unless the user already authorized stopping.
+
+Fallback only when the installed CDT does not support `agent-release`:
 
 ```bash
 mkdir -p .cdt
-cdt run <pipeline> > .cdt/agent-release-<pipeline>.log 2>&1
-```
-
-In chat, say only:
-
-```text
-Выполняю: cdt run <pipeline> (лог: .cdt/agent-release-<pipeline>.log)
-```
-
-For long-running App Store Connect/TestFlight polling, do not post every poll. Wait for completion. If you must reassure the user after a long time, post at most one short update every 10 minutes:
-
-```text
-Все еще выполняется: жду обработку TestFlight/ASC.
+cdt run <pipeline> --status-file .cdt/agent-release-<pipeline>.status.json > .cdt/agent-release-<pipeline>.log 2>&1
 ```
 
 ## Observability

@@ -16,6 +16,7 @@ def run_configured_pipeline(
     name: str,
     ids: list[str] | None = None,
     runner: CommandRunner | None = None,
+    status_file: Path | None = None,
 ) -> None:
     config = load_pipeline_config(cwd)
     register_builtin_steps()
@@ -28,5 +29,12 @@ def run_configured_pipeline(
     errors = validate_pipeline(config, name)
     if errors:
         raise typer.BadParameter("Invalid pipeline config: " + "; ".join(error["message"] for error in errors))
-    ctx = PipelineContext(cwd=cwd, env=env, runner=runner or CommandRunner(), ids=ids or [], pipeline_name=name)
+    ctx = PipelineContext(
+        cwd=cwd,
+        env=env,
+        runner=runner or CommandRunner(),
+        ids=ids or [],
+        pipeline_name=name,
+        status_file=status_file,
+    )
     PipelineExecutor().run(configured_steps(pipeline), ctx)

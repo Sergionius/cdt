@@ -38,6 +38,7 @@ def test_root_help_lists_commands():
     for command in (
         "run",
         "pipeline",
+        "agent-release",
         "doctor",
         "self-update",
     ):
@@ -66,12 +67,16 @@ def test_python_module_version_flag():
 
 def test_command_help_lists_key_options():
     cases = {
-        "run": ("--id", "--dry-run"),
+        "run": ("--id", "--dry-run", "--status-file"),
         "pipeline": (),
+        "agent-release": (),
+        "agent-release start": ("--id", "--json"),
+        "agent-release status": ("--wait", "--timeout", "--json"),
+        "agent-release stop": ("--timeout", "--json"),
     }
 
     for command, options in cases.items():
-        result = runner.invoke(app, [command, "--help"])
+        result = runner.invoke(app, [*command.split(), "--help"])
         output = _visible_text(result.output)
 
         assert result.exit_code == 0

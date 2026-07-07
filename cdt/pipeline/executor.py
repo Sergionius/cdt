@@ -36,21 +36,34 @@ class ParallelStepGroup:
 
 class PipelineExecutor:
     def run(self, steps: Sequence[Step], ctx: PipelineContext) -> None:
-        for step in steps:
-            before_artifacts = set(ctx.artifacts)
-            try:
-                step.run(ctx)
-            except typer.BadParameter as exc:
-                produced = sorted(set(ctx.artifacts) - before_artifacts)
+        ctx.mark_status_started()
+        try:
+            for step in steps:
+                before_artifacts = set(ctx.artifacts)
                 step_name = getattr(step, "name", step.__class__.__name__)
-                command = _step_command(step)
-                artifacts = ", ".join(produced) or "none"
-                exit_code = _exit_code(str(exc))
-                summary = (
-                    f"Failed step: {step_name}; command: {command}; "
-                    f"exit code: {exit_code}; artifacts produced: {artifacts}"
-                )
-                raise typer.BadParameter(f"{exc}. {summary}") from exc
+                ctx.mark_step_started(step_name)
+                try:
+                    step.run(ctx)
+                    ctx.mark_step_completed(step_name)
+                except typer.BadParameter as exc:
+                    produced = sorted(set(ctx.artifacts) - before_artifacts)
+                    command = _step_command(step)
+                    artifacts = ", ".join(produced) or "none"
+                    exit_code = _exit_code(str(exc))
+                    summary = (
+                        f"Failed step: {step_name}; command: {command}; "
+                        f"exit code: {exit_code}; artifacts produced: {artifacts}"
+                    )
+                    error = f"{exc}. {summary}"
+                    ctx.mark_status_failed(step_name, error)
+                    raise typer.BadParameter(error) from exc
+                except Exception as exc:
+                    ctx.mark_status_failed(step_name, str(exc))
+                    raise
+        except Exception:
+            raise
+        else:
+            ctx.mark_status_success()
 
 
 def _exit_code(message: str) -> str:
