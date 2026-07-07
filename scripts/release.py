@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import shutil
 import subprocess
 from datetime import date
 from pathlib import Path
@@ -34,7 +35,7 @@ def main() -> int:
     if args.dry_run:
         print(f"Would bump version to {args.version}")
         print(f"Would prepend CHANGELOG section {tag}")
-        print("Would run: ruff check ., pytest, python -m build")
+        print("Would run: ruff check ., pytest -q, clean dist, python -m build")
         print(f"Would commit and create annotated tag {tag}")
         if args.push:
             print(f"Would run: git pull --rebase origin {branch} after committing and before tagging")
@@ -58,7 +59,8 @@ def main() -> int:
         changelog.write_text(text, encoding="utf-8")
 
     run(["ruff", "check", "."])
-    run(["pytest"])
+    run(["pytest", "-q"])
+    clean_dist()
     run(["python", "-m", "build"])
 
     run(["git", "diff", "--", "pyproject.toml", "cdt/__init__.py", "CHANGELOG.md"])
@@ -78,6 +80,10 @@ def main() -> int:
 
 def run(command: list[str]) -> None:
     subprocess.run(command, cwd=ROOT, check=True)
+
+
+def clean_dist() -> None:
+    shutil.rmtree(ROOT / "dist", ignore_errors=True)
 
 
 def current_branch() -> str:
