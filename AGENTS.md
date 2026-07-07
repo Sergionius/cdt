@@ -46,6 +46,25 @@ git diff --name-only origin/main...HEAD
 Good examples: `feature/agent-release`, `feature/run-status-file`, `fix/release-worker-exit`.
 Bad examples: `feature/agent-release-token-efficient-cicd`, `feature/2026-07-07-token-efficient-cdt-releases-cicd-robustness`.
 
+## PR merge cleanup
+
+Delete feature/fix/docs/chore branches after merging PRs unless the user explicitly asks to keep them.
+
+Preferred GitHub CLI merge command:
+
+```bash
+gh pr merge <PR> --merge --delete-branch
+```
+
+After merging, prune local refs and remove the local topic branch if it remains:
+
+```bash
+git fetch --prune
+git branch -d <branch>
+```
+
+The GitHub repository setting `delete_branch_on_merge` should stay enabled so web UI merges also delete merged head branches.
+
 ## Agent skills
 
 When asked to send, publish, upload, or run a release through CDT, load:
