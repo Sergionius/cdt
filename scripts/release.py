@@ -65,7 +65,10 @@ def main() -> int:
 
     run(["git", "diff", "--", "pyproject.toml", "cdt/__init__.py", "CHANGELOG.md"])
     run(["git", "add", "pyproject.toml", "cdt/__init__.py", "CHANGELOG.md"])
-    run(["git", "commit", "-m", f"Release {tag}"])
+    if has_staged_changes():
+        run(["git", "commit", "-m", f"Release {tag}"])
+    else:
+        print("No version or changelog changes to commit; using current HEAD.")
     if args.push:
         run(["git", "pull", "--rebase", "origin", branch])
     run(["git", "tag", "-a", tag, "-m", f"Release {tag}"])
@@ -84,6 +87,11 @@ def run(command: list[str]) -> None:
 
 def clean_dist() -> None:
     shutil.rmtree(ROOT / "dist", ignore_errors=True)
+
+
+def has_staged_changes() -> bool:
+    result = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=ROOT, check=False)
+    return result.returncode == 1
 
 
 def current_branch() -> str:
