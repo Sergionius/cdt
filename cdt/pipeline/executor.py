@@ -21,7 +21,7 @@ class ParallelStepGroup:
     def run(self, ctx: PipelineContext) -> None:
         failures: list[tuple[str, Exception]] = []
         with ThreadPoolExecutor(max_workers=len(self.steps)) as pool:
-            futures = {pool.submit(step.run, ctx): step for step in self.steps}
+            futures = {pool.submit(_run_parallel_child, step, ctx): step for step in self.steps}
             for future in as_completed(futures):
                 step = futures[future]
                 try:
@@ -35,12 +35,18 @@ class ParallelStepGroup:
 
 
 class PipelineExecutor:
-    def run(self, steps: Sequence[Step], ctx: PipelineContext) -> None:
+    def run(self, steps: Sequence[Step], ctx: PipelineContext, *, resume_from: str | None = None) -> None:
         ctx.mark_status_started()
+        skipping_until = resume_from
         try:
             for step in steps:
                 before_artifacts = set(ctx.artifacts)
                 step_name = getattr(step, "name", step.__class__.__name__)
+                if skipping_until is not None and step_name != skipping_until:
+                    continue
+                skipping_until = None
+                if ctx.should_skip_step(step_name):
+                    continue
                 ctx.mark_step_started(step_name)
                 try:
                     step.run(ctx)
@@ -63,7 +69,23 @@ class PipelineExecutor:
         except Exception:
             raise
         else:
+            if skipping_until is not None:
+                raise typer.BadParameter(f"Unknown resume step: {resume_from}")
             ctx.mark_status_success()
+
+
+def _run_parallel_child(step: Step, ctx: PipelineContext) -> None:
+    step_name = getattr(step, "name", step.__class__.__name__)
+    if ctx.should_skip_step(step_name):
+        return
+    ctx.mark_parallel_step_started(step_name)
+    try:
+        step.run(ctx)
+    except Exception as exc:
+        ctx.mark_parallel_step_failed(step_name, str(exc))
+        raise
+    else:
+        ctx.mark_parallel_step_completed(step_name)
 
 
 def _exit_code(message: str) -> str:

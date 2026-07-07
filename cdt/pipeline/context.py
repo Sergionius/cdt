@@ -27,6 +27,10 @@ class PipelineContext:
     completed_steps: list[str] = field(default_factory=list)
     failed_step: str | None = None
     error: str | None = None
+    running_steps: list[str] = field(default_factory=list)
+    parallel_completed: list[str] = field(default_factory=list)
+    parallel_failed: list[str] = field(default_factory=list)
+    skip_completed: bool = False
     started_at: str | None = None
     finished_at: str | None = None
     _artifact_lock: Lock = field(default_factory=Lock, repr=False)
@@ -76,7 +80,33 @@ class PipelineContext:
 
     def mark_step_completed(self, step_name: str) -> None:
         self.current_step = None
-        self.completed_steps.append(step_name)
+        if step_name not in self.completed_steps:
+            self.completed_steps.append(step_name)
+        self.write_status("running")
+
+    def should_skip_step(self, step_name: str) -> bool:
+        return self.skip_completed and step_name in self.completed_steps
+
+    def mark_parallel_step_started(self, step_name: str) -> None:
+        if step_name not in self.running_steps:
+            self.running_steps.append(step_name)
+        self.write_status("running")
+
+    def mark_parallel_step_completed(self, step_name: str) -> None:
+        if step_name in self.running_steps:
+            self.running_steps.remove(step_name)
+        if step_name not in self.parallel_completed:
+            self.parallel_completed.append(step_name)
+        if step_name not in self.completed_steps:
+            self.completed_steps.append(step_name)
+        self.write_status("running")
+
+    def mark_parallel_step_failed(self, step_name: str, error: str) -> None:
+        if step_name in self.running_steps:
+            self.running_steps.remove(step_name)
+        failure = f"{step_name}: {error}"
+        if failure not in self.parallel_failed:
+            self.parallel_failed.append(failure)
         self.write_status("running")
 
     def mark_status_failed(self, step_name: str, error: str) -> None:
@@ -102,6 +132,9 @@ class PipelineContext:
                 "completed_steps": list(self.completed_steps),
                 "failed_step": self.failed_step,
                 "error": self.error,
+                "running_steps": list(self.running_steps),
+                "parallel_completed": list(self.parallel_completed),
+                "parallel_failed": list(self.parallel_failed),
                 "artifacts": [artifact.to_json(name) for name, artifact in sorted(self.artifacts.items())],
                 "old_version": self.old_version,
                 "new_version": self.new_version,

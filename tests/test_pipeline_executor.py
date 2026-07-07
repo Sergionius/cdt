@@ -1,3 +1,4 @@
+import json
 import threading
 import time
 
@@ -152,3 +153,18 @@ def test_parallel_group_values_are_visible_to_later_steps(tmp_path):
         ],
         ctx,
     )
+
+
+def test_parallel_group_writes_child_runtime_status(tmp_path):
+    status_file = tmp_path / "status.json"
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner(), status_file=status_file)
+
+    PipelineExecutor().run(
+        [ParallelStepGroup([ValueStep("ios", "ios", "done"), ValueStep("android", "android", "done")])],
+        ctx,
+    )
+
+    payload = json.loads(status_file.read_text(encoding="utf-8"))
+    assert payload["running_steps"] == []
+    assert sorted(payload["parallel_completed"]) == ["android", "ios"]
+    assert payload["parallel_failed"] == []

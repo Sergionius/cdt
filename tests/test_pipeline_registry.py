@@ -90,6 +90,7 @@ def test_step_metadata_to_dict_is_structured():
         requires=(ResultRequirement(("ios_ipa",), name_options=("artifact",)),),
         produces=(ResultProduction("upload_result"),),
         external_tools=("demo",),
+        requires_env=("DEMO_TOKEN",),
     )
 
     assert metadata.to_dict() == {
@@ -104,6 +105,7 @@ def test_step_metadata_to_dict_is_structured():
             {"result_type": "upload_result", "name_options": []},
         ],
         "external_tools": ["demo"],
+        "requires_env": ["DEMO_TOKEN"],
         "plugin": False,
     }
 

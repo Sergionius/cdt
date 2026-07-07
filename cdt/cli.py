@@ -10,6 +10,7 @@ from .doctor import run_doctor
 from .pipeline.builtins import register_builtin_steps
 from .pipeline.config import load_pipeline_config, load_plugins
 from .pipeline.planning import plan_payload
+from .pipeline.preflight import preflight_payload
 from .pipeline.registry import list_steps
 from .pipeline.runner import run_configured_pipeline
 from .pipeline.validation import inspect_payload, step_tree, steps_payload, validate_payload, validate_pipeline
@@ -95,6 +96,17 @@ def run_pipeline(
     id: list[str] = typer.Option([], "--id", help="Repeatable: --id A --id B"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show pipeline plan without executing steps"),
     status_file: Path | None = typer.Option(None, "--status-file", help="Write machine-readable run status JSON"),
+    resume_from: str | None = typer.Option(None, "--resume-from", help="Resume execution from this top-level step"),
+    skip_completed: bool = typer.Option(
+        False,
+        "--skip-completed",
+        help="Skip steps already completed in a status file",
+    ),
+    resume_status_file: Path | None = typer.Option(
+        None,
+        "--resume-status-file",
+        help="Read resume state from this status JSON",
+    ),
 ):
     """Run a pipeline from cdt.yaml."""
     cwd = Path.cwd()
@@ -103,7 +115,16 @@ def run_pipeline(
         return
     env = _load_project_env(cwd)
     _set_ui_mode(env)
-    run_configured_pipeline(cwd, env, name, ids=id, status_file=status_file)
+    run_configured_pipeline(
+        cwd,
+        env,
+        name,
+        ids=id,
+        status_file=status_file,
+        resume_from=resume_from,
+        skip_completed=skip_completed,
+        resume_status_file=resume_status_file,
+    )
 
 
 @pipeline_app.command(name="list")
@@ -170,16 +191,23 @@ def pipeline_plan(
 def pipeline_validate(
     name: str | None = typer.Argument(None, help="Optional pipeline name from cdt.yaml"),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+    strict: bool = typer.Option(False, "--strict", help="Fail when pipeline plan emits warnings"),
 ):
     """Validate cdt.yaml schema and registered step names without running steps."""
     cwd = Path.cwd()
     if json_output:
         config, errors = _load_config_for_json(cwd)
+        warnings: list[dict[str, str]] = []
         if config is not None:
             register_builtin_steps()
             errors.extend(_load_plugins_for_json(config.plugins))
             errors.extend(validate_pipeline(config, name))
+            if strict and not errors:
+                warnings = _strict_warnings(config, name)
+                errors.extend(_strict_errors(warnings))
         payload = validate_payload(config, name, errors=errors) if config is not None else _error_payload(name, errors)
+        if warnings:
+            payload["warnings"] = warnings
         _echo_json(payload)
         if errors:
             raise typer.Exit(code=1)
@@ -189,12 +217,50 @@ def pipeline_validate(
     register_builtin_steps()
     load_plugins(config.plugins)
     errors = validate_pipeline(config, name)
+    warnings: list[dict[str, str]] = []
+    if strict and not errors:
+        warnings = _strict_warnings(config, name)
+        errors.extend(_strict_errors(warnings))
     if errors:
+        for warning in warnings:
+            typer.echo(f"{warning.get('path', '')}: {warning['message']}", err=True)
         for error in errors:
             typer.echo(f"{error.get('path', '')}: {error['message']}", err=True)
         raise typer.Exit(code=1)
     target = name or "all pipelines"
     typer.echo(f"Valid: {target}")
+
+
+@pipeline_app.command(name="preflight")
+def pipeline_preflight(
+    name: str = typer.Argument(..., help="Pipeline name from cdt.yaml"),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+):
+    """Check required external tools and env keys for one pipeline."""
+    cwd = Path.cwd()
+    env = _load_project_env(cwd)
+    config = load_pipeline_config(cwd)
+    register_builtin_steps()
+    load_plugins(config.plugins)
+    payload = preflight_payload(config, name, env)
+    if json_output:
+        _echo_json(payload)
+    else:
+        typer.echo(f"Preflight: {name} ({payload['status']})")
+        if payload["tools"]:
+            typer.echo("Tools:")
+            for check in payload["tools"]:
+                marker = "ok" if check["available"] else "missing"
+                typer.echo(f"  [{marker}] {check['name']}")
+        if payload["env"]:
+            typer.echo("Env:")
+            for check in payload["env"]:
+                marker = "ok" if check["present"] else "missing"
+                typer.echo(f"  [{marker}] {check['name']}")
+        for error in payload["errors"]:
+            typer.echo(f"{error.get('path', '')}: {error['message']}", err=True)
+    if payload["status"] != "ok":
+        raise typer.Exit(code=1)
 
 
 @pipeline_app.command(name="steps")
@@ -298,6 +364,25 @@ def _pipeline_plan(cwd: Path, name: str, *, json_output: bool) -> None:
         for error in errors:
             typer.echo(f"  {error.get('path', '')}: {error['message']}")
         raise typer.Exit(code=1)
+
+
+def _strict_warnings(config, name: str | None) -> list[dict[str, str]]:
+    targets = [name] if name is not None else sorted(config.pipelines)
+    warnings: list[dict[str, str]] = []
+    for target in targets:
+        warnings.extend(plan_payload(config, target, errors=[])["warnings"])
+    return warnings
+
+
+def _strict_errors(warnings: list[dict[str, str]]) -> list[dict[str, str]]:
+    return [
+        {
+            "code": f"strict_{warning['code']}",
+            "message": warning["message"],
+            "path": warning.get("path", ""),
+        }
+        for warning in warnings
+    ]
 
 
 def _echo_json(payload: dict) -> None:

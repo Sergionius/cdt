@@ -48,7 +48,16 @@ def test_agent_release_status_is_compact_and_does_not_read_log(tmp_path, monkeyp
     (cdt_dir / "agent-release-test.exit").write_text("0\n", encoding="utf-8")
     (cdt_dir / "agent-release-test.log").write_text("very noisy log\n", encoding="utf-8")
     (cdt_dir / "agent-release-test.status.json").write_text(
-        json.dumps({"current_step": None, "completed_steps": ["flutter.pub_get"], "artifacts": []}),
+        json.dumps(
+            {
+                "current_step": None,
+                "completed_steps": ["flutter.pub_get"],
+                "running_steps": ["ios.flutter_build_ipa"],
+                "parallel_completed": [],
+                "parallel_failed": [],
+                "artifacts": [],
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -58,6 +67,7 @@ def test_agent_release_status_is_compact_and_does_not_read_log(tmp_path, monkeyp
     parsed = yaml.safe_load(result.output)
     assert parsed["status"] == "success"
     assert parsed["completed_steps"] == ["flutter.pub_get"]
+    assert parsed["running_steps"] == ["ios.flutter_build_ipa"]
     assert "very noisy log" not in result.output
 
 

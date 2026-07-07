@@ -4,6 +4,7 @@ import sys
 from typer.testing import CliRunner
 
 from cdt.cli import app
+from cdt.pipeline import preflight
 from cdt.pipeline.registry import _clear_steps_for_tests
 
 runner = CliRunner()
@@ -483,6 +484,57 @@ def test_run_dry_run_does_not_execute_steps(tmp_path, monkeypatch):
     assert "Pipeline: demo" in result.output
     assert "demo.touch [custom]" in result.output
     assert not (tmp_path / "touched.txt").exists()
+
+
+def test_pipeline_validate_strict_fails_on_plan_warnings(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  demo:",
+                "    steps:",
+                "      - appstore.upload_testflight:",
+                "          artifact: ios_ipa",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["pipeline", "validate", "demo", "--strict", "--json"])
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 1
+    assert payload["warnings"][0]["code"] == "missing_required_artifact"
+    assert payload["errors"][0]["code"] == "strict_missing_required_artifact"
+
+
+def test_pipeline_preflight_checks_selected_pipeline_tools_and_env(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(preflight.shutil, "which", lambda tool: None)
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  demo:",
+                "    steps:",
+                "      - firebase.upload_app_distribution:",
+                "          artifact: android_aab",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["pipeline", "preflight", "demo", "--json"])
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 1
+    assert payload["missing_tools"] == ["firebase"]
+    assert payload["missing_env"] == ["FIREBASE_APP_ID_ANDROID", "FIREBASE_TOKEN"]
 
 
 def _write_any_artifact_plugin(tmp_path):

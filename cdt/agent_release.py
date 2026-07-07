@@ -100,6 +100,9 @@ def release_status(pipeline: str) -> dict[str, Any]:
         status_keys = (
             "current_step",
             "completed_steps",
+            "running_steps",
+            "parallel_completed",
+            "parallel_failed",
             "failed_step",
             "error",
             "artifacts",
