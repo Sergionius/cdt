@@ -9,7 +9,7 @@ import sys
 import textwrap
 import urllib.error
 import urllib.request
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from urllib.parse import unquote, urlparse
 
 import typer
@@ -53,7 +53,7 @@ def _rate_limit_message(remaining: str, reset: str | None) -> str:
     message = f"GitHub API rate limit exceeded (remaining calls: {remaining})."
     if reset:
         try:
-            utc_dt = datetime.fromtimestamp(int(reset), UTC)
+            utc_dt = datetime.fromtimestamp(int(reset), timezone.utc)
             local_dt = utc_dt.astimezone()
             message += f" Resets at {utc_dt:%Y-%m-%d %H:%M:%S %Z} ({local_dt:%Y-%m-%d %H:%M:%S %Z} local)."
         except (TypeError, ValueError, OSError):
