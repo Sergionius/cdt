@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v0.3.2 - 2026-07-07
+
+- Fixed README install examples to point to the latest release tag.
+- Hardened repository URL parsing in `cdt self-update`.
+- Clarified `cdt self-update` installation-method limitations.
+- Added coverage execution to the documented local command set and CI.
+
 ## v0.3.1 - 2026-07-07
 
 - Added `cdt self-update` command to update the CLI to the latest GitHub release via `pipx`.

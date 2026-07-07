@@ -31,7 +31,7 @@ jobs:
         run: python -m compileall cdt tests
 
       - name: Test
-        run: python -m pytest -q
+        run: python -m pytest -q --cov=cdt --cov-report=term
 
       - name: Build
         run: python -m build

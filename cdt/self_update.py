@@ -15,6 +15,8 @@ from . import __version__
 
 _GITHUB_API_LATEST = "https://api.github.com/repos/{owner}/{repo}/releases/latest"
 _SAFE_TAG_RE = re.compile(r"^[A-Za-z0-9._+-]+$")
+_GITHUB_OWNER_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
+_GITHUB_REPO_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 class SelfUpdateError(Exception):
@@ -33,11 +35,16 @@ def _owner_repo_from_url(repo_url: str) -> tuple[str, str]:
     parsed = urlparse(repo_url)
     if parsed.scheme != "https" or parsed.hostname != "github.com" or parsed.port not in (None, 443):
         raise SelfUpdateError(f"Unsupported repository URL (only https://github.com URLs are accepted): {repo_url}")
+    if parsed.query or parsed.fragment or parsed.params:
+        raise SelfUpdateError(f"Unsupported repository URL (query, fragment, and params are not accepted): {repo_url}")
+
     path = unquote(parsed.path).strip("/")
+    if "@" in path:
+        raise SelfUpdateError(f"Unsupported repository URL (branch/ref suffixes are not accepted): {repo_url}")
     if path.endswith(".git"):
         path = path[:-4]
     parts = path.split("/")
-    if len(parts) != 2 or not parts[0] or not parts[1]:
+    if len(parts) != 2 or not _GITHUB_OWNER_RE.fullmatch(parts[0]) or not _GITHUB_REPO_RE.fullmatch(parts[1]):
         raise SelfUpdateError(f"Unable to parse owner/repo from repository URL: {repo_url}")
     return parts[0], parts[1]
 

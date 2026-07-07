@@ -33,6 +33,23 @@ def test_owner_repo_from_url_rejects_invalid():
         _owner_repo_from_url("https://github.com/Sergionius")
 
 
+@pytest.mark.parametrize(
+    "repo_url",
+    [
+        "https://github.com/Sergionius/cdt.git@branch",
+        "https://github.com/Sergionius/cdt?ref=main",
+        "https://github.com/Sergionius/cdt#main",
+        "https://github.com/Sergionius/cdt;param",
+        "https://github.com/Ser%40gionius/cdt",
+        "https://github.com/-Sergionius/cdt",
+        "https://github.com/Sergionius/cdt name",
+    ],
+)
+def test_owner_repo_from_url_rejects_suspicious_urls(repo_url):
+    with pytest.raises(SelfUpdateError):
+        _owner_repo_from_url(repo_url)
+
+
 def test_latest_release_tag_parses_tag_name():
     response = FakeResponse(github_latest_release_json("v0.4.0"))
 

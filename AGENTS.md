@@ -4,6 +4,7 @@
 
 ```bash
 pytest
+pytest --cov=cdt --cov-report=term
 ruff check .
 python -m build
 ```
