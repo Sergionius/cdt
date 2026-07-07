@@ -1,12 +1,12 @@
+import re
 from pathlib import Path
-
-import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_install_docs_use_current_release_tag():
-    version = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    version = re.search(r'^version = "([^"]+)"', pyproject, flags=re.MULTILINE).group(1)
     expected = f"git+https://github.com/Sergionius/cdt.git@v{version}"
 
     for path in (ROOT / "README.md", ROOT / "docs" / "getting-started.md"):
