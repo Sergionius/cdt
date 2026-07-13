@@ -168,7 +168,7 @@ def test_resume_requires_resume_status_file_even_with_status_file(tmp_path, monk
     result = runner.invoke(app, ["run", "demo", "--status-file", str(tmp_path / "out.json"), "--skip-completed"])
 
     assert result.exit_code != 0
-    assert "Resume requires --resume-status-file" in result.output
+    assert not (tmp_path / "ran.txt").exists()
 
 
 def test_status_file_is_output_only_when_resuming(tmp_path, monkeypatch):
