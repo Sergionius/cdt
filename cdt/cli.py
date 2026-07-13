@@ -105,7 +105,7 @@ def run_pipeline(
     resume_status_file: Path | None = typer.Option(
         None,
         "--resume-status-file",
-        help="Read resume state from this status JSON",
+        help="Read previous run status JSON for --resume-from or --skip-completed",
     ),
 ):
     """Run a pipeline from cdt.yaml."""
@@ -417,10 +417,10 @@ def _echo_step_tree(nodes: list[dict], indent: int = 1) -> None:
     prefix = "  " * indent
     for node in nodes:
         if node["type"] == "parallel":
-            typer.echo(f"{prefix}- parallel:")
+            typer.echo(f"{prefix}- {node.get('step_id', '?')} parallel:")
             _echo_step_tree(node["steps"], indent + 1)
             continue
-        typer.echo(f"{prefix}- {node['name']}")
+        typer.echo(f"{prefix}- {node.get('step_id', '?')} {node['name']}")
         if node["options"]:
             for key, value in node["options"].items():
                 typer.echo(f"{prefix}    {key}: {value}")
@@ -430,10 +430,10 @@ def _echo_plan_tree(nodes: list[dict], indent: int = 1) -> None:
     prefix = "  " * indent
     for node in nodes:
         if node["type"] == "parallel":
-            typer.echo(f"{prefix}- parallel [{node['risk']}]")
+            typer.echo(f"{prefix}- {node.get('step_id', '?')} parallel [{node['risk']}]")
             _echo_plan_tree(node["steps"], indent + 1)
             continue
-        typer.echo(f"{prefix}- {node['name']} [{node['risk']}]")
+        typer.echo(f"{prefix}- {node.get('step_id', '?')} {node['name']} [{node['risk']}]")
         if node["options"]:
             for key, value in node["options"].items():
                 typer.echo(f"{prefix}    {key}: {value}")

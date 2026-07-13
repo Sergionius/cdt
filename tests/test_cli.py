@@ -235,12 +235,18 @@ def test_pipeline_inspect_json_returns_step_tree(tmp_path, monkeypatch):
     assert payload["plugins"] == []
     assert payload["errors"] == []
     assert payload["steps"] == [
-        {"type": "step", "name": "flutter.pub_get", "options": {}},
+        {"type": "step", "step_id": "0", "name": "flutter.pub_get", "options": {}},
         {
             "type": "parallel",
+            "step_id": "1",
             "steps": [
-                {"type": "step", "name": "web.build", "options": {"env": "prod"}},
-                {"type": "step", "name": "android.build_aab", "options": {"artifact": "android_aab"}},
+                {"type": "step", "step_id": "1/0", "name": "web.build", "options": {"env": "prod"}},
+                {
+                    "type": "step",
+                    "step_id": "1/1",
+                    "name": "android.build_aab",
+                    "options": {"artifact": "android_aab"},
+                },
             ],
         },
     ]

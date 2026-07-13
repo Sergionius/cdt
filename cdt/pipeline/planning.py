@@ -55,7 +55,7 @@ def _plan_sequence(
     state = _PlanState()
     nodes: list[dict[str, Any]] = []
     for index, item in enumerate(items):
-        node = _plan_node(item, warnings, state, f"{path_prefix}[{index}]")
+        node = _plan_node(item, warnings, state, f"{path_prefix}[{index}]", str(index))
         nodes.append(node)
     return nodes
 
@@ -65,11 +65,13 @@ def _plan_node(
     warnings: list[dict[str, str]],
     state: _PlanState,
     path: str,
+    step_id: str,
 ) -> dict[str, Any]:
     if isinstance(item, ParallelSpec):
         before_group = state.copy()
         planned_steps = [
-            _plan_step(step, warnings, f"{path}.parallel.steps[{index}]") for index, step in enumerate(item.steps)
+            _plan_step(step, warnings, f"{path}.parallel.steps[{index}]", f"{step_id}/{index}")
+            for index, step in enumerate(item.steps)
         ]
         sibling_produced_names = set().union(
             *(set(step["artifact_flow"]["produces_names"]) for step in planned_steps)
@@ -89,16 +91,17 @@ def _plan_node(
             state.add_flow(step["artifact_flow"])
         return {
             "type": "parallel",
+            "step_id": step_id,
             "risk": _aggregate_risks([_node_risk(step) for step in planned_steps]),
             "steps": [_strip_internal_path(step) for step in planned_steps],
         }
-    node = _plan_step(item, warnings, path)
+    node = _plan_step(item, warnings, path, step_id)
     _warn_for_missing_artifacts(item.name, node["artifact_flow"], state, warnings, path)
     state.add_flow(node["artifact_flow"])
     return _strip_internal_path(node)
 
 
-def _plan_step(step: StepSpec, warnings: list[dict[str, str]], path: str) -> dict[str, Any]:
+def _plan_step(step: StepSpec, warnings: list[dict[str, str]], path: str, step_id: str) -> dict[str, Any]:
     try:
         metadata = get_step_metadata(step.name)
     except Exception:
@@ -114,6 +117,7 @@ def _plan_step(step: StepSpec, warnings: list[dict[str, str]], path: str) -> dic
     artifact_flow = _artifact_flow(step, metadata)
     return {
         "type": "step",
+        "step_id": step_id,
         "name": step.name,
         "category": metadata.category,
         "risk": metadata.risk,
