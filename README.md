@@ -68,6 +68,8 @@ cdt self-update --json --check
 
 Static planning commands (`cdt pipeline plan <pipeline>` and `cdt run <pipeline> --dry-run`) show the step tree, risk, warnings, and artifact flow without executing steps.
 
+Resume status migration note: current CDT status files store stable step ids (`0`, `1`, `1/0`) instead of step names. Older name-based status files are rejected because duplicate names such as anonymous `parallel` groups are ambiguous. Recreate the status file by rerunning without `--skip-completed`, or use `cdt pipeline inspect <pipeline>` / `cdt pipeline plan <pipeline>` to map completed work to step ids manually.
+
 `cdt self-update` updates the installed CLI to the latest GitHub release. It supports `--manager pipx`, `--manager pip`, and `--manager uv`; editable/local installs should be updated manually. Use `cdt self-update --check` to check without changing files, `--json` for machine-readable output, and `--dry-run` to see the release tag and update command without running it. The command requires outbound HTTPS access to `api.github.com`.
 
 For a quick first run, see [Getting started in 5 minutes](docs/getting-started.md).
