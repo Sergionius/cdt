@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-- Nothing yet.
+- Fixed `cdt run --skip-completed` incorrectly treating duplicate step names, including anonymous parallel groups, as the same step.
+- Changed pipeline status step fields to store stable step ids instead of step names. Older name-based resume files are rejected because duplicate step names are ambiguous; recreate them or map completed work to ids from `cdt pipeline inspect <pipeline>` / `cdt pipeline plan <pipeline>`.
+- Changed resume input handling: `--resume-status-file` is required for `--resume-from` and `--skip-completed`; `--status-file` only writes the current run status.
 
 ## v0.3.5 - 2026-07-07
 

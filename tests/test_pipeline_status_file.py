@@ -83,7 +83,7 @@ def test_run_status_file_records_success(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert payload["status"] == "success"
     assert payload["pipeline"] == "demo"
-    assert payload["completed_steps"] == ["demo.ok"]
+    assert payload["completed_steps"] == ["0"]
     assert payload["current_step"] is None
     assert payload["started_at"]
     assert payload["finished_at"]
@@ -100,8 +100,8 @@ def test_run_status_file_records_failure(tmp_path, monkeypatch):
 
     assert result.exit_code != 0
     assert payload["status"] == "failed"
-    assert payload["completed_steps"] == ["demo.ok"]
-    assert payload["failed_step"] == "demo.fail"
+    assert payload["completed_steps"] == ["0"]
+    assert payload["failed_step"] == "1"
     assert "boom" in payload["error"]
 
 
@@ -112,7 +112,19 @@ def test_run_resume_from_restores_artifacts_and_skips_prior_steps(tmp_path, monk
     status_file = tmp_path / ".cdt" / "status.json"
 
     first = runner.invoke(app, ["run", "demo", "--status-file", str(status_file)])
-    second = runner.invoke(app, ["run", "demo", "--status-file", str(status_file), "--resume-from", "demo.upload"])
+    second = runner.invoke(
+        app,
+        [
+            "run",
+            "demo",
+            "--resume-status-file",
+            str(status_file),
+            "--status-file",
+            str(status_file),
+            "--resume-from",
+            "demo.upload",
+        ],
+    )
 
     assert first.exit_code == 0
     assert second.exit_code == 0
@@ -127,7 +139,18 @@ def test_run_skip_completed_does_not_execute_completed_steps(tmp_path, monkeypat
     status_file = tmp_path / ".cdt" / "status.json"
 
     first = runner.invoke(app, ["run", "demo", "--status-file", str(status_file)])
-    second = runner.invoke(app, ["run", "demo", "--status-file", str(status_file), "--skip-completed"])
+    second = runner.invoke(
+        app,
+        [
+            "run",
+            "demo",
+            "--resume-status-file",
+            str(status_file),
+            "--status-file",
+            str(status_file),
+            "--skip-completed",
+        ],
+    )
 
     assert first.exit_code == 0
     assert second.exit_code == 0
@@ -143,7 +166,19 @@ def test_run_resume_fails_when_restored_artifact_is_missing(tmp_path, monkeypatc
 
     first = runner.invoke(app, ["run", "demo", "--status-file", str(status_file)])
     (tmp_path / "app.aab").unlink()
-    second = runner.invoke(app, ["run", "demo", "--status-file", str(status_file), "--resume-from", "demo.upload"])
+    second = runner.invoke(
+        app,
+        [
+            "run",
+            "demo",
+            "--resume-status-file",
+            str(status_file),
+            "--status-file",
+            str(status_file),
+            "--resume-from",
+            "demo.upload",
+        ],
+    )
 
     assert first.exit_code == 0
     assert second.exit_code != 0

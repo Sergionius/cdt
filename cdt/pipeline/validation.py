@@ -13,7 +13,7 @@ def pipeline_names(config: PipelineConfig) -> list[str]:
 
 
 def step_tree(items: list[PipelineItemSpec]) -> list[dict[str, Any]]:
-    return [_step_node(item) for item in items]
+    return [_step_node(item, str(index)) for index, item in enumerate(items)]
 
 
 def validate_pipeline(config: PipelineConfig, name: str | None = None) -> list[dict[str, str]]:
@@ -130,14 +130,16 @@ def _validate_step_options(step: StepSpec, factory: Any, path: str) -> list[dict
     return errors
 
 
-def _step_node(item: PipelineItemSpec) -> dict[str, Any]:
+def _step_node(item: PipelineItemSpec, step_id: str) -> dict[str, Any]:
     if isinstance(item, ParallelSpec):
         return {
             "type": "parallel",
-            "steps": [_step_node(step) for step in item.steps],
+            "step_id": step_id,
+            "steps": [_step_node(step, f"{step_id}/{child_index}") for child_index, step in enumerate(item.steps)],
         }
     return {
         "type": "step",
+        "step_id": step_id,
         "name": item.name,
         "options": item.options,
     }

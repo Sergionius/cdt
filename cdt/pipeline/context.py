@@ -74,44 +74,44 @@ class PipelineContext:
         self.started_at = _now()
         self.write_status("running")
 
-    def mark_step_started(self, step_name: str) -> None:
-        self.current_step = step_name
+    def mark_step_started(self, step_id: str) -> None:
+        self.current_step = step_id
         self.write_status("running")
 
-    def mark_step_completed(self, step_name: str) -> None:
+    def mark_step_completed(self, step_id: str) -> None:
         self.current_step = None
-        if step_name not in self.completed_steps:
-            self.completed_steps.append(step_name)
+        if step_id not in self.completed_steps:
+            self.completed_steps.append(step_id)
         self.write_status("running")
 
-    def should_skip_step(self, step_name: str) -> bool:
-        return self.skip_completed and step_name in self.completed_steps
+    def should_skip_step(self, step_id: str) -> bool:
+        return self.skip_completed and step_id in self.completed_steps
 
-    def mark_parallel_step_started(self, step_name: str) -> None:
-        if step_name not in self.running_steps:
-            self.running_steps.append(step_name)
+    def mark_parallel_step_started(self, step_id: str) -> None:
+        if step_id not in self.running_steps:
+            self.running_steps.append(step_id)
         self.write_status("running")
 
-    def mark_parallel_step_completed(self, step_name: str) -> None:
-        if step_name in self.running_steps:
-            self.running_steps.remove(step_name)
-        if step_name not in self.parallel_completed:
-            self.parallel_completed.append(step_name)
-        if step_name not in self.completed_steps:
-            self.completed_steps.append(step_name)
+    def mark_parallel_step_completed(self, step_id: str) -> None:
+        if step_id in self.running_steps:
+            self.running_steps.remove(step_id)
+        if step_id not in self.parallel_completed:
+            self.parallel_completed.append(step_id)
+        if step_id not in self.completed_steps:
+            self.completed_steps.append(step_id)
         self.write_status("running")
 
-    def mark_parallel_step_failed(self, step_name: str, error: str) -> None:
-        if step_name in self.running_steps:
-            self.running_steps.remove(step_name)
-        failure = f"{step_name}: {error}"
+    def mark_parallel_step_failed(self, step_id: str, error: str) -> None:
+        if step_id in self.running_steps:
+            self.running_steps.remove(step_id)
+        failure = f"{step_id}: {error}"
         if failure not in self.parallel_failed:
             self.parallel_failed.append(failure)
         self.write_status("running")
 
-    def mark_status_failed(self, step_name: str, error: str) -> None:
+    def mark_status_failed(self, step_id: str, error: str) -> None:
         self.current_step = None
-        self.failed_step = step_name
+        self.failed_step = step_id
         self.error = error
         self.finished_at = _now()
         self.write_status("failed")

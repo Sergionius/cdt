@@ -56,13 +56,16 @@ def test_pipeline_plan_json_includes_risks_and_parallel_steps(tmp_path, monkeypa
     assert payload["pipeline"] == "demo"
     assert payload["overall_risk"] == "upload"
     assert payload["errors"] == []
+    assert payload["steps"][0]["step_id"] == "0"
     assert payload["steps"][0]["name"] == "flutter.pub_get"
     assert payload["steps"][0]["risk"] == "safe"
     assert "name" not in payload["steps"][0]["metadata"]
     assert "category" not in payload["steps"][0]["metadata"]
     assert "risk" not in payload["steps"][0]["metadata"]
     assert payload["steps"][1]["type"] == "parallel"
+    assert payload["steps"][1]["step_id"] == "1"
     assert payload["steps"][1]["risk"] == "build"
+    assert payload["steps"][1]["steps"][0]["step_id"] == "1/0"
     assert payload["steps"][1]["steps"][0]["artifact_flow"] == {
         "requires": [],
         "requires_names": [],

@@ -1,5 +1,8 @@
 import json
+import re
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import typer
 
@@ -35,9 +38,7 @@ def run_configured_pipeline(
     if errors:
         raise typer.BadParameter("Invalid pipeline config: " + "; ".join(error["message"] for error in errors))
     steps = configured_steps(pipeline)
-    step_names = {getattr(step, "name", step.__class__.__name__) for step in steps}
-    if resume_from is not None and resume_from not in step_names:
-        raise typer.BadParameter(f"Unknown resume step: {resume_from}")
+    resume_step_id = _resolve_resume_from(steps, resume_from) if resume_from is not None else None
     ctx = PipelineContext(
         cwd=cwd,
         env=env,
@@ -48,13 +49,62 @@ def run_configured_pipeline(
         skip_completed=skip_completed,
     )
     if resume_from or skip_completed:
-        _restore_resume_status(ctx, resume_status_file or status_file)
-    PipelineExecutor().run(steps, ctx, resume_from=resume_from)
+        _restore_resume_status(ctx, resume_status_file)
+    PipelineExecutor().run(steps, ctx, resume_from=resume_step_id)
+
+
+def _resolve_resume_from(steps: Sequence[Any], selector: str) -> str:
+    if "/" in selector:
+        parent = selector.split("/", 1)[0]
+        raise typer.BadParameter(
+            f"Cannot resume from child step {selector}. Resume starts from top-level steps only. "
+            f"Use {parent} to resume from the parallel group."
+        )
+
+    by_id = {_step_id(step): step for step in steps}
+    if selector in by_id:
+        return selector
+
+    if "@" in selector:
+        name, step_id = selector.rsplit("@", 1)
+        if "/" in step_id:
+            parent = step_id.split("/", 1)[0]
+            raise typer.BadParameter(
+                f"Cannot resume from child step {step_id}. Resume starts from top-level steps only. "
+                f"Use {parent} to resume from the parallel group."
+            )
+        try:
+            step = by_id[step_id]
+        except KeyError as exc:
+            raise typer.BadParameter(f"Unknown resume step id: {step_id}") from exc
+        actual_name = _step_name(step)
+        if actual_name != name:
+            raise typer.BadParameter(f"Resume selector {selector} does not match step {step_id} {actual_name}.")
+        return step_id
+
+    matches = [_step_id(step) for step in steps if _step_name(step) == selector]
+    if not matches:
+        raise typer.BadParameter(f"Unknown resume step: {selector}")
+    if len(matches) > 1:
+        joined = ", ".join(matches)
+        qualified = ", ".join(f"{selector}@{step_id}" for step_id in matches)
+        raise typer.BadParameter(
+            f"Ambiguous resume step: {selector} matches step ids {joined}. Use {joined}, {qualified}."
+        )
+    return matches[0]
+
+
+def _step_id(step: Any) -> str:
+    return str(getattr(step, "step_id", None) or _step_name(step))
+
+
+def _step_name(step: Any) -> str:
+    return str(getattr(step, "name", step.__class__.__name__))
 
 
 def _restore_resume_status(ctx: PipelineContext, status_file: Path | None) -> None:
     if status_file is None:
-        raise typer.BadParameter("Resume requires --status-file or --resume-status-file")
+        raise typer.BadParameter("Resume requires --resume-status-file. --status-file only writes the new run status.")
     if not status_file.exists():
         raise typer.BadParameter(f"Resume status file not found: {status_file}")
     try:
@@ -64,7 +114,12 @@ def _restore_resume_status(ctx: PipelineContext, status_file: Path | None) -> No
     if not isinstance(payload, dict):
         raise typer.BadParameter(f"Invalid resume status JSON: {status_file}")
 
-    ctx.completed_steps = [step for step in payload.get("completed_steps", []) if isinstance(step, str)]
+    raw_completed_steps = payload.get("completed_steps", [])
+    if not isinstance(raw_completed_steps, list):
+        raise typer.BadParameter("Resume status completed_steps must be a list")
+    completed_steps = [step for step in raw_completed_steps if isinstance(step, str)]
+    _validate_resume_step_ids(completed_steps)
+    ctx.completed_steps = completed_steps
     ctx.old_version = payload.get("old_version") if isinstance(payload.get("old_version"), str) else None
     ctx.new_version = payload.get("new_version") if isinstance(payload.get("new_version"), str) else None
     artifacts = payload.get("artifacts", [])
@@ -77,3 +132,17 @@ def _restore_resume_status(ctx: PipelineContext, status_file: Path | None) -> No
         if not artifact.path.exists():
             raise typer.BadParameter(f"Resume artifact does not exist: {artifact.path}")
         ctx.artifacts[artifact_payload["name"]] = artifact
+
+
+def _validate_resume_step_ids(step_ids: list[str]) -> None:
+    if all(_is_step_id(step_id) for step_id in step_ids):
+        return
+    raise typer.BadParameter(
+        "Resume status file uses step names from an older CDT version. "
+        "Current CDT requires step ids because duplicate names are ambiguous. "
+        "Rerun without --skip-completed or recreate the status file."
+    )
+
+
+def _is_step_id(value: str) -> bool:
+    return re.fullmatch(r"\d+(?:/\d+)?", value) is not None

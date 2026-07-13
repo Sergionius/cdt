@@ -52,6 +52,7 @@ class PipelineConfig:
 class ConfiguredStep:
     name: str
     options: dict[str, Any]
+    step_id: str | None = None
 
     def run(self, ctx: PipelineContext) -> None:
         resolved_options = resolve_value(self.options, ctx)
@@ -125,11 +126,16 @@ def load_plugins(plugins: list[str]) -> None:
 
 def configured_steps(pipeline: PipelineSpec) -> list[ConfiguredStep | ParallelStepGroup]:
     configured = []
-    for item in pipeline.steps:
+    for index, item in enumerate(pipeline.steps):
+        step_id = str(index)
         if isinstance(item, ParallelSpec):
-            configured.append(ParallelStepGroup([ConfiguredStep(step.name, step.options) for step in item.steps]))
+            child_steps = [
+                ConfiguredStep(step.name, step.options, f"{step_id}/{child_index}")
+                for child_index, step in enumerate(item.steps)
+            ]
+            configured.append(ParallelStepGroup(child_steps, step_id=step_id))
         else:
-            configured.append(ConfiguredStep(item.name, item.options))
+            configured.append(ConfiguredStep(item.name, item.options, step_id))
     return configured
 
 
