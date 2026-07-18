@@ -11,7 +11,7 @@ CDT is a CLI tool, so `pipx` is the recommended installation method.
 Install a specific GitHub release:
 
 ```bash
-pipx install "git+https://github.com/Sergionius/cdt.git@v0.3.5"
+pipx install "git+https://github.com/Sergionius/cdt.git@v0.3.6"
 ```
 
 Or install the latest `main`:
@@ -32,7 +32,7 @@ Or manually:
 
 ```bash
 pipx uninstall cdt
-pipx install "git+https://github.com/Sergionius/cdt.git@v0.3.5"
+pipx install "git+https://github.com/Sergionius/cdt.git@v0.3.6"
 ```
 
 For local development:
@@ -45,7 +45,7 @@ python -m pip install -e '.[dev]'
 scripts/reinstall.sh
 ```
 
-`pip install git+https://github.com/Sergionius/cdt.git@v0.3.5` also works, but `pipx` keeps the CLI isolated from project Python environments.
+`pip install git+https://github.com/Sergionius/cdt.git@v0.3.6` also works, but `pipx` keeps the CLI isolated from project Python environments.
 
 Note: the `cdt` name on PyPI belongs to another project, so install this CDT from GitHub.
 

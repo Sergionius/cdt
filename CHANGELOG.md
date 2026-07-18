@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Nothing yet.
+
+## v0.3.6 - 2026-07-18
+
 - Added sequential branches inside parallel pipeline groups, enabling prod flows such as iOS alongside Android AAB followed immediately by APK.
 - Added `notify.prod_user_agent` as a registered YAML built-in and included it in the example prod pipeline before `notify.success`.
 - Added nested step IDs and child-step resume support for sequential parallel branches.
