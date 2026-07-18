@@ -31,6 +31,7 @@ class PipelineContext:
     parallel_completed: list[str] = field(default_factory=list)
     parallel_failed: list[str] = field(default_factory=list)
     skip_completed: bool = False
+    resume_from: str | None = None
     started_at: str | None = None
     finished_at: str | None = None
     _artifact_lock: Lock = field(default_factory=Lock, repr=False)

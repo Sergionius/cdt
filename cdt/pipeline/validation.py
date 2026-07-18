@@ -4,7 +4,7 @@ import inspect
 from difflib import get_close_matches
 from typing import Any
 
-from .config import ParallelSpec, PipelineConfig, PipelineItemSpec, PipelineSpec, StepSpec
+from .config import ParallelSpec, PipelineConfig, PipelineItemSpec, PipelineSpec, SequenceSpec, StepSpec
 from .registry import get_step_factory, list_step_metadata, list_steps
 
 
@@ -86,12 +86,18 @@ def _validate_steps(pipeline: PipelineSpec) -> list[dict[str, str]]:
     errors: list[dict[str, str]] = []
     for index, item in enumerate(pipeline.steps):
         path = f"pipelines.{pipeline.name}.steps[{index}]"
-        if isinstance(item, ParallelSpec):
-            for child_index, child in enumerate(item.steps):
-                errors.extend(_validate_step(child, f"{path}.parallel.steps[{child_index}]"))
-        else:
-            errors.extend(_validate_step(item, path))
+        errors.extend(_validate_item(item, path))
     return errors
+
+
+def _validate_item(item: PipelineItemSpec, path: str) -> list[dict[str, str]]:
+    if isinstance(item, (ParallelSpec, SequenceSpec)):
+        group_name = "parallel" if isinstance(item, ParallelSpec) else "sequence"
+        errors: list[dict[str, str]] = []
+        for child_index, child in enumerate(item.steps):
+            errors.extend(_validate_item(child, f"{path}.{group_name}.steps[{child_index}]"))
+        return errors
+    return _validate_step(item, path)
 
 
 def _validate_step(step: StepSpec, path: str) -> list[dict[str, str]]:
@@ -131,9 +137,9 @@ def _validate_step_options(step: StepSpec, factory: Any, path: str) -> list[dict
 
 
 def _step_node(item: PipelineItemSpec, step_id: str) -> dict[str, Any]:
-    if isinstance(item, ParallelSpec):
+    if isinstance(item, (ParallelSpec, SequenceSpec)):
         return {
-            "type": "parallel",
+            "type": "parallel" if isinstance(item, ParallelSpec) else "sequence",
             "step_id": step_id,
             "steps": [_step_node(step, f"{step_id}/{child_index}") for child_index, step in enumerate(item.steps)],
         }

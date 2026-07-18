@@ -9,7 +9,7 @@ from cdt.pipeline import PipelineContext
 from cdt.pipeline.config import load_pipeline_config, resolve_value
 from cdt.runner import _run
 from cdt.steps.flutter import IncrementFlutterBuildNumberStep
-from cdt.steps.notify import NotifySuccessStep
+from cdt.steps.notify import NotifyProdUserAgentPachcaStep, NotifySuccessStep
 
 
 class NoopRunner:
@@ -35,6 +35,20 @@ def test_notify_success_default_pipeline_name_and_custom_message(tmp_path, monke
     assert "✅ Deploy finished" in out
     assert "iOS TestFlight flow" not in out
     assert sent == [("1.2.3+4", ["APP-1"]), ("1.2.3+4", None)]
+
+
+def test_prod_user_agent_step_sends_version_and_is_safe_for_other_provider(tmp_path, monkeypatch):
+    sent: list[str] = []
+    monkeypatch.setattr(
+        "cdt.steps.notify._notify_prod_user_agent_pachca",
+        lambda env, version: sent.append(version),
+    )
+    ctx = PipelineContext(tmp_path, {"NOTIFY_PROVIDER": "telegram"}, NoopRunner())
+    ctx.new_version = "1.2.3+4"
+
+    NotifyProdUserAgentPachcaStep().run(ctx)
+
+    assert sent == ["1.2.3+4"]
 
 
 def test_flutter_increment_build_number_does_not_write_legacy_aliases(tmp_path):

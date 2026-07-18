@@ -65,6 +65,7 @@ def test_builtin_metadata_registration():
     android_aab = get_step_metadata("android.build_aab")
     android_apk = get_step_metadata("android.build_apk")
     firebase = get_step_metadata("firebase.upload_app_distribution")
+    prod_user_agent = get_step_metadata("notify.prod_user_agent")
 
     assert flutter.category == "flutter"
     assert flutter.risk == "safe"
@@ -79,6 +80,9 @@ def test_builtin_metadata_registration():
     assert firebase.requires == (
         ResultRequirement(("android_aab", "android_apk"), mode="any", name_options=("artifact",)),
     )
+    assert prod_user_agent.category == "notify"
+    assert prod_user_agent.risk == "upload"
+    assert prod_user_agent.requires_env == ("PACHCA_USER_AGENT_WEBHOOK_URL", "UA_APP_NAME")
 
 
 def test_step_metadata_to_dict_is_structured():

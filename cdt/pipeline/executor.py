@@ -11,6 +11,38 @@ from .step import Step
 
 
 @dataclass
+class SequentialStepGroup:
+    steps: Sequence[Step]
+    step_id: str = "sequence"
+
+    @property
+    def name(self) -> str:
+        return "sequence"
+
+    def run(self, ctx: PipelineContext) -> None:
+        resume_from = ctx.resume_from if _is_descendant(ctx.resume_from, self.step_id) else None
+        matched_resume_step = resume_from is None or resume_from == self.step_id
+        for step in self.steps:
+            step_id = _step_id(step)
+            if not matched_resume_step:
+                if step_id != resume_from:
+                    continue
+                matched_resume_step = True
+            if ctx.should_skip_step(step_id):
+                continue
+            ctx.mark_parallel_step_started(step_id)
+            try:
+                step.run(ctx)
+            except Exception as exc:
+                ctx.mark_parallel_step_failed(step_id, str(exc))
+                raise
+            else:
+                ctx.mark_parallel_step_completed(step_id)
+        if not matched_resume_step:
+            raise typer.BadParameter(f"Unknown resume step: {resume_from}")
+
+
+@dataclass
 class ParallelStepGroup:
     steps: Sequence[Step]
     step_id: str = "parallel"
@@ -21,8 +53,10 @@ class ParallelStepGroup:
 
     def run(self, ctx: PipelineContext) -> None:
         failures: list[tuple[str, Exception]] = []
-        with ThreadPoolExecutor(max_workers=len(self.steps)) as pool:
-            futures = {pool.submit(_run_parallel_child, step, ctx): step for step in self.steps}
+        selected_child = _selected_parallel_child(ctx.resume_from, self.step_id)
+        runnable_steps = [step for step in self.steps if selected_child is None or _step_id(step) == selected_child]
+        with ThreadPoolExecutor(max_workers=len(runnable_steps)) as pool:
+            futures = {pool.submit(_run_parallel_child, step, ctx): step for step in runnable_steps}
             for future in as_completed(futures):
                 step = futures[future]
                 try:
@@ -32,7 +66,9 @@ class ParallelStepGroup:
 
         if failures:
             names = ", ".join(name for name, _ in failures)
-            raise typer.BadParameter(f"Parallel group failed after all steps finished: {names}") from failures[0][1]
+            error = typer.BadParameter(f"Parallel group failed after all steps finished: {names}")
+            error.failed_step_id = _deepest_failed_step_id(ctx, self.step_id)  # type: ignore[attr-defined]
+            raise error from failures[0][1]
 
 
 class PipelineExecutor:
@@ -45,15 +81,20 @@ class PipelineExecutor:
                 step_name = getattr(step, "name", step.__class__.__name__)
                 step_id = getattr(step, "step_id", None) or step_name
                 step_label = _step_label(step)
-                if skipping_until is not None and step_id != skipping_until:
+                resume_root = skipping_until.split("/", 1)[0] if skipping_until is not None else None
+                if resume_root is not None and step_id != resume_root:
                     continue
-                skipping_until = None
+                if skipping_until is not None:
+                    ctx.resume_from = skipping_until
+                    skipping_until = None
                 if ctx.should_skip_step(step_id):
+                    ctx.resume_from = None
                     continue
                 ctx.mark_step_started(step_id)
                 try:
                     step.run(ctx)
                     ctx.mark_step_completed(step_id)
+                    ctx.resume_from = None
                 except typer.BadParameter as exc:
                     produced = sorted(set(ctx.artifacts) - before_artifacts)
                     command = _step_command(step)
@@ -64,7 +105,8 @@ class PipelineExecutor:
                         f"exit code: {exit_code}; artifacts produced: {artifacts}"
                     )
                     error = f"{exc}. {summary}"
-                    ctx.mark_status_failed(step_id, error)
+                    failed_step_id = str(getattr(exc, "failed_step_id", step_id))
+                    ctx.mark_status_failed(failed_step_id, error)
                     raise typer.BadParameter(error) from exc
                 except Exception as exc:
                     ctx.mark_status_failed(step_id, str(exc))
@@ -78,8 +120,7 @@ class PipelineExecutor:
 
 
 def _run_parallel_child(step: Step, ctx: PipelineContext) -> None:
-    step_name = getattr(step, "name", step.__class__.__name__)
-    step_id = getattr(step, "step_id", None) or step_name
+    step_id = _step_id(step)
     if ctx.should_skip_step(step_id):
         return
     ctx.mark_parallel_step_started(step_id)
@@ -90,6 +131,28 @@ def _run_parallel_child(step: Step, ctx: PipelineContext) -> None:
         raise
     else:
         ctx.mark_parallel_step_completed(step_id)
+
+
+def _step_id(step: Any) -> str:
+    step_name = getattr(step, "name", step.__class__.__name__)
+    return str(getattr(step, "step_id", None) or step_name)
+
+
+def _is_descendant(selector: str | None, parent_id: str) -> bool:
+    return selector is not None and selector.startswith(parent_id + "/")
+
+
+def _selected_parallel_child(selector: str | None, group_id: str) -> str | None:
+    if not _is_descendant(selector, group_id):
+        return None
+    remainder = selector[len(group_id) + 1 :]
+    child_index = remainder.split("/", 1)[0]
+    return f"{group_id}/{child_index}"
+
+
+def _deepest_failed_step_id(ctx: PipelineContext, group_id: str) -> str:
+    failed_ids = [failure.split(":", 1)[0] for failure in ctx.parallel_failed if failure.startswith(group_id + "/")]
+    return max(failed_ids, key=lambda step_id: step_id.count("/"), default=group_id)
 
 
 def _exit_code(message: str) -> str:

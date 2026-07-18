@@ -54,25 +54,16 @@ def run_configured_pipeline(
 
 
 def _resolve_resume_from(steps: Sequence[Any], selector: str) -> str:
-    if "/" in selector:
-        parent = selector.split("/", 1)[0]
-        raise typer.BadParameter(
-            f"Cannot resume from child step {selector}. Resume starts from top-level steps only. "
-            f"Use {parent} to resume from the parallel group."
-        )
-
-    by_id = {_step_id(step): step for step in steps}
+    all_steps = list(_flatten_steps(steps))
+    by_id = {_step_id(step): step for step in all_steps}
     if selector in by_id:
         return selector
 
+    if _is_step_id(selector):
+        raise typer.BadParameter(f"Unknown resume step id: {selector}")
+
     if "@" in selector:
         name, step_id = selector.rsplit("@", 1)
-        if "/" in step_id:
-            parent = step_id.split("/", 1)[0]
-            raise typer.BadParameter(
-                f"Cannot resume from child step {step_id}. Resume starts from top-level steps only. "
-                f"Use {parent} to resume from the parallel group."
-            )
         try:
             step = by_id[step_id]
         except KeyError as exc:
@@ -82,7 +73,7 @@ def _resolve_resume_from(steps: Sequence[Any], selector: str) -> str:
             raise typer.BadParameter(f"Resume selector {selector} does not match step {step_id} {actual_name}.")
         return step_id
 
-    matches = [_step_id(step) for step in steps if _step_name(step) == selector]
+    matches = [_step_id(step) for step in all_steps if _step_name(step) == selector]
     if not matches:
         raise typer.BadParameter(f"Unknown resume step: {selector}")
     if len(matches) > 1:
@@ -92,6 +83,14 @@ def _resolve_resume_from(steps: Sequence[Any], selector: str) -> str:
             f"Ambiguous resume step: {selector} matches step ids {joined}. Use {joined}, {qualified}."
         )
     return matches[0]
+
+
+def _flatten_steps(steps: Sequence[Any]):
+    for step in steps:
+        yield step
+        children = getattr(step, "steps", None)
+        if isinstance(children, Sequence):
+            yield from _flatten_steps(children)
 
 
 def _step_id(step: Any) -> str:
@@ -145,4 +144,4 @@ def _validate_resume_step_ids(step_ids: list[str]) -> None:
 
 
 def _is_step_id(value: str) -> bool:
-    return re.fullmatch(r"\d+(?:/\d+)?", value) is not None
+    return re.fullmatch(r"\d+(?:/\d+)*", value) is not None

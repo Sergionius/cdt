@@ -3,7 +3,7 @@ from __future__ import annotations
 import shutil
 from typing import Any
 
-from .config import ParallelSpec, PipelineConfig, PipelineItemSpec
+from .config import ParallelSpec, PipelineConfig, PipelineItemSpec, SequenceSpec
 from .registry import get_step_metadata
 from .validation import pipeline_names, validate_pipeline
 
@@ -17,7 +17,8 @@ def preflight_payload(config: PipelineConfig, name: str, env: dict[str, str]) ->
         for step in _iter_steps(pipeline.steps):
             metadata = get_step_metadata(step.name)
             tools.update(metadata.external_tools)
-            env_keys.update(metadata.requires_env)
+            if step.name != "notify.prod_user_agent" or env.get("NOTIFY_PROVIDER", "").strip().lower() == "pachca":
+                env_keys.update(metadata.requires_env)
 
     tool_checks = [
         {"name": tool, "available": shutil.which(tool) is not None}
@@ -46,7 +47,7 @@ def preflight_payload(config: PipelineConfig, name: str, env: dict[str, str]) ->
 
 def _iter_steps(items: list[PipelineItemSpec]):
     for item in items:
-        if isinstance(item, ParallelSpec):
+        if isinstance(item, (ParallelSpec, SequenceSpec)):
             yield from item.steps
         else:
             yield item

@@ -416,8 +416,8 @@ def _error_payload(name: str | None, errors: list[dict[str, str]]) -> dict:
 def _echo_step_tree(nodes: list[dict], indent: int = 1) -> None:
     prefix = "  " * indent
     for node in nodes:
-        if node["type"] == "parallel":
-            typer.echo(f"{prefix}- {node.get('step_id', '?')} parallel:")
+        if node["type"] in {"parallel", "sequence"}:
+            typer.echo(f"{prefix}- {node.get('step_id', '?')} {node['type']}:")
             _echo_step_tree(node["steps"], indent + 1)
             continue
         typer.echo(f"{prefix}- {node.get('step_id', '?')} {node['name']}")
@@ -429,8 +429,8 @@ def _echo_step_tree(nodes: list[dict], indent: int = 1) -> None:
 def _echo_plan_tree(nodes: list[dict], indent: int = 1) -> None:
     prefix = "  " * indent
     for node in nodes:
-        if node["type"] == "parallel":
-            typer.echo(f"{prefix}- {node.get('step_id', '?')} parallel [{node['risk']}]")
+        if node["type"] in {"parallel", "sequence"}:
+            typer.echo(f"{prefix}- {node.get('step_id', '?')} {node['type']} [{node['risk']}]")
             _echo_plan_tree(node["steps"], indent + 1)
             continue
         typer.echo(f"{prefix}- {node.get('step_id', '?')} {node['name']} [{node['risk']}]")

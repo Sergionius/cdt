@@ -90,6 +90,41 @@ def test_pipeline_plan_json_includes_risks_and_parallel_steps(tmp_path, monkeypa
     assert payload["warnings"] == []
 
 
+def test_pipeline_plan_sequence_exposes_nested_ids_and_sequential_artifact_flow(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  prod:",
+                "    steps:",
+                "      - parallel:",
+                "          steps:",
+                "            - ios.flutter_build_ipa: {artifact: ios_ipa}",
+                "            - sequence:",
+                "                steps:",
+                "                  - android.build_aab: {artifact: android_aab}",
+                "                  - artifact.copy_to_downloads: {artifact: android_aab}",
+                "                  - android.build_apk: {artifact: android_apk}",
+                "                  - artifact.copy_to_downloads: {artifact: android_apk}",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["pipeline", "plan", "prod", "--json"])
+    payload = json.loads(result.output)
+    android = payload["steps"][0]["steps"][1]
+
+    assert result.exit_code == 0
+    assert android["type"] == "sequence"
+    assert android["step_id"] == "0/1"
+    assert [step["step_id"] for step in android["steps"]] == ["0/1/0", "0/1/1", "0/1/2", "0/1/3"]
+    assert payload["warnings"] == []
+
+
 def test_pipeline_plan_json_reports_unknown_step(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "cdt.yaml").write_text(
@@ -561,6 +596,26 @@ def test_pipeline_preflight_checks_selected_pipeline_tools_and_env(tmp_path, mon
     assert result.exit_code == 1
     assert payload["missing_tools"] == ["firebase"]
     assert payload["missing_env"] == ["FIREBASE_APP_ID_ANDROID", "FIREBASE_TOKEN"]
+
+
+def test_prod_user_agent_preflight_requires_pachca_env_only_for_pachca(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  prod:\n    steps:\n      - notify.prod_user_agent\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".env").write_text("NOTIFY_PROVIDER=telegram\n", encoding="utf-8")
+
+    telegram_result = runner.invoke(app, ["pipeline", "preflight", "prod", "--json"])
+    telegram_payload = json.loads(telegram_result.output)
+    (tmp_path / ".env").write_text("NOTIFY_PROVIDER=pachca\n", encoding="utf-8")
+    pachca_result = runner.invoke(app, ["pipeline", "preflight", "prod", "--json"])
+    pachca_payload = json.loads(pachca_result.output)
+
+    assert telegram_result.exit_code == 0
+    assert telegram_payload["missing_env"] == []
+    assert pachca_result.exit_code == 1
+    assert pachca_payload["missing_env"] == ["PACHCA_USER_AGENT_WEBHOOK_URL", "UA_APP_NAME"]
 
 
 def _write_any_artifact_plugin(tmp_path):

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added sequential branches inside parallel pipeline groups, enabling prod flows such as iOS alongside Android AAB followed immediately by APK.
+- Added `notify.prod_user_agent` as a registered YAML built-in and included it in the example prod pipeline before `notify.success`.
+- Added nested step IDs and child-step resume support for sequential parallel branches.
 - Fixed `cdt run --skip-completed` incorrectly treating duplicate step names, including anonymous parallel groups, as the same step.
 - Changed pipeline status step fields to store stable step ids instead of step names. Older name-based resume files are rejected because duplicate step names are ambiguous; recreate them or map completed work to ids from `cdt pipeline inspect <pipeline>` / `cdt pipeline plan <pipeline>`.
 - Changed resume input handling: `--resume-status-file` is required for `--resume-from` and `--skip-completed`; `--status-file` only writes the current run status.
