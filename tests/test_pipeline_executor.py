@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from cdt.pipeline import ParallelStepGroup, PipelineContext, PipelineExecutor
+from cdt.pipeline import ParallelStepGroup, PipelineContext, PipelineExecutor, SequentialStepGroup
 from cdt.runner import CommandRunner
 
 
@@ -116,6 +116,57 @@ def test_parallel_group_runs_children_concurrently(tmp_path):
         "second:finished",
         "second:started",
     ]
+
+
+def test_parallel_sequence_runs_android_aab_then_apk_without_waiting_for_ios(tmp_path):
+    events: list[str] = []
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner())
+
+    PipelineExecutor().run(
+        [
+            ParallelStepGroup(
+                [
+                    SleepingStep("ios", events, delay=0.15),
+                    SequentialStepGroup(
+                        [SleepingStep("aab", events, delay=0.01), SleepingStep("apk", events)],
+                        step_id="0/1",
+                    ),
+                ],
+                step_id="0",
+            )
+        ],
+        ctx,
+    )
+
+    assert events.index("aab") < events.index("apk") < events.index("ios")
+
+
+def test_parallel_sequence_stops_after_failed_step_but_other_branch_finishes(tmp_path):
+    events: list[str] = []
+    status_file = tmp_path / "status.json"
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner(), status_file=status_file)
+    ios = SleepingStep("ios", events, delay=0.05)
+    ios.step_id = "0/0"
+    aab = SleepingStep("aab", events, fail=True)
+    aab.step_id = "0/1/0"
+    apk = SleepingStep("apk", events)
+    apk.step_id = "0/1/1"
+
+    with pytest.raises(Exception, match="Parallel group failed"):
+        PipelineExecutor().run(
+            [
+                ParallelStepGroup(
+                    [ios, SequentialStepGroup([aab, apk], step_id="0/1")],
+                    step_id="0",
+                )
+            ],
+            ctx,
+        )
+
+    payload = json.loads(status_file.read_text(encoding="utf-8"))
+    assert sorted(events) == ["aab", "ios"]
+    assert payload["failed_step"] == "0/1/0"
+    assert "0/1/0: aab" in payload["parallel_failed"]
 
 
 def test_parallel_group_reports_failure_after_all_children_finish(tmp_path):

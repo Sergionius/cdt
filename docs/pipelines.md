@@ -63,6 +63,28 @@ Each item in `steps` is one of:
 - Step name string: `- flutter.pub_get`
 - Single-key step mapping: `- android.build_aab: { profile: prod }`
 - Parallel group: `- parallel: { steps: [...] }`
+- Sequential group: `- sequence: { steps: [...] }`
+
+A `sequence` runs its child steps in order and can be used as a branch of `parallel`. This lets independent platform flows run concurrently while preserving dependencies inside each branch:
+
+```yaml
+- parallel:
+    steps:
+      - sequence:
+          steps:
+            - ios.flutter_build_ipa: {profile: prod, artifact: ios_ipa}
+            - appstore.upload_testflight: {artifact: ios_ipa, changelog: prod build}
+      - sequence:
+          steps:
+            - android.build_aab: {profile: prod, artifact: android_aab}
+            - artifact.copy_to_downloads: {artifact: android_aab}
+            - android.build_apk: {profile: prod, artifact: android_apk}
+            - artifact.copy_to_downloads: {artifact: android_apk}
+- notify.prod_user_agent
+- notify.success
+```
+
+Here APK starts as soon as AAB and its copy step finish; it does not wait for iOS. Nested groups inside `sequence` and nested `parallel` groups are not supported in schema v1.
 
 Parallel branches start together, already-started branches are not cancelled on failure, and errors are aggregated after all branches finish.
 
@@ -85,11 +107,14 @@ Important built-ins include:
 - `appstore.upload_testflight`
 - `artifact.copy_to_downloads`
 - `hook.python_script`
+- `notify.prod_user_agent`
 - `notify.success`
 
 Build steps use `profile` for CDT presets (`prod` adds `ENV=prod`). Flutter `flavor` is separate and optional. Build steps default to `no_pub: true` and do not increment versions; add explicit `flutter.increment_build_number` and `flutter.pub_get` steps when needed.
 
 `artifact.copy_to_downloads` copies a named file artifact to `~/Downloads` by default.
+
+`notify.prod_user_agent` is separate from `notify.success`. When `NOTIFY_PROVIDER=pachca`, it sends production user-agent details using `PACHCA_USER_AGENT_WEBHOOK_URL` and `UA_APP_NAME`; optional formatting variables are `UA_TITLE`, `UA_IOS_DEVICE`, and `UA_ANDROID_DEVICE`. With another provider the step is a no-op.
 
 ## Python hook
 

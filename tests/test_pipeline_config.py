@@ -5,7 +5,7 @@ import typer
 
 from cdt.pipeline import PipelineContext, PipelineExecutor
 from cdt.pipeline.builtins import register_builtin_steps
-from cdt.pipeline.config import ParallelSpec, configured_steps, load_pipeline_config, load_plugins
+from cdt.pipeline.config import ParallelSpec, SequenceSpec, configured_steps, load_pipeline_config, load_plugins
 from cdt.pipeline.registry import _clear_steps_for_tests
 from cdt.pipeline.validation import validate_pipeline
 from cdt.runner import CommandRunner
@@ -139,6 +139,39 @@ def test_parallel_group_parses_into_explicit_model(tmp_path):
     assert isinstance(group, ParallelSpec)
     assert [step.name for step in group.steps] == ["demo.first", "demo.second"]
     assert group.steps[1].options == {"value": "ok"}
+
+
+def test_parallel_sequence_group_parses_with_stable_nested_steps(tmp_path):
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  prod:",
+                "    steps:",
+                "      - parallel:",
+                "          steps:",
+                "            - demo.ios",
+                "            - sequence:",
+                "                steps:",
+                "                  - demo.aab",
+                "                  - demo.apk",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config = load_pipeline_config(tmp_path)
+    group = config.pipelines["prod"].steps[0]
+
+    assert isinstance(group, ParallelSpec)
+    assert isinstance(group.steps[1], SequenceSpec)
+    assert [step.name for step in group.steps[1].steps] == ["demo.aab", "demo.apk"]
+    configured = configured_steps(config.pipelines["prod"])[0]
+    assert configured.step_id == "0"
+    assert configured.steps[1].step_id == "0/1"
+    assert [step.step_id for step in configured.steps[1].steps] == ["0/1/0", "0/1/1"]
 
 
 def test_nested_parallel_group_errors_clearly(tmp_path):

@@ -68,7 +68,7 @@ cdt self-update --json --check
 
 Static planning commands (`cdt pipeline plan <pipeline>` and `cdt run <pipeline> --dry-run`) show the step tree, risk, warnings, and artifact flow without executing steps.
 
-Resume status migration note: current CDT status files store stable step ids (`0`, `1`, `1/0`) instead of step names. Older name-based status files are rejected because duplicate names such as anonymous `parallel` groups are ambiguous. Recreate the status file by rerunning without `--skip-completed`, or use `cdt pipeline inspect <pipeline>` / `cdt pipeline plan <pipeline>` to map completed work to step ids manually.
+Resume status migration note: current CDT status files store stable step ids (`0`, `1`, `1/0`, `1/0/1`) instead of step names. Older name-based status files are rejected because duplicate names such as anonymous `parallel` groups are ambiguous. Recreate the status file by rerunning without `--skip-completed`, or use `cdt pipeline inspect <pipeline>` / `cdt pipeline plan <pipeline>` to map completed work to step ids manually.
 
 `cdt self-update` updates the installed CLI to the latest GitHub release. It supports `--manager pipx`, `--manager pip`, and `--manager uv`; editable/local installs should be updated manually. Use `cdt self-update --check` to check without changing files, `--json` for machine-readable output, and `--dry-run` to see the release tag and update command without running it. The command requires outbound HTTPS access to `api.github.com`.
 
@@ -86,16 +86,26 @@ pipelines:
       - flutter.pub_get
       - parallel:
           steps:
-            - ios.flutter_build_ipa:
-                profile: prod
-                flavor: prod
-                artifact: ios_ipa
-            - android.build_aab:
-                profile: prod
-                flavor: prod
-                artifact: android_aab
-      - artifact.copy_to_downloads:
-          artifact: android_aab
+            - sequence:
+                steps:
+                  - ios.flutter_build_ipa:
+                      profile: prod
+                      flavor: prod
+                      artifact: ios_ipa
+                  - appstore.upload_testflight:
+                      artifact: ios_ipa
+                      changelog: prod build
+            - sequence:
+                steps:
+                  - android.build_aab:
+                      profile: prod
+                      flavor: prod
+                      artifact: android_aab
+                  - android.build_apk:
+                      profile: prod
+                      flavor: prod
+                      artifact: android_apk
+      - notify.prod_user_agent
       - notify.success
 ```
 
@@ -139,6 +149,7 @@ Use `cdt pipeline steps` for the complete list. Common built-ins:
 - `appstore.upload_testflight`
 - `artifact.copy_to_downloads`
 - `hook.python_script`
+- `notify.prod_user_agent`
 - `notify.success`
 
 Build steps use `profile` for CDT presets (`profile: prod` adds `--dart-define=ENV=prod`). Flutter `flavor` is separate. Build steps do not run `flutter pub get` or increment versions implicitly.

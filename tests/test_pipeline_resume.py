@@ -139,25 +139,64 @@ def test_resume_from_top_level_step_id_works(tmp_path, monkeypatch):
     assert (tmp_path / "third.txt").exists()
 
 
-def test_resume_from_child_step_id_is_rejected(tmp_path, monkeypatch):
+def test_resume_from_parallel_child_step_id_runs_only_selected_branch(tmp_path, monkeypatch):
     _write_project(
         tmp_path,
         "\n".join(
             [
                 "      - parallel:",
                 "          steps:",
-                "            - demo.touch: {output: child.txt}",
+                "            - demo.touch: {output: skipped.txt}",
+                "            - demo.touch: {output: selected.txt}",
             ]
         )
         + "\n",
     )
     monkeypatch.chdir(tmp_path)
     monkeypatch.syspath_prepend(str(tmp_path))
+    status = tmp_path / "status.json"
+    status.write_text(json.dumps({"completed_steps": [], "artifacts": []}), encoding="utf-8")
 
-    result = runner.invoke(app, ["run", "demo", "--resume-from", "0/0"])
+    result = runner.invoke(
+        app,
+        ["run", "demo", "--resume-status-file", str(status), "--resume-from", "0/1"],
+    )
 
-    assert result.exit_code != 0
-    assert "Cannot resume from child step 0/0" in result.output
+    assert result.exit_code == 0, result.output
+    assert not (tmp_path / "skipped.txt").exists()
+    assert (tmp_path / "selected.txt").exists()
+
+
+def test_resume_from_nested_sequence_step_skips_prior_step_and_sibling_branch(tmp_path, monkeypatch):
+    _write_project(
+        tmp_path,
+        "\n".join(
+            [
+                "      - parallel:",
+                "          steps:",
+                "            - demo.touch: {output: ios.txt}",
+                "            - sequence:",
+                "                steps:",
+                "                  - demo.touch: {output: aab.txt}",
+                "                  - demo.touch: {output: apk.txt}",
+            ]
+        )
+        + "\n",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    status = tmp_path / "status.json"
+    status.write_text(json.dumps({"completed_steps": [], "artifacts": []}), encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        ["run", "demo", "--resume-status-file", str(status), "--resume-from", "0/1/1"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert not (tmp_path / "ios.txt").exists()
+    assert not (tmp_path / "aab.txt").exists()
+    assert (tmp_path / "apk.txt").exists()
 
 
 def test_resume_requires_resume_status_file_even_with_status_file(tmp_path, monkeypatch):

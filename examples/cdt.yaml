@@ -18,29 +18,32 @@ pipelines:
       - flutter.pub_get
       - parallel:
           steps:
-            - ios.flutter_build_ipa:
-                profile: prod
-                flavor: prod
-                artifact: ios_ipa
-            - android.build_aab:
-                profile: prod
-                flavor: prod
-                artifact: android_aab
-      - parallel:
-          steps:
-            - appstore.upload_testflight:
-                artifact: ios_ipa
-                changelog: prod build
-            - artifact.copy_to_downloads:
-                artifact: android_aab
-      - android.build_apk:
-          profile: prod
-          flavor: prod
-          artifact: android_apk
-          dart_defines:
-            STORE: ru
-      - artifact.copy_to_downloads:
-          artifact: android_apk
+            - sequence:
+                steps:
+                  - ios.flutter_build_ipa:
+                      profile: prod
+                      flavor: prod
+                      artifact: ios_ipa
+                  - appstore.upload_testflight:
+                      artifact: ios_ipa
+                      changelog: prod build
+            - sequence:
+                steps:
+                  - android.build_aab:
+                      profile: prod
+                      flavor: prod
+                      artifact: android_aab
+                  - artifact.copy_to_downloads:
+                      artifact: android_aab
+                  - android.build_apk:
+                      profile: prod
+                      flavor: prod
+                      artifact: android_apk
+                      dart_defines:
+                        STORE: ru
+                  - artifact.copy_to_downloads:
+                      artifact: android_apk
+      - notify.prod_user_agent
       - notify.success
 
   offline-test:

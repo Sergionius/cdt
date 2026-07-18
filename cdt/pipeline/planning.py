@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .config import ParallelSpec, PipelineConfig, PipelineItemSpec, StepSpec
+from .config import ParallelSpec, PipelineConfig, PipelineItemSpec, SequenceSpec, StepSpec
 from .registry import StepMetadata, get_step_metadata
 from .validation import pipeline_names, validate_pipeline
 
@@ -53,11 +53,10 @@ def _plan_sequence(
     path_prefix: str,
 ) -> list[dict[str, Any]]:
     state = _PlanState()
-    nodes: list[dict[str, Any]] = []
-    for index, item in enumerate(items):
-        node = _plan_node(item, warnings, state, f"{path_prefix}[{index}]", str(index))
-        nodes.append(node)
-    return nodes
+    return [
+        _plan_node(item, warnings, state, f"{path_prefix}[{index}]", str(index))
+        for index, item in enumerate(items)
+    ]
 
 
 def _plan_node(
@@ -66,39 +65,73 @@ def _plan_node(
     state: _PlanState,
     path: str,
     step_id: str,
+    *,
+    sibling_produced_names: set[str] | None = None,
 ) -> dict[str, Any]:
     if isinstance(item, ParallelSpec):
         before_group = state.copy()
-        planned_steps = [
-            _plan_step(step, warnings, f"{path}.parallel.steps[{index}]", f"{step_id}/{index}")
-            for index, step in enumerate(item.steps)
-        ]
-        sibling_produced_names = set().union(
-            *(set(step["artifact_flow"]["produces_names"]) for step in planned_steps)
-        )
-        for step in planned_steps:
-            step_flow = step["artifact_flow"]
-            produced_by_other_siblings = sibling_produced_names - set(step_flow["produces_names"])
-            _warn_for_missing_artifacts(
-                step["name"],
-                step_flow,
-                before_group,
-                warnings,
-                step["path"],
-                sibling_produced_names=produced_by_other_siblings,
+        branch_outputs = [_declared_produced_names(child) for child in item.steps]
+        planned_steps: list[dict[str, Any]] = []
+        for index, child in enumerate(item.steps):
+            produced_by_other_branches = set().union(
+                *(outputs for other_index, outputs in enumerate(branch_outputs) if other_index != index)
             )
-        for step in planned_steps:
-            state.add_flow(step["artifact_flow"])
+            planned_steps.append(
+                _plan_node(
+                    child,
+                    warnings,
+                    before_group.copy(),
+                    f"{path}.parallel.steps[{index}]",
+                    f"{step_id}/{index}",
+                    sibling_produced_names=produced_by_other_branches,
+                )
+            )
+        state.available_names.update(set().union(*branch_outputs))
         return {
             "type": "parallel",
             "step_id": step_id,
             "risk": _aggregate_risks([_node_risk(step) for step in planned_steps]),
-            "steps": [_strip_internal_path(step) for step in planned_steps],
+            "steps": planned_steps,
+        }
+    if isinstance(item, SequenceSpec):
+        planned_steps = [
+            _plan_node(
+                child,
+                warnings,
+                state,
+                f"{path}.sequence.steps[{index}]",
+                f"{step_id}/{index}",
+                sibling_produced_names=sibling_produced_names,
+            )
+            for index, child in enumerate(item.steps)
+        ]
+        return {
+            "type": "sequence",
+            "step_id": step_id,
+            "risk": _aggregate_risks([_node_risk(step) for step in planned_steps]),
+            "steps": planned_steps,
         }
     node = _plan_step(item, warnings, path, step_id)
-    _warn_for_missing_artifacts(item.name, node["artifact_flow"], state, warnings, path)
+    _warn_for_missing_artifacts(
+        item.name,
+        node["artifact_flow"],
+        state,
+        warnings,
+        path,
+        sibling_produced_names=sibling_produced_names,
+    )
     state.add_flow(node["artifact_flow"])
     return _strip_internal_path(node)
+
+
+def _declared_produced_names(item: PipelineItemSpec) -> set[str]:
+    if isinstance(item, (ParallelSpec, SequenceSpec)):
+        return set().union(*(_declared_produced_names(child) for child in item.steps))
+    try:
+        metadata = get_step_metadata(item.name)
+    except Exception:
+        metadata = StepMetadata(name=item.name)
+    return set(_artifact_flow(item, metadata)["produces_names"])
 
 
 def _plan_step(step: StepSpec, warnings: list[dict[str, str]], path: str, step_id: str) -> dict[str, Any]:

@@ -10,7 +10,7 @@ import typer
 
 from ..versioning import _current_flutter_version
 from .context import PipelineContext
-from .executor import ParallelStepGroup
+from .executor import ParallelStepGroup, SequentialStepGroup
 from .registry import get_step_factory
 
 try:
@@ -28,11 +28,16 @@ class StepSpec:
 
 
 @dataclass(frozen=True)
-class ParallelSpec:
+class SequenceSpec:
     steps: list[StepSpec]
 
 
-PipelineItemSpec = StepSpec | ParallelSpec
+@dataclass(frozen=True)
+class ParallelSpec:
+    steps: list[StepSpec | SequenceSpec]
+
+
+PipelineItemSpec = StepSpec | ParallelSpec | SequenceSpec
 
 
 @dataclass(frozen=True)
@@ -124,19 +129,24 @@ def load_plugins(plugins: list[str]) -> None:
             raise typer.BadParameter(f"Failed to import pipeline plugin '{plugin}': {exc}") from exc
 
 
-def configured_steps(pipeline: PipelineSpec) -> list[ConfiguredStep | ParallelStepGroup]:
-    configured = []
-    for index, item in enumerate(pipeline.steps):
-        step_id = str(index)
-        if isinstance(item, ParallelSpec):
-            child_steps = [
-                ConfiguredStep(step.name, step.options, f"{step_id}/{child_index}")
-                for child_index, step in enumerate(item.steps)
-            ]
-            configured.append(ParallelStepGroup(child_steps, step_id=step_id))
-        else:
-            configured.append(ConfiguredStep(item.name, item.options, step_id))
-    return configured
+def configured_steps(pipeline: PipelineSpec) -> list[ConfiguredStep | ParallelStepGroup | SequentialStepGroup]:
+    return [_configured_item(item, str(index)) for index, item in enumerate(pipeline.steps)]
+
+
+def _configured_item(
+    item: PipelineItemSpec,
+    step_id: str,
+) -> ConfiguredStep | ParallelStepGroup | SequentialStepGroup:
+    if isinstance(item, ParallelSpec):
+        children = [_configured_item(child, f"{step_id}/{index}") for index, child in enumerate(item.steps)]
+        return ParallelStepGroup(children, step_id=step_id)
+    if isinstance(item, SequenceSpec):
+        children = [
+            ConfiguredStep(step.name, step.options, f"{step_id}/{index}")
+            for index, step in enumerate(item.steps)
+        ]
+        return SequentialStepGroup(children, step_id=step_id)
+    return ConfiguredStep(item.name, item.options, step_id)
 
 
 def resolve_value(value: Any, ctx: PipelineContext) -> Any:
@@ -159,6 +169,8 @@ def _parse_step_spec(pipeline_name: str, index: int, item: Any) -> PipelineItemS
             raise typer.BadParameter(f"{prefix} name must be a non-empty string")
         if name == "parallel":
             return _parse_parallel_spec(pipeline_name, index, options)
+        if name == "sequence":
+            return _parse_sequence_spec(pipeline_name, index, options)
         if options is None:
             options = {}
         if not isinstance(options, dict):
@@ -169,6 +181,31 @@ def _parse_step_spec(pipeline_name: str, index: int, item: Any) -> PipelineItemS
 
 def _parse_parallel_spec(pipeline_name: str, index: int, options: Any) -> ParallelSpec:
     prefix = f"Pipeline '{pipeline_name}' step #{index} parallel"
+    raw_steps = _group_steps(prefix, options)
+    steps: list[StepSpec | SequenceSpec] = []
+    for child_index, child in enumerate(raw_steps, start=1):
+        child_prefix = f"{prefix}.steps #{child_index}"
+        parsed = _parse_step_spec(pipeline_name, index, child)
+        if isinstance(parsed, ParallelSpec):
+            raise typer.BadParameter(f"{child_prefix} cannot be a nested parallel group in YAML v1")
+        steps.append(parsed)
+    return ParallelSpec(steps=steps)
+
+
+def _parse_sequence_spec(pipeline_name: str, index: int, options: Any) -> SequenceSpec:
+    prefix = f"Pipeline '{pipeline_name}' step #{index} sequence"
+    raw_steps = _group_steps(prefix, options)
+    steps: list[StepSpec] = []
+    for child_index, child in enumerate(raw_steps, start=1):
+        child_prefix = f"{prefix}.steps #{child_index}"
+        parsed = _parse_step_spec(pipeline_name, index, child)
+        if isinstance(parsed, (ParallelSpec, SequenceSpec)):
+            raise typer.BadParameter(f"{child_prefix} cannot contain a nested group in YAML v1")
+        steps.append(parsed)
+    return SequenceSpec(steps=steps)
+
+
+def _group_steps(prefix: str, options: Any) -> list[Any]:
     if not isinstance(options, dict):
         raise typer.BadParameter(f"{prefix} must be a mapping with a non-empty steps list")
     if set(options) != {"steps"}:
@@ -176,17 +213,7 @@ def _parse_parallel_spec(pipeline_name: str, index: int, options: Any) -> Parall
     raw_steps = options.get("steps")
     if not isinstance(raw_steps, list) or not raw_steps:
         raise typer.BadParameter(f"{prefix}.steps must be a non-empty list")
-
-    steps: list[StepSpec] = []
-    for child_index, child in enumerate(raw_steps, start=1):
-        child_prefix = f"{prefix}.steps #{child_index}"
-        if isinstance(child, dict) and len(child) == 1 and next(iter(child)) == "parallel":
-            raise typer.BadParameter(f"{child_prefix} cannot be a nested parallel group in YAML v1")
-        parsed = _parse_step_spec(pipeline_name, index, child)
-        if isinstance(parsed, ParallelSpec):
-            raise typer.BadParameter(f"{child_prefix} cannot be a nested parallel group in YAML v1")
-        steps.append(parsed)
-    return ParallelSpec(steps=steps)
+    return raw_steps
 
 
 def _resolve_expression(expression: str, ctx: PipelineContext) -> str:

@@ -6,7 +6,7 @@ from ..steps.flutter import FlutterPubGetStep, IncrementFlutterBuildNumberStep
 from ..steps.git import GitAddCommitPushStep, PrepareGitMainStep
 from ..steps.hook import PythonScriptHookStep
 from ..steps.ios import IncrementIosBuildNumberStep, IosFlutterBuildIpaStep, IosXcodeBuildIpaStep
-from ..steps.notify import NotifySuccessStep
+from ..steps.notify import NotifyProdUserAgentPachcaStep, NotifySuccessStep
 from ..steps.tracker import TrackerCommentStep
 from ..steps.web import ApplyWebCacheBustingStep, BuildFlutterWebStep, CopyWebBuildStep
 from .registry import ResultProduction, ResultRequirement, StepMetadata, list_steps, register_step
@@ -27,6 +27,7 @@ _BUILTINS: dict[str, type] = {
     "ios.flutter_build_ipa": IosFlutterBuildIpaStep,
     "ios.xcode_build_ipa": IosXcodeBuildIpaStep,
     "hook.python_script": PythonScriptHookStep,
+    "notify.prod_user_agent": NotifyProdUserAgentPachcaStep,
     "notify.success": NotifySuccessStep,
     "tracker.comment": TrackerCommentStep,
     "web.build": BuildFlutterWebStep,
@@ -157,6 +158,14 @@ _BUILTIN_METADATA: dict[str, StepMetadata] = {
         category="hook",
         risk="hook",
         external_tools=("python3",),
+    ),
+    "notify.prod_user_agent": StepMetadata(
+        name="notify.prod_user_agent",
+        description="Send production user-agent details to Pachca when Pachca notifications are enabled.",
+        category="notify",
+        risk="upload",
+        produces=(ResultProduction("notification"),),
+        requires_env=("PACHCA_USER_AGENT_WEBHOOK_URL", "UA_APP_NAME"),
     ),
     "notify.success": StepMetadata(
         name="notify.success",
