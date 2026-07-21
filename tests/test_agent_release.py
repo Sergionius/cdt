@@ -14,8 +14,16 @@ class FakeProcess:
     pid = os.getpid()
 
 
+def _write_config(tmp_path):
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  test:\n    steps:\n      - notify.success\n",
+        encoding="utf-8",
+    )
+
+
 def test_agent_release_start_creates_metadata_without_streaming_log(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    _write_config(tmp_path)
     calls = []
 
     def fake_popen(cmd, **kwargs):
@@ -28,16 +36,38 @@ def test_agent_release_start_creates_metadata_without_streaming_log(tmp_path, mo
     payload = json.loads(result.output)
 
     assert result.exit_code == 0
+    assert payload["schema_version"] == 1
     assert payload["status"] == "running"
     assert payload["pipeline"] == "test"
-    assert payload["log"] == str(tmp_path / ".cdt" / "agent-release-test.log")
-    assert (tmp_path / ".cdt" / "agent-release-test.pid").read_text(encoding="utf-8").strip() == str(os.getpid())
-    meta = json.loads((tmp_path / ".cdt" / "agent-release-test.meta.json").read_text(encoding="utf-8"))
+    assert payload["run_id"]
+    run_dir = tmp_path / ".cdt" / "runs" / payload["run_id"]
+    assert payload["log"] == str(run_dir / "output.log")
+    assert (run_dir / "pid").read_text(encoding="utf-8").strip() == str(os.getpid())
+    meta = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
     assert meta["ids"] == ["BRH-471"]
     assert meta["command"] == ["cdt", "run", "test", "--id", "BRH-471"]
-    assert meta["worker_command"] == calls[0][0]
-    assert calls[0][1]["stdout"] == agent_release.subprocess.DEVNULL
-    assert calls[0][1]["stderr"] == agent_release.subprocess.DEVNULL
+    assert meta["worker_command"] == calls[-1][0]
+    assert (tmp_path / ".cdt" / "runs" / "latest-test").read_text(encoding="utf-8").strip() == payload["run_id"]
+    assert calls[-1][1]["stdout"] == agent_release.subprocess.DEVNULL
+    assert calls[-1][1]["stderr"] == agent_release.subprocess.DEVNULL
+
+
+def test_agent_release_start_failure_creates_terminal_run(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write_config(tmp_path)
+
+    def fail_popen(*args, **kwargs):
+        raise OSError("cannot spawn")
+
+    monkeypatch.setattr(agent_release.subprocess, "Popen", fail_popen)
+
+    result = runner.invoke(app, ["agent-release", "start", "test", "--json"])
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 1
+    assert payload["status"] == "failed"
+    assert payload["exit_code"] == 1
+    assert "cannot spawn" in payload["error"]
 
 
 def test_agent_release_status_is_compact_and_does_not_read_log(tmp_path, monkeypatch):

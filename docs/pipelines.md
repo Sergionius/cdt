@@ -1,6 +1,6 @@
 # CDT pipelines
 
-CDT 0.2 uses `cdt.yaml` as the only automation model. Run pipelines with:
+CDT uses `cdt.yaml` as its explicit project-local automation model. Run pipelines with:
 
 ```bash
 cdt run prod
@@ -20,6 +20,7 @@ plugins: [] # optional
 
 pipelines:
   prod:
+    risk: production
     steps:
       - flutter.increment_build_number
       - flutter.pub_get
@@ -29,7 +30,9 @@ pipelines:
           artifact: ios_ipa
 ```
 
-Top-level fields are `version`, optional `plugins`, and `pipelines`. Legacy top-level lifecycle keys and default pipelines are not supported.
+Top-level fields are `version`, optional `plugins`, and `pipelines`. Each pipeline contains `steps` and may declare `risk: standard` (the default) or `risk: production`. Legacy top-level lifecycle keys and default pipelines are not supported.
+
+A production pipeline requires exact confirmation. Humans are prompted interactively; automation can use `cdt run prod --confirm prod`. Do not classify production only by pipeline name.
 
 ## Planning and dry runs
 
@@ -40,7 +43,9 @@ cdt pipeline plan prod
 cdt pipeline plan prod --json
 ```
 
-`cdt run <pipeline> --dry-run` uses the same planner and does not call step execution code. It is intended as a safe preflight before real release, upload, deploy, or git-push work.
+`cdt run <pipeline> --dry-run` uses the same planner and does not call step execution code. It is intended as a safe preflight before real release, upload, deploy, or git-push work. Dry runs do not create run records.
+
+Every real execution creates `.cdt/runs/<run-id>/` with `manifest.json`, `status.json`, `output.log`, `exit-code`, and process metadata. Direct `cdt run <pipeline>` output remains interactive and readable; use `cdt history`, `cdt status <run-id>`, and `cdt logs <run-id>` only when later inspection is useful.
 
 JSON plans include compact step metadata plus `artifact_flow` for each step. `artifact_flow.produces_types` lists static result types a step creates, such as `ios_ipa`, `android_aab`, `web_build`, `version`, `upload_result`, `notification`, `tracker_comment`, or `file`. `artifact_flow.requires` is a list of grouped requirement entries:
 

@@ -1,4 +1,5 @@
 import json
+import os
 import re
 from collections.abc import Sequence
 from pathlib import Path
@@ -8,6 +9,7 @@ import typer
 
 from ..artifacts import BuildArtifact
 from ..runner import CommandRunner
+from ..runs import ensure_run, write_exit_code, write_text_atomic
 from .builtins import register_builtin_steps
 from .config import configured_steps, load_pipeline_config, load_plugins
 from .context import PipelineContext
@@ -25,7 +27,10 @@ def run_configured_pipeline(
     resume_from: str | None = None,
     skip_completed: bool = False,
     resume_status_file: Path | None = None,
-) -> None:
+    run_id: str | None = None,
+    detached: bool = False,
+    record_run: bool = True,
+) -> str | None:
     config = load_pipeline_config(cwd)
     register_builtin_steps()
     load_plugins(config.plugins)
@@ -39,18 +44,46 @@ def run_configured_pipeline(
         raise typer.BadParameter("Invalid pipeline config: " + "; ".join(error["message"] for error in errors))
     steps = configured_steps(pipeline)
     resume_step_id = _resolve_resume_from(steps, resume_from) if resume_from is not None else None
+    run_paths = None
+    if record_run:
+        command = ["cdt", "run", name]
+        for task_id in ids or []:
+            command.extend(["--id", task_id])
+        run_paths = ensure_run(
+            cwd,
+            name,
+            ids=ids,
+            run_id=run_id,
+            command=command,
+            detached=detached,
+        )
+    if run_paths is not None and not detached:
+        write_text_atomic(run_paths.pid, f"{os.getpid()}\n")
+    primary_status = run_paths.status if run_paths is not None else status_file
+    mirror_status = status_file if run_paths is not None and status_file != primary_status else None
     ctx = PipelineContext(
         cwd=cwd,
         env=env,
         runner=runner or CommandRunner(),
         ids=ids or [],
         pipeline_name=name,
-        status_file=status_file,
+        status_file=primary_status,
+        mirror_status_file=mirror_status,
+        run_id=run_paths.run_id if run_paths is not None else run_id,
         skip_completed=skip_completed,
     )
     if resume_from or skip_completed:
         _restore_resume_status(ctx, resume_status_file)
-    PipelineExecutor().run(steps, ctx, resume_from=resume_step_id)
+    try:
+        PipelineExecutor().run(steps, ctx, resume_from=resume_step_id)
+    except BaseException:
+        if run_paths is not None:
+            write_exit_code(run_paths.exit, 1)
+        raise
+    else:
+        if run_paths is not None:
+            write_exit_code(run_paths.exit, 0)
+    return run_paths.run_id if run_paths is not None else None
 
 
 def _resolve_resume_from(steps: Sequence[Any], selector: str) -> str:

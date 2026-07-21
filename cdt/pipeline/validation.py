@@ -49,6 +49,7 @@ def inspect_payload(
         "pipeline": name,
         "pipelines": pipeline_names(config),
         "plugins": list(config.plugins),
+        "declared_risk": pipeline.risk if pipeline is not None else None,
         "steps": step_tree(pipeline.steps) if pipeline is not None else [],
         "registered_steps": list_steps(),
         "errors": errors or [],

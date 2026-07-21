@@ -44,6 +44,7 @@ PipelineItemSpec = StepSpec | ParallelSpec | SequenceSpec
 class PipelineSpec:
     name: str
     steps: list[PipelineItemSpec]
+    risk: str = "standard"
 
 
 @dataclass(frozen=True)
@@ -110,12 +111,21 @@ def load_pipeline_config(cwd: Path, filename: str = "cdt.yaml") -> PipelineConfi
             raise typer.BadParameter("Pipeline names must be non-empty strings")
         if not isinstance(pipeline_data, dict):
             raise typer.BadParameter(f"Pipeline '{pipeline_name}' must be a mapping")
+        unknown_pipeline_fields = sorted(set(pipeline_data) - {"steps", "risk"})
+        if unknown_pipeline_fields:
+            raise typer.BadParameter(
+                f"Pipeline '{pipeline_name}' has unsupported fields: " + ", ".join(unknown_pipeline_fields)
+            )
+        risk = pipeline_data.get("risk", "standard")
+        if risk not in {"standard", "production"}:
+            raise typer.BadParameter(f"Pipeline '{pipeline_name}' risk must be 'standard' or 'production'")
         raw_steps = pipeline_data.get("steps")
         if not isinstance(raw_steps, list):
             raise typer.BadParameter(f"Pipeline '{pipeline_name}' steps must be a list")
         pipelines[pipeline_name] = PipelineSpec(
             name=pipeline_name,
             steps=[_parse_step_spec(pipeline_name, index, item) for index, item in enumerate(raw_steps, start=1)],
+            risk=risk,
         )
 
     return PipelineConfig(path=path, plugins=list(raw_plugins), pipelines=pipelines)

@@ -30,6 +30,28 @@ def test_asc_token_requires_all_credentials():
         appstore._asc_token({})
 
 
+def test_asc_token_encodes_expected_claims(tmp_path, monkeypatch):
+    key = tmp_path / "AuthKey.p8"
+    key.write_text("private", encoding="utf-8")
+    captured = {}
+
+    def fake_encode(claims, private_key, **kwargs):
+        captured.update({"claims": claims, "private_key": private_key, **kwargs})
+        return "token"
+
+    monkeypatch.setattr(appstore.jwt, "encode", fake_encode)
+    monkeypatch.setattr(appstore.time, "time", lambda: 100)
+
+    token = appstore._asc_token(
+        {"ASC_KEY_ID": "key", "ASC_ISSUER_ID": "issuer", "ASC_PRIVATE_KEY_PATH": str(key)}
+    )
+
+    assert token == "token"
+    assert captured["claims"] == {"iss": "issuer", "aud": "appstoreconnect-v1", "exp": 1300}
+    assert captured["algorithm"] == "ES256"
+    assert captured["headers"] == {"kid": "key", "typ": "JWT"}
+
+
 def test_asc_token_requires_existing_private_key(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
@@ -185,6 +207,28 @@ def test_complete_testflight_after_upload_rejects_failed_processing(monkeypatch)
 
     with pytest.raises(typer.BadParameter, match="Build processing ended with state: FAILED"):
         appstore._complete_testflight_after_upload({"IOS_BUNDLE_ID": "com.example.app"}, "Changed", "1.0+7")
+
+
+def test_ensure_transporter_reports_missing_xcrun(monkeypatch):
+    def missing(*args, **kwargs):
+        raise FileNotFoundError
+
+    monkeypatch.setattr(appstore.subprocess, "run", missing)
+
+    with pytest.raises(typer.BadParameter, match="xcrun is not available"):
+        appstore._ensure_itmstransporter_available()
+
+
+def test_upload_testflight_does_not_poll_after_transporter_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(appstore, "_build_testflight_transporter_command", lambda path, env: ["upload"])
+    monkeypatch.setattr(appstore, "_run", lambda command, cwd: 7)
+    monkeypatch.setattr(
+        appstore,
+        "_complete_testflight_after_upload",
+        lambda *args: (_ for _ in ()).throw(AssertionError("must not poll")),
+    )
+
+    assert appstore._upload_testflight(tmp_path / "app.ipa", {}, "notes", "1.0+1") == 7
 
 
 def test_build_testflight_transporter_command_uses_key_directory(tmp_path, monkeypatch):

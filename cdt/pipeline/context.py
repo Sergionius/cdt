@@ -23,6 +23,8 @@ class PipelineContext:
     artifacts: dict[str, BuildArtifact] = field(default_factory=dict)
     values: dict[str, str] = field(default_factory=dict)
     status_file: Path | None = None
+    mirror_status_file: Path | None = None
+    run_id: str | None = None
     current_step: str | None = None
     completed_steps: list[str] = field(default_factory=list)
     failed_step: str | None = None
@@ -127,6 +129,8 @@ class PipelineContext:
             return
         with self._status_lock:
             payload: dict[str, Any] = {
+                "schema_version": 1,
+                "run_id": self.run_id,
                 "status": status,
                 "pipeline": self.pipeline_name,
                 "current_step": self.current_step,
@@ -143,10 +147,17 @@ class PipelineContext:
                 "finished_at": self.finished_at,
                 "updated_at": _now(),
             }
-            self.status_file.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.status_file.with_suffix(self.status_file.suffix + ".tmp")
-            tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-            tmp.replace(self.status_file)
+            paths = [self.status_file]
+            if self.mirror_status_file is not None and self.mirror_status_file != self.status_file:
+                paths.append(self.mirror_status_file)
+            for path in paths:
+                if path is None:
+                    continue
+                path.parent.mkdir(parents=True, exist_ok=True)
+                tmp = path.with_name(f".{path.name}.tmp")
+                serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+                tmp.write_text(serialized, encoding="utf-8")
+                tmp.replace(path)
 
 
 def _now() -> str:

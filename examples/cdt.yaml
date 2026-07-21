@@ -1,9 +1,11 @@
+# yaml-language-server: $schema=../cdt/cdt.schema.json
 version: 1
 plugins:
   - cdt_steps.offline
 
 pipelines:
   prod:
+    risk: production
     steps:
       # Uncomment and customize if you need offline data before prod build:
       # - hook.python_script:

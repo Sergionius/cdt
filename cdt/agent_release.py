@@ -1,17 +1,30 @@
-import json
+from __future__ import annotations
+
 import os
 import signal
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from .runs import (
+    RUN_SCHEMA_VERSION,
+    RunPaths,
+    create_run,
+    now,
+    read_json,
+    resolve_run,
+    write_exit_code,
+    write_json_atomic,
+    write_text_atomic,
+)
+
 
 def artifact_paths(pipeline: str) -> dict[str, Path]:
+    """Return legacy pipeline-named paths for compatibility with older callers."""
     base = Path.cwd() / ".cdt"
     stem = f"agent-release-{pipeline}"
     return {
@@ -24,106 +37,145 @@ def artifact_paths(pipeline: str) -> dict[str, Path]:
     }
 
 
-def start_release(pipeline: str, ids: list[str] | None = None) -> dict[str, Any]:
+def start_release(
+    pipeline: str,
+    ids: list[str] | None = None,
+    *,
+    run_id: str | None = None,
+    confirm: str | None = None,
+) -> dict[str, Any]:
     ids = ids or []
-    paths = artifact_paths(pipeline)
-    paths["dir"].mkdir(parents=True, exist_ok=True)
-    paths["exit"].unlink(missing_ok=True)
+    cwd = Path.cwd()
+    command = ["cdt", "run", pipeline]
+    for task_id in ids:
+        command.extend(["--id", task_id])
+    if confirm is not None:
+        command.extend(["--confirm", confirm])
+    paths = create_run(cwd, pipeline, ids=ids, run_id=run_id, command=command, detached=True)
 
-    cmd = [
+    worker_cmd = [
         sys.executable,
         "-m",
         "cdt.agent_release_worker",
         "--pipeline",
         pipeline,
+        "--run-id",
+        paths.run_id,
         "--log",
-        str(paths["log"]),
+        str(paths.log),
         "--exit-file",
-        str(paths["exit"]),
+        str(paths.exit),
         "--status-file",
-        str(paths["status"]),
+        str(paths.status),
     ]
     for task_id in ids:
-        cmd.extend(["--id", task_id])
+        worker_cmd.extend(["--id", task_id])
+    if confirm is not None:
+        worker_cmd.extend(["--confirm", confirm])
 
-    process = subprocess.Popen(
-        cmd,
-        cwd=Path.cwd(),
-        start_new_session=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    paths["pid"].write_text(f"{process.pid}\n", encoding="utf-8")
-    meta = {
-        "pipeline": pipeline,
-        "pid": process.pid,
-        "ids": ids,
-        "log": str(paths["log"]),
-        "status_file": str(paths["status"]),
-        "exit_file": str(paths["exit"]),
-        "started_at": _now(),
-        "command": ["cdt", "run", pipeline, *sum((["--id", value] for value in ids), [])],
-        "worker_command": cmd,
-    }
-    _write_json(paths["meta"], meta)
-    return release_status(pipeline)
+    try:
+        process = subprocess.Popen(
+            worker_cmd,
+            cwd=cwd,
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception as exc:
+        payload = read_json(paths.status) or {}
+        payload.update({"status": "failed", "error": f"Failed to start release worker: {exc}", "finished_at": now()})
+        payload["updated_at"] = now()
+        write_json_atomic(paths.status, payload)
+        write_exit_code(paths.exit, 1)
+        return release_status(run_id=paths.run_id)
+
+    write_text_atomic(paths.pid, f"{process.pid}\n")
+    manifest = read_json(paths.manifest) or {}
+    manifest.update({"pid": process.pid, "worker_command": worker_cmd})
+    write_json_atomic(paths.manifest, manifest)
+    return release_status(run_id=paths.run_id)
 
 
-def release_status(pipeline: str) -> dict[str, Any]:
-    paths = artifact_paths(pipeline)
-    pid = _read_pid(paths["pid"])
-    exit_code = _read_exit(paths["exit"])
+def release_status(pipeline: str | None = None, *, run_id: str | None = None) -> dict[str, Any]:
+    paths, legacy = _resolve_paths(pipeline=pipeline, run_id=run_id)
+    if paths is None:
+        return {
+            "schema_version": RUN_SCHEMA_VERSION,
+            "status": "unknown",
+            "run_id": run_id,
+            "pipeline": pipeline,
+            "pid": None,
+            "exit_code": None,
+            "log": None,
+            "status_file": None,
+            "last_log_update": None,
+        }
+
+    pid = _read_pid(paths.pid)
+    exit_code = _read_exit(paths.exit)
     running = _pid_running(pid) if pid is not None else False
-    status_payload = _read_json(paths["status"])
+    status_payload = read_json(paths.status) or {}
+    manifest = read_json(paths.manifest) or {}
+    recorded_status = status_payload.get("status")
 
     if exit_code == 0:
         status = "success"
     elif exit_code is not None:
-        status = "failed"
+        status = "failed" if recorded_status != "cancelled" else "cancelled"
     elif running:
         status = "running"
+    elif recorded_status in {"success", "failed", "cancelled", "blocked"}:
+        status = str(recorded_status)
     elif pid is not None:
         status = "stale"
+    elif recorded_status == "queued":
+        status = "queued"
     else:
         status = "unknown"
 
     payload: dict[str, Any] = {
+        "schema_version": RUN_SCHEMA_VERSION,
         "status": status,
-        "pipeline": pipeline,
+        "run_id": None if legacy else paths.run_id,
+        "pipeline": status_payload.get("pipeline") or manifest.get("pipeline") or pipeline,
         "pid": pid,
         "exit_code": exit_code,
-        "log": str(paths["log"]),
-        "status_file": str(paths["status"]),
-        "last_log_update": _mtime(paths["log"]),
+        "log": str(paths.log),
+        "status_file": str(paths.status),
+        "last_log_update": _mtime(paths.log),
     }
-    if isinstance(status_payload, dict):
-        status_keys = (
-            "current_step",
-            "completed_steps",
-            "running_steps",
-            "parallel_completed",
-            "parallel_failed",
-            "failed_step",
-            "error",
-            "artifacts",
-            "started_at",
-            "finished_at",
-        )
-        for key in status_keys:
-            if key in status_payload:
-                payload[key] = status_payload[key]
+    status_keys = (
+        "current_step",
+        "completed_steps",
+        "running_steps",
+        "parallel_completed",
+        "parallel_failed",
+        "failed_step",
+        "error",
+        "artifacts",
+        "old_version",
+        "new_version",
+        "started_at",
+        "finished_at",
+        "updated_at",
+    )
+    for key in status_keys:
+        if key in status_payload:
+            payload[key] = status_payload[key]
     return payload
 
 
 def wait_for_release(
-    pipeline: str,
+    pipeline: str | None = None,
     timeout_seconds: int | None = None,
     interval_seconds: float = 5.0,
+    *,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     deadline = time.monotonic() + timeout_seconds if timeout_seconds is not None else None
     while True:
-        payload = release_status(pipeline)
-        if payload["status"] in {"success", "failed", "stale", "unknown"}:
+        payload = release_status(pipeline, run_id=run_id)
+        if payload["status"] in {"success", "failed", "cancelled", "blocked", "stale", "unknown"}:
             return payload
         if deadline is not None and time.monotonic() >= deadline:
             payload["wait_status"] = "timeout"
@@ -131,29 +183,44 @@ def wait_for_release(
         time.sleep(interval_seconds)
 
 
-def stop_release(pipeline: str, timeout_seconds: int = 30) -> dict[str, Any]:
-    paths = artifact_paths(pipeline)
-    pid = _read_pid(paths["pid"])
+def stop_release(
+    pipeline: str | None = None,
+    timeout_seconds: int = 30,
+    *,
+    run_id: str | None = None,
+) -> dict[str, Any]:
+    paths, _ = _resolve_paths(pipeline=pipeline, run_id=run_id)
+    if paths is None:
+        payload = release_status(pipeline, run_id=run_id)
+        payload["stop_result"] = "missing_pid"
+        return payload
+    manifest = read_json(paths.manifest) or {}
+    if manifest.get("detached") is False:
+        payload = release_status(pipeline, run_id=run_id)
+        payload["stop_result"] = "not_detached"
+        return payload
+    pid = _read_pid(paths.pid)
     if pid is None:
-        payload = release_status(pipeline)
+        payload = release_status(pipeline, run_id=run_id)
         payload["stop_result"] = "missing_pid"
         return payload
     if not _pid_running(pid):
-        payload = release_status(pipeline)
+        payload = release_status(pipeline, run_id=run_id)
         payload["stop_result"] = "not_running"
         return payload
 
     try:
         os.killpg(pid, signal.SIGTERM)
     except ProcessLookupError:
-        payload = release_status(pipeline)
+        payload = release_status(pipeline, run_id=run_id)
         payload["stop_result"] = "not_running"
         return payload
 
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         if not _pid_running(pid):
-            payload = release_status(pipeline)
+            _mark_cancelled(paths)
+            payload = release_status(pipeline, run_id=run_id)
             payload["stop_result"] = "terminated"
             return payload
         time.sleep(0.5)
@@ -162,7 +229,8 @@ def stop_release(pipeline: str, timeout_seconds: int = 30) -> dict[str, Any]:
         os.killpg(pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
-    payload = release_status(pipeline)
+    _mark_cancelled(paths)
+    payload = release_status(pipeline, run_id=run_id)
     payload["stop_result"] = "killed"
     return payload
 
@@ -182,6 +250,37 @@ def parse_duration(value: str) -> int:
 
 def format_yamlish(payload: dict[str, Any]) -> str:
     return yaml.safe_dump(payload, allow_unicode=True, sort_keys=False).strip()
+
+
+def _resolve_paths(*, pipeline: str | None, run_id: str | None) -> tuple[RunPaths | None, bool]:
+    cwd = Path.cwd()
+    paths = resolve_run(cwd, run_id=run_id, pipeline=pipeline)
+    if paths is not None:
+        return paths, False
+    if pipeline is None:
+        return None, False
+    legacy = artifact_paths(pipeline)
+    if not any(legacy[key].exists() for key in ("pid", "exit", "status", "log")):
+        return None, False
+    return (
+        RunPaths(
+            run_id=pipeline,
+            root=legacy["dir"],
+            manifest=legacy["meta"],
+            status=legacy["status"],
+            log=legacy["log"],
+            exit=legacy["exit"],
+            pid=legacy["pid"],
+        ),
+        True,
+    )
+
+
+def _mark_cancelled(paths: RunPaths) -> None:
+    payload = read_json(paths.status) or {}
+    payload.update({"status": "cancelled", "finished_at": now(), "updated_at": now()})
+    write_json_atomic(paths.status, payload)
+    write_exit_code(paths.exit, 130)
 
 
 def _read_pid(path: Path) -> int | None:
@@ -212,23 +311,6 @@ def _pid_running(pid: int | None) -> bool:
 
 def _mtime(path: Path) -> str | None:
     try:
-        return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat()
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(path.stat().st_mtime))
     except OSError:
         return None
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _read_json(path: Path) -> Any:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-
-
-def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    tmp.replace(path)

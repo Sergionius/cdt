@@ -40,6 +40,7 @@ def plan_payload(config: PipelineConfig, name: str, *, errors: list[dict[str, st
         "pipeline": name,
         "pipelines": pipeline_names(config),
         "plugins": list(config.plugins),
+        "declared_risk": pipeline.risk if pipeline is not None else None,
         "overall_risk": _aggregate_risks([_node_risk(step) for step in steps]),
         "steps": steps,
         "warnings": warnings,

@@ -4,57 +4,32 @@ CDT includes reusable Agent Skills under `skills/`.
 
 ## `cdt-release`
 
-Path: `skills/cdt-release/SKILL.md`
-
-Use this skill for AI-agent assisted CDT releases. It tells the agent to validate
-and inspect pipelines before execution, avoid production unless explicitly
-requested and confirmed, write long command output to
-`.cdt/agent-release-<pipeline>.log`, and summarize release results concisely.
-
-Related agent rule file:
+Path:
 
 ```text
+skills/cdt-release/SKILL.md
+```
+
+Use this skill for agent-assisted CDT releases. It tells the agent to validate and inspect pipelines before execution, require exact confirmation for production, use isolated run IDs for long work, wait on compact status JSON, and summarize results without pasting complete build logs.
+
+Related repository guidance:
+
+```text
+AGENTS.md
 .agents/rules/cdt-release.md
 ```
 
-The rule file contains the short hard requirements for agents that support
-repository-level rules. The skill remains the full operating procedure.
+Clients that support the `SKILL.md` directory layout can copy or symlink `skills/cdt-release/` into their skill directory. Repository-level agents should start from `AGENTS.md` and follow the linked release safety rule.
 
-## Pi setup
+After installation, requests such as “отправь тестовую сборку через cdt” should load `cdt-release` when the client supports skill discovery.
 
-Install the CDT repository as a Pi package:
+## Human operation remains supported
 
-```sh
-pi install git:github.com/Sergionius/cdt
+The skill is optional. A developer can always run the same pipeline directly:
+
+```bash
+cdt pipeline plan test
+cdt run test
 ```
 
-Or install from a local checkout:
-
-```sh
-pi install /path/to/cdt
-```
-
-Pi discovers the conventional `skills/` directory automatically.
-
-## Codex and other Agent Skills clients
-
-Copy or symlink the skill directory into the client's skills location:
-
-```sh
-mkdir -p ~/.codex/skills
-ln -s /path/to/cdt/skills/cdt-release ~/.codex/skills/cdt-release
-```
-
-After installation, requests like “отправь тестовую сборку через cdt” should load
-`cdt-release` automatically when the client supports skill discovery.
-
-## Other Agent Skills clients
-
-Other clients that support the `SKILL.md` directory layout can use
-`skills/cdt-release/` according to their own installation mechanism.
-
-## Claude Code and repository-level agents
-
-Claude Code and other agents that read repository instructions should start from
-`AGENTS.md`. It points release work to `skills/cdt-release/SKILL.md` and the
-hard safety rules in `.agents/rules/cdt-release.md`.
+Agent and human execution use the same pipeline configuration, safety declarations, artifact model, and run status implementation.

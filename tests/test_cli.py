@@ -36,7 +36,12 @@ def test_root_help_lists_commands():
 
     assert result.exit_code == 0
     for command in (
+        "init",
         "run",
+        "history",
+        "status",
+        "logs",
+        "schema",
         "pipeline",
         "agent-release",
         "doctor",
@@ -67,12 +72,12 @@ def test_python_module_version_flag():
 
 def test_command_help_lists_key_options():
     cases = {
-        "run": ("--id", "--dry-run", "--status-file"),
+        "run": ("--id", "--dry-run", "--status-file", "--confirm"),
         "pipeline": (),
         "agent-release": (),
-        "agent-release start": ("--id", "--json"),
-        "agent-release status": ("--wait", "--timeout", "--json"),
-        "agent-release stop": ("--timeout", "--json"),
+        "agent-release start": ("--id", "--confirm", "--json"),
+        "agent-release status": ("--run", "--wait", "--timeout", "--json"),
+        "agent-release stop": ("--run", "--timeout", "--json"),
     }
 
     for command, options in cases.items():

@@ -1,4 +1,4 @@
-include README.md LICENSE CHANGELOG.md AGENTS.md
+include README.md LICENSE CHANGELOG.md AGENTS.md CONTRIBUTING.md SECURITY.md
 include examples/cdt.yaml
 recursive-include .agents *.md
 recursive-include docs *.md

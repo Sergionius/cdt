@@ -1,7 +1,7 @@
 [project]
-name = "cdt"
-version = "0.3.6"
-description = "AI-friendly release automation CLI for mobile, web, and custom deployments"
+name = "cdt-release"
+version = "0.4.0"
+description = "Agent-first release automation CLI for mobile, web, and custom deployments"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -15,6 +15,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Build Tools",
     "Topic :: Utilities",
 ]
@@ -33,13 +34,15 @@ cdt = "cdt.cli:app"
 
 [project.urls]
 Repository = "https://github.com/Sergionius/cdt"
+Documentation = "https://github.com/Sergionius/cdt/tree/main/docs"
+Changelog = "https://github.com/Sergionius/cdt/blob/main/CHANGELOG.md"
 Issues = "https://github.com/Sergionius/cdt/issues"
 
 [tool.setuptools.packages.find]
 include = ["cdt*"]
 
 [tool.setuptools.package-data]
-cdt = ["py.typed"]
+cdt = ["py.typed", "cdt.schema.json"]
 
 [tool.ruff]
 line-length = 120

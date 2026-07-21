@@ -7,8 +7,10 @@ import typer
 from cdt.artifacts import ArtifactKind
 from cdt.platforms.ios_xcode import (
     _increment_ios_build_number,
+    _ios_xcode_build_ipa,
     _ios_xcode_ipa_artifact,
     _resolve_export_options_plist,
+    _resolve_marketing_version,
     _resolve_project_path,
 )
 
@@ -144,6 +146,60 @@ def test_increment_ios_build_number_errors_when_build_is_not_integer(tmp_path):
             {"IOS_INFO_PLIST": "ios/Runner/Info.plist"},
             "Runner",
         )
+
+
+def test_resolve_marketing_version_reads_xcode_settings(tmp_path, monkeypatch):
+    workspace = tmp_path / "ios" / "Runner.xcworkspace"
+    workspace.mkdir(parents=True)
+
+    class Result:
+        returncode = 0
+        stdout = "    MARKETING_VERSION = 2.4.0\n"
+        stderr = ""
+
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return Result()
+
+    monkeypatch.setattr("cdt.platforms.ios_xcode.subprocess.run", fake_run)
+
+    assert _resolve_marketing_version(tmp_path, {}, "Runner") == "2.4.0"
+    assert "-workspace" in calls[0][0]
+
+
+def test_ios_xcode_build_archives_exports_and_returns_newest_ipa(tmp_path, monkeypatch):
+    workspace = tmp_path / "ios" / "Runner.xcworkspace"
+    workspace.mkdir(parents=True)
+    calls = []
+
+    def fake_run(command, *, cwd):
+        calls.append(command)
+        if "-exportArchive" in command:
+            export_path = Path(command[command.index("-exportPath") + 1])
+            export_path.mkdir(parents=True)
+            (export_path / "Runner.ipa").write_text("ipa", encoding="utf-8")
+        return 0
+
+    monkeypatch.setattr("cdt.platforms.ios_xcode._run", fake_run)
+
+    ipa = _ios_xcode_build_ipa(tmp_path, {}, "Runner")
+
+    assert ipa.name == "Runner.ipa"
+    assert calls[0][1] == "archive"
+    assert "-workspace" in calls[0]
+    assert calls[1][1] == "-exportArchive"
+
+
+def test_ios_xcode_build_stops_after_archive_failure(tmp_path, monkeypatch):
+    workspace = tmp_path / "ios" / "Runner.xcworkspace"
+    workspace.mkdir(parents=True)
+    monkeypatch.setattr("cdt.platforms.ios_xcode._run", lambda command, *, cwd: 1)
+    monkeypatch.setattr("cdt.platforms.ios_xcode._play_fail_sound", lambda env, cwd: None)
+
+    with pytest.raises(typer.Exit):
+        _ios_xcode_build_ipa(tmp_path, {}, "Runner")
 
 
 def test_ios_xcode_ipa_artifact_wraps_path(tmp_path):
