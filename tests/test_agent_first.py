@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -79,7 +80,8 @@ def test_production_pipeline_requires_exact_confirmation(tmp_path, monkeypatch):
     accepted = runner.invoke(app, ["run", "test", "--confirm", "test"])
 
     assert rejected.exit_code != 0
-    assert "requires --confirm test" in rejected.output
+    visible_output = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", rejected.output)
+    assert "requires --confirm test" in " ".join(visible_output.split())
     assert accepted.exit_code == 0
 
 
