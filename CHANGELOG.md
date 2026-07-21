@@ -4,6 +4,19 @@
 
 - Nothing yet.
 
+## v0.4.0 - 2026-07-21
+
+- Renamed the Python distribution to `cdt-release` while preserving the `cdt` command, and added PyPI trusted publishing to the release workflow. Existing pipx users must migrate once with `pipx uninstall cdt && pipx install cdt-release`; project `cdt.yaml` files do not require migration.
+- Added isolated `.cdt/runs/<run-id>/` records with atomic manifests, statuses, exit codes, logs, latest-pipeline pointers, and concurrent-run safety.
+- Added `cdt history`, `cdt status`, and `cdt logs` while preserving direct `cdt run <pipeline>` as the primary human workflow.
+- Added run-ID based detached commands: `cdt agent-release status --run <run-id>` and `stop --run <run-id>`.
+- Added explicit pipeline `risk: production` and exact `--confirm <pipeline>` enforcement for interactive and detached execution.
+- Added Flutter/mobile project detection and reviewable test pipeline generation through `cdt init`.
+- Added a bundled `cdt.yaml` JSON Schema and `cdt schema` command for editor integration.
+- Updated Agent Skill guidance to use compact run status rather than parsing healthy logs.
+- Added security and contribution policies, refreshed installation and pipeline documentation, and documented separate human and agent workflows.
+- Consolidated duplicate CI workflows, added Python 3.13 coverage, expanded wheel smoke checks, and raised total test coverage from 81% to 84%.
+
 ## v0.3.6 - 2026-07-18
 
 - Added sequential branches inside parallel pipeline groups, enabling prod flows such as iOS alongside Android AAB followed immediately by APK.

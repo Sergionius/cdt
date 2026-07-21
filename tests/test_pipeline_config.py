@@ -114,6 +114,28 @@ def test_runtime_interpolation_can_read_values_set_by_previous_step(tmp_path):
     assert events == ["done"]
 
 
+def test_pipeline_risk_defaults_to_standard_and_accepts_production(tmp_path):
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  test:\n    steps: []\n  prod:\n    risk: production\n    steps: []\n",
+        encoding="utf-8",
+    )
+
+    config = load_pipeline_config(tmp_path)
+
+    assert config.pipelines["test"].risk == "standard"
+    assert config.pipelines["prod"].risk == "production"
+
+
+def test_pipeline_rejects_unknown_risk(tmp_path):
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    risk: dangerous\n    steps: []\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(typer.BadParameter, match="standard.*production"):
+        load_pipeline_config(tmp_path)
+
+
 def test_parallel_group_parses_into_explicit_model(tmp_path):
     (tmp_path / "cdt.yaml").write_text(
         "\n".join(

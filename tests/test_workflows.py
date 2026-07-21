@@ -30,6 +30,15 @@ def test_ci_cli_smoke_covers_agent_release_help():
         assert command in text
 
 
+def test_release_uses_trusted_publishing_and_checksums():
+    text = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+
+    assert "id-token: write" in text
+    assert "pypa/gh-action-pypi-publish@release/v1" in text
+    assert "sha256sum *.whl *.tar.gz > SHA256SUMS" in text
+    assert "dist/SHA256SUMS" in text
+
+
 def test_release_github_tag_smoke_retries_with_sleep():
     text = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
 

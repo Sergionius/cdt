@@ -1,0 +1,1512 @@
+{
+  "$defs": {
+    "item": {
+      "oneOf": [
+        {
+          "enum": [
+            "android.build_aab",
+            "android.build_apk",
+            "appstore.upload_testflight",
+            "artifact.copy_to_downloads",
+            "firebase.deploy",
+            "firebase.ensure_cli",
+            "firebase.upload_app_distribution",
+            "flutter.increment_build_number",
+            "flutter.pub_get",
+            "git.commit_push",
+            "git.prepare_clean_main",
+            "hook.python_script",
+            "ios.bump_xcode_build_number",
+            "ios.flutter_build_ipa",
+            "ios.xcode_build_ipa",
+            "notify.prod_user_agent",
+            "notify.success",
+            "tracker.comment",
+            "web.build",
+            "web.cache_bust",
+            "web.copy"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "android.build_aab": {
+              "additionalProperties": false,
+              "properties": {
+                "artifact": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "dart_defines": {},
+                "extra_args": {
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "flavor": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "no_pub": {
+                  "type": "boolean"
+                },
+                "no_shrink": {
+                  "type": "boolean"
+                },
+                "obfuscate": {
+                  "type": "boolean"
+                },
+                "profile": {
+                  "type": "string"
+                },
+                "split_debug_info": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "target": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "android.build_aab"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "android.build_apk": {
+              "additionalProperties": false,
+              "properties": {
+                "artifact": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "dart_defines": {},
+                "extra_args": {
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "flavor": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "no_pub": {
+                  "type": "boolean"
+                },
+                "no_shrink": {
+                  "type": "boolean"
+                },
+                "obfuscate": {
+                  "type": "boolean"
+                },
+                "profile": {
+                  "type": "string"
+                },
+                "split_debug_info": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "target": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "android.build_apk"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "appstore.upload_testflight": {
+              "additionalProperties": false,
+              "properties": {
+                "artifact": {
+                  "type": "string"
+                },
+                "changelog": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {}
+                  ]
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "appstore.upload_testflight"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "artifact.copy_to_downloads": {
+              "additionalProperties": false,
+              "properties": {
+                "artifact": {
+                  "type": "string"
+                },
+                "destination": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "artifact"
+              ],
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "artifact.copy_to_downloads"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "firebase.deploy": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "firebase.deploy"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "firebase.ensure_cli": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "firebase.ensure_cli"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "firebase.upload_app_distribution": {
+              "additionalProperties": false,
+              "properties": {
+                "artifact": {
+                  "type": "string"
+                },
+                "release_notes_from_ids": {
+                  "type": "boolean"
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "firebase.upload_app_distribution"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "flutter.increment_build_number": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "flutter.increment_build_number"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "flutter.pub_get": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "flutter.pub_get"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "git.commit_push": {
+              "additionalProperties": false,
+              "properties": {
+                "message": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "repository": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "git.commit_push"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "git.prepare_clean_main": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "git.prepare_clean_main"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "hook.python_script": {
+              "additionalProperties": false,
+              "properties": {
+                "args": {
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "env": {
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "fail_on_error": {
+                  "type": "boolean"
+                },
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "outputs": {
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "script": {
+                  "type": "string"
+                },
+                "strict_outputs": {
+                  "type": "boolean"
+                },
+                "timeout": {
+                  "type": [
+                    "integer",
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "script"
+              ],
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "hook.python_script"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ios.bump_xcode_build_number": {
+              "additionalProperties": false,
+              "properties": {
+                "fallback_scheme_key": {
+                  "type": "string"
+                },
+                "scheme_key": {
+                  "type": "string"
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "ios.bump_xcode_build_number"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ios.flutter_build_ipa": {
+              "additionalProperties": false,
+              "properties": {
+                "artifact": {
+                  "type": "string"
+                },
+                "dart_defines": {},
+                "extra_args": {
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "flavor": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "no_pub": {
+                  "type": "boolean"
+                },
+                "obfuscate": {
+                  "type": "boolean"
+                },
+                "profile": {
+                  "type": "string"
+                },
+                "split_debug_info": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "target": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "ios.flutter_build_ipa"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ios.xcode_build_ipa": {
+              "additionalProperties": false,
+              "properties": {
+                "artifact": {
+                  "type": "string"
+                },
+                "mode": {
+                  "type": "string"
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "ios.xcode_build_ipa"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "notify.prod_user_agent": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "notify.prod_user_agent"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "notify.success": {
+              "additionalProperties": false,
+              "properties": {
+                "include_ids": {
+                  "type": "boolean"
+                },
+                "message": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "notify.success"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "tracker.comment": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "tracker.comment"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "web.build": {
+              "additionalProperties": false,
+              "properties": {
+                "env": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "env_name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "web.build"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "web.cache_bust": {
+              "additionalProperties": false,
+              "properties": {
+                "destination": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "inner": {
+                  "type": [
+                    "boolean",
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "web.cache_bust"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "web.copy": {
+              "additionalProperties": false,
+              "properties": {
+                "destination": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "inner": {
+                  "type": [
+                    "boolean",
+                    "string",
+                    "null"
+                  ]
+                },
+                "repository": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "web.copy"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "description": "Project plugin step",
+          "maxProperties": 1,
+          "minProperties": 1,
+          "propertyNames": {
+            "pattern": "^(?!parallel$|sequence$)[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)+$"
+          },
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "parallel": {
+              "additionalProperties": false,
+              "properties": {
+                "steps": {
+                  "items": {
+                    "$ref": "#/$defs/parallelItem"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "steps"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "parallel"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "sequence": {
+              "additionalProperties": false,
+              "properties": {
+                "steps": {
+                  "items": {
+                    "$ref": "#/$defs/step"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "steps"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "sequence"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "parallelItem": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/step"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "sequence": {
+              "additionalProperties": false,
+              "properties": {
+                "steps": {
+                  "items": {
+                    "$ref": "#/$defs/step"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "steps"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "sequence"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "pipeline": {
+      "additionalProperties": false,
+      "properties": {
+        "risk": {
+          "default": "standard",
+          "enum": [
+            "standard",
+            "production"
+          ]
+        },
+        "steps": {
+          "items": {
+            "$ref": "#/$defs/item"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "steps"
+      ],
+      "type": "object"
+    },
+    "step": {
+      "oneOf": [
+        {
+          "enum": [
+            "android.build_aab",
+            "android.build_apk",
+            "appstore.upload_testflight",
+            "artifact.copy_to_downloads",
+            "firebase.deploy",
+            "firebase.ensure_cli",
+            "firebase.upload_app_distribution",
+            "flutter.increment_build_number",
+            "flutter.pub_get",
+            "git.commit_push",
+            "git.prepare_clean_main",
+            "hook.python_script",
+            "ios.bump_xcode_build_number",
+            "ios.flutter_build_ipa",
+            "ios.xcode_build_ipa",
+            "notify.prod_user_agent",
+            "notify.success",
+            "tracker.comment",
+            "web.build",
+            "web.cache_bust",
+            "web.copy"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "android.build_aab": {
+              "additionalProperties": false,
+              "properties": {
+                "artifact": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "dart_defines": {},
+                "extra_args": {
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "flavor": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "no_pub": {
+                  "type": "boolean"
+                },
+                "no_shrink": {
+                  "type": "boolean"
+                },
+                "obfuscate": {
+                  "type": "boolean"
+                },
+                "profile": {
+                  "type": "string"
+                },
+                "split_debug_info": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "target": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "android.build_aab"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "android.build_apk": {
+              "additionalProperties": false,
+              "properties": {
+                "artifact": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "dart_defines": {},
+                "extra_args": {
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "flavor": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "no_pub": {
+                  "type": "boolean"
+                },
+                "no_shrink": {
+                  "type": "boolean"
+                },
+                "obfuscate": {
+                  "type": "boolean"
+                },
+                "profile": {
+                  "type": "string"
+                },
+                "split_debug_info": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "target": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "android.build_apk"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "appstore.upload_testflight": {
+              "additionalProperties": false,
+              "properties": {
+                "artifact": {
+                  "type": "string"
+                },
+                "changelog": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {}
+                  ]
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "appstore.upload_testflight"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "artifact.copy_to_downloads": {
+              "additionalProperties": false,
+              "properties": {
+                "artifact": {
+                  "type": "string"
+                },
+                "destination": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "artifact"
+              ],
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "artifact.copy_to_downloads"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "firebase.deploy": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "firebase.deploy"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "firebase.ensure_cli": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "firebase.ensure_cli"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "firebase.upload_app_distribution": {
+              "additionalProperties": false,
+              "properties": {
+                "artifact": {
+                  "type": "string"
+                },
+                "release_notes_from_ids": {
+                  "type": "boolean"
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "firebase.upload_app_distribution"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "flutter.increment_build_number": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "flutter.increment_build_number"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "flutter.pub_get": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "flutter.pub_get"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "git.commit_push": {
+              "additionalProperties": false,
+              "properties": {
+                "message": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "repository": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "git.commit_push"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "git.prepare_clean_main": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "git.prepare_clean_main"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "hook.python_script": {
+              "additionalProperties": false,
+              "properties": {
+                "args": {
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "env": {
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "fail_on_error": {
+                  "type": "boolean"
+                },
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "outputs": {
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "script": {
+                  "type": "string"
+                },
+                "strict_outputs": {
+                  "type": "boolean"
+                },
+                "timeout": {
+                  "type": [
+                    "integer",
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "script"
+              ],
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "hook.python_script"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ios.bump_xcode_build_number": {
+              "additionalProperties": false,
+              "properties": {
+                "fallback_scheme_key": {
+                  "type": "string"
+                },
+                "scheme_key": {
+                  "type": "string"
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "ios.bump_xcode_build_number"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ios.flutter_build_ipa": {
+              "additionalProperties": false,
+              "properties": {
+                "artifact": {
+                  "type": "string"
+                },
+                "dart_defines": {},
+                "extra_args": {
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "flavor": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "no_pub": {
+                  "type": "boolean"
+                },
+                "obfuscate": {
+                  "type": "boolean"
+                },
+                "profile": {
+                  "type": "string"
+                },
+                "split_debug_info": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "target": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "ios.flutter_build_ipa"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ios.xcode_build_ipa": {
+              "additionalProperties": false,
+              "properties": {
+                "artifact": {
+                  "type": "string"
+                },
+                "mode": {
+                  "type": "string"
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "ios.xcode_build_ipa"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "notify.prod_user_agent": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "notify.prod_user_agent"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "notify.success": {
+              "additionalProperties": false,
+              "properties": {
+                "include_ids": {
+                  "type": "boolean"
+                },
+                "message": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "notify.success"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "tracker.comment": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "tracker.comment"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "web.build": {
+              "additionalProperties": false,
+              "properties": {
+                "env": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "env_name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "web.build"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "web.cache_bust": {
+              "additionalProperties": false,
+              "properties": {
+                "destination": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "inner": {
+                  "type": [
+                    "boolean",
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "web.cache_bust"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "web.copy": {
+              "additionalProperties": false,
+              "properties": {
+                "destination": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "inner": {
+                  "type": [
+                    "boolean",
+                    "string",
+                    "null"
+                  ]
+                },
+                "repository": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "web.copy"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "description": "Project plugin step",
+          "maxProperties": 1,
+          "minProperties": 1,
+          "propertyNames": {
+            "pattern": "^(?!parallel$|sequence$)[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)+$"
+          },
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$id": "https://raw.githubusercontent.com/Sergionius/cdt/main/cdt/cdt.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "pipelines": {
+      "additionalProperties": {
+        "$ref": "#/$defs/pipeline"
+      },
+      "minProperties": 1,
+      "type": "object"
+    },
+    "plugins": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "version": {
+      "const": 1
+    }
+  },
+  "required": [
+    "version",
+    "pipelines"
+  ],
+  "title": "CDT pipeline configuration",
+  "type": "object"
+}

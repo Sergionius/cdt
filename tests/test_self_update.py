@@ -51,12 +51,12 @@ def test_owner_repo_from_url_rejects_suspicious_urls(repo_url):
 
 
 def test_latest_release_tag_parses_tag_name():
-    response = FakeResponse(github_latest_release_json("v0.4.0"))
+    response = FakeResponse(github_latest_release_json("v0.5.0"))
 
     with patch("urllib.request.urlopen", return_value=response) as mock_urlopen:
         tag = _latest_release_tag("Sergionius", "cdt")
 
-    assert tag == "v0.4.0"
+    assert tag == "v0.5.0"
     mock_urlopen.assert_called_once()
     request = mock_urlopen.call_args[0][0]
     assert "Sergionius/cdt" in request.full_url
@@ -64,12 +64,12 @@ def test_latest_release_tag_parses_tag_name():
 
 
 def test_latest_release_tag_strips_whitespace():
-    response = FakeResponse(github_latest_release_json("  v0.4.0  "))
+    response = FakeResponse(github_latest_release_json("  v0.5.0  "))
 
     with patch("urllib.request.urlopen", return_value=response):
         tag = _latest_release_tag("Sergionius", "cdt")
 
-    assert tag == "v0.4.0"
+    assert tag == "v0.5.0"
 
 
 def test_latest_release_tag_missing_tag_name_raises():
@@ -292,49 +292,49 @@ def test_detect_install_method_handles_malformed_pipx_venv_data(monkeypatch):
 
 
 def test_update_command_for_pipx():
-    cmd = _update_command("v0.4.0", "pipx", owner="Sergionius", repo="cdt")
+    cmd = _update_command("v0.5.0", "pipx", owner="Sergionius", repo="cdt")
     assert cmd == [
         "pipx",
         "install",
         "--force",
-        "git+https://github.com/Sergionius/cdt.git@v0.4.0",
+        "git+https://github.com/Sergionius/cdt.git@v0.5.0",
     ]
 
 
 def test_update_command_for_pip():
-    cmd = _update_command("v0.4.0", "pip", owner="Sergionius", repo="cdt")
+    cmd = _update_command("v0.5.0", "pip", owner="Sergionius", repo="cdt")
     assert cmd[:3] == [sys.executable, "-m", "pip"]
     assert "--force-reinstall" in cmd
-    assert "git+https://github.com/Sergionius/cdt.git@v0.4.0" in cmd
+    assert "git+https://github.com/Sergionius/cdt.git@v0.5.0" in cmd
 
 
 def test_update_command_unsupported_method_raises():
     with pytest.raises(SelfUpdateError, match="Unsupported"):
-        _update_command("v0.4.0", "unknown", owner="Sergionius", repo="cdt")
+        _update_command("v0.5.0", "unknown", owner="Sergionius", repo="cdt")
 
 
 def test_update_command_for_uv_requires_uv(monkeypatch):
     monkeypatch.setattr(self_update.shutil, "which", lambda name: None)
     with pytest.raises(SelfUpdateError, match="uv is not available"):
-        _update_command("v0.4.0", "uv", owner="Sergionius", repo="cdt")
+        _update_command("v0.5.0", "uv", owner="Sergionius", repo="cdt")
 
 
 def test_update_command_rejects_unsafe_tag():
     with pytest.raises(SelfUpdateError, match="Unsafe"):
-        _update_command("v0.4.0 evil", "pipx", owner="Sergionius", repo="cdt")
+        _update_command("v0.5.0 evil", "pipx", owner="Sergionius", repo="cdt")
 
 
 def test_manual_update_command_quotes_url_and_python(monkeypatch):
     monkeypatch.setattr(sys, "executable", "/path with spaces/python3")
-    command = _manual_update_command("v0.4.0", owner="Sergionius", repo="cdt")
+    command = _manual_update_command("v0.5.0", owner="Sergionius", repo="cdt")
     assert "'/path with spaces/python3'" in command
-    assert "pipx install --force git+https://github.com/Sergionius/cdt.git@v0.4.0" in command
-    assert "git+https://github.com/Sergionius/cdt.git@v0.4.0" in command
+    assert "pipx install --force git+https://github.com/Sergionius/cdt.git@v0.5.0" in command
+    assert "git+https://github.com/Sergionius/cdt.git@v0.5.0" in command
 
 
 def test_run_self_update_dry_run_prints_command(monkeypatch, capsys):
     def fake_urlopen(url, **kwargs):
-        return FakeResponse(github_latest_release_json("v0.4.0"))
+        return FakeResponse(github_latest_release_json("v0.5.0"))
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr(
@@ -348,14 +348,14 @@ def test_run_self_update_dry_run_prints_command(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert exit_code == 0
     assert f"Current version: {__version__}" in captured.out
-    assert "Latest release: v0.4.0" in captured.out
+    assert "Latest release: v0.5.0" in captured.out
     assert "pipx install --force" in captured.out
     assert "Dry run" in captured.out
 
 
 def test_run_self_update_uses_shell_safe_command_join(monkeypatch, capsys):
     def fake_urlopen(url, **kwargs):
-        return FakeResponse(github_latest_release_json("v0.4.0"))
+        return FakeResponse(github_latest_release_json("v0.5.0"))
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr(sys, "executable", "/path with spaces/python3")
@@ -370,12 +370,12 @@ def test_run_self_update_uses_shell_safe_command_join(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "'/path with spaces/python3'" in captured.out
-    assert "git+https://github.com/Sergionius/cdt.git@v0.4.0" in captured.out
+    assert "git+https://github.com/Sergionius/cdt.git@v0.5.0" in captured.out
 
 
 def test_run_self_update_dry_run_without_detected_method_shows_manual_command(monkeypatch, capsys):
     def fake_urlopen(url, **kwargs):
-        return FakeResponse(github_latest_release_json("v0.4.0"))
+        return FakeResponse(github_latest_release_json("v0.5.0"))
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr(self_update, "_detect_install_method", lambda: None)
@@ -430,7 +430,7 @@ def test_run_self_update_unknown_method_exits_with_error(monkeypatch, capsys):
 
 def test_run_self_update_executes_command(monkeypatch, capsys):
     def fake_urlopen(url, **kwargs):
-        return FakeResponse(github_latest_release_json("v0.4.0"))
+        return FakeResponse(github_latest_release_json("v0.5.0"))
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr(self_update, "_detect_install_method", lambda: ("pipx", False))
@@ -450,13 +450,13 @@ def test_run_self_update_executes_command(monkeypatch, capsys):
 
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert recorded == [["pipx", "install", "--force", "git+https://github.com/Sergionius/cdt.git@v0.4.0"]]
+    assert recorded == [["pipx", "install", "--force", "git+https://github.com/Sergionius/cdt.git@v0.5.0"]]
     assert "Running update" in captured.out
 
 
 def test_run_self_update_propagates_command_failure(monkeypatch, capsys):
     def fake_urlopen(url, **kwargs):
-        return FakeResponse(github_latest_release_json("v0.4.0"))
+        return FakeResponse(github_latest_release_json("v0.5.0"))
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr(self_update, "_detect_install_method", lambda: ("pipx", False))
@@ -477,7 +477,7 @@ def test_run_self_update_propagates_command_failure(monkeypatch, capsys):
 
 def test_run_self_update_handles_missing_executable(monkeypatch, capsys):
     def fake_urlopen(url, **kwargs):
-        return FakeResponse(github_latest_release_json("v0.4.0"))
+        return FakeResponse(github_latest_release_json("v0.5.0"))
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr(self_update, "_detect_install_method", lambda: ("pipx", False))
@@ -496,7 +496,7 @@ def test_run_self_update_handles_missing_executable(monkeypatch, capsys):
 
 def test_run_self_update_handles_os_error(monkeypatch, capsys):
     def fake_urlopen(url, **kwargs):
-        return FakeResponse(github_latest_release_json("v0.4.0"))
+        return FakeResponse(github_latest_release_json("v0.5.0"))
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr(self_update, "_detect_install_method", lambda: ("pipx", False))
@@ -515,7 +515,7 @@ def test_run_self_update_handles_os_error(monkeypatch, capsys):
 
 def test_run_self_update_handles_timeout(monkeypatch, capsys):
     def fake_urlopen(url, **kwargs):
-        return FakeResponse(github_latest_release_json("v0.4.0"))
+        return FakeResponse(github_latest_release_json("v0.5.0"))
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr(self_update, "_detect_install_method", lambda: ("pipx", False))
@@ -624,11 +624,11 @@ def test_detect_install_method_detects_pip_user_install(monkeypatch):
 
 
 def test_update_command_for_pip_includes_user_flag_when_requested():
-    cmd = _update_command("v0.4.0", "pip", is_user=True, owner="Sergionius", repo="cdt")
+    cmd = _update_command("v0.5.0", "pip", is_user=True, owner="Sergionius", repo="cdt")
     assert cmd[:3] == [sys.executable, "-m", "pip"]
     assert "--force-reinstall" in cmd
     assert "--user" in cmd
-    assert "git+https://github.com/Sergionius/cdt.git@v0.4.0" in cmd
+    assert "git+https://github.com/Sergionius/cdt.git@v0.5.0" in cmd
 
 
 def test_detect_install_method_handles_non_dict_pipx_payload(monkeypatch):

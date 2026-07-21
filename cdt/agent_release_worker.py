@@ -8,15 +8,21 @@ from pathlib import Path
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--pipeline", required=True)
+    parser.add_argument("--run-id")
     parser.add_argument("--log", required=True)
     parser.add_argument("--exit-file", required=True)
     parser.add_argument("--status-file", required=True)
     parser.add_argument("--id", action="append", default=[])
+    parser.add_argument("--confirm")
     args = parser.parse_args()
 
     cmd = [sys.executable, "-m", "cdt", "run", args.pipeline, "--status-file", args.status_file]
+    if args.run_id is not None:
+        cmd.extend(["--run-id", args.run_id])
     for task_id in args.id:
         cmd.extend(["--id", task_id])
+    if args.confirm is not None:
+        cmd.extend(["--confirm", args.confirm])
 
     log_path = Path(args.log)
     log_path.parent.mkdir(parents=True, exist_ok=True)

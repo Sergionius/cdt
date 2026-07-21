@@ -83,6 +83,6 @@ Hard requirements:
 
 - inspect `cdt.yaml` before running a pipeline;
 - run `cdt pipeline list` and `cdt pipeline inspect <pipeline>` as preflight;
-- write long release output to `.cdt/agent-release-<pipeline>.log`;
+- use the isolated `.cdt/runs/<run-id>/output.log` created by detached execution;
 - never run production-like pipelines without exact human confirmation;
 - provide a concise structured summary after the run.

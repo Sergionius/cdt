@@ -21,12 +21,12 @@ def test_cdt_release_skill_is_agent_skill_compatible():
         "Confirm `cdt.yaml` exists",
         "cdt pipeline list",
         "cdt pipeline inspect <pipeline>",
-        "Never run production pipelines",
-        "Production Confirmation",
+        "Never run production-like work",
+        "Production confirmation",
         "status: success",
-        ".cdt/agent-release-<pipeline>.log",
-        ".cdt/agent-release-<pipeline>.json",
-        "Do not immediately retry if `pubspec.yaml` or version files changed",
+        ".cdt/runs/<run-id>/output.log",
+        "cdt agent-release status --run <run-id>",
+        "Do not retry immediately if version files",
     ]
     for phrase in required_phrases:
         assert phrase in body

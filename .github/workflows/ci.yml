@@ -12,7 +12,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@v4
@@ -41,11 +41,24 @@ jobs:
       - name: Twine check
         run: python -m twine check dist/*
 
+      - name: Smoke test built wheel
+        shell: bash
+        run: |
+          python -m venv "${RUNNER_TEMP}/cdt-smoke"
+          "${RUNNER_TEMP}/cdt-smoke/bin/python" -m pip install dist/*.whl
+          "${RUNNER_TEMP}/cdt-smoke/bin/cdt" --version
+          "${RUNNER_TEMP}/cdt-smoke/bin/cdt" --help
+
       - name: CLI smoke
         run: |
           python -m cdt --version
           python -m cdt --help
+          python -m cdt init --help
           python -m cdt run --help
+          python -m cdt history --help
+          python -m cdt status --help
+          python -m cdt logs --help
+          python -m cdt schema --help
           python -m cdt agent-release --help
           python -m cdt agent-release start --help
           python -m cdt agent-release status --help

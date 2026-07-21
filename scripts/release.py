@@ -19,7 +19,7 @@ GITHUB_TAG_INSTALL_RE = re.compile(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Prepare a CDT GitHub release")
+    parser = argparse.ArgumentParser(description="Prepare a CDT release")
     parser.add_argument("version", help="Version without leading v, e.g. 0.3.3")
     parser.add_argument("--dry-run", action="store_true", help="Print planned actions without changing files")
     parser.add_argument(

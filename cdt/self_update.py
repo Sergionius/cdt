@@ -224,7 +224,7 @@ def _detect_install_method() -> tuple[str, bool] | None:
                 if not isinstance(metadata, dict):
                     continue
                 main_package = metadata.get("main_package", {})
-                if isinstance(main_package, dict) and main_package.get("package") == "cdt":
+                if isinstance(main_package, dict) and main_package.get("package") in {"cdt", "cdt-release"}:
                     return "pipx", False
     except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError, UnicodeDecodeError):
         pass
