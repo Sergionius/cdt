@@ -15,7 +15,7 @@ pipx install cdt-release
 A specific GitHub release can also be installed directly:
 
 ```bash
-pipx install "git+https://github.com/Sergionius/cdt.git@v0.4.0"
+pipx install "git+https://github.com/Sergionius/cdt.git@v0.4.1"
 ```
 
 Upgrade or reinstall:
