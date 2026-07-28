@@ -123,41 +123,61 @@ def run_paths(cwd: Path, run_id: str) -> RunPaths:
 
 def resolve_run(cwd: Path, *, run_id: str | None = None, pipeline: str | None = None) -> RunPaths | None:
     if run_id:
-        paths = run_paths(cwd, run_id)
+        try:
+            paths = run_paths(cwd, run_id)
+        except ValueError:
+            return None
         return paths if paths.root.is_dir() else None
     if pipeline:
         marker = latest_marker(cwd, pipeline)
         try:
             latest_id = marker.read_text(encoding="utf-8").strip()
-        except OSError:
-            return None
-        paths = run_paths(cwd, latest_id)
-        return paths if paths.root.is_dir() else None
-    return None
+            paths = run_paths(cwd, latest_id)
+        except (OSError, ValueError):
+            paths = None
+        if paths is not None and paths.root.is_dir():
+            return paths
+        recent = list_runs(cwd, limit=1, pipeline=pipeline)
+        return run_paths(cwd, recent[0]["run_id"]) if recent else None
+    recent = list_runs(cwd, limit=1)
+    return run_paths(cwd, recent[0]["run_id"]) if recent else None
 
 
-def list_runs(cwd: Path, limit: int = 20) -> list[dict[str, Any]]:
+def list_runs(
+    cwd: Path,
+    limit: int = 20,
+    *,
+    pipeline: str | None = None,
+    status: str | None = None,
+) -> list[dict[str, Any]]:
     base = runs_dir(cwd)
     if not base.is_dir():
         return []
     result: list[dict[str, Any]] = []
     roots = sorted((path for path in base.iterdir() if path.is_dir()), key=lambda path: path.name, reverse=True)
-    for root in roots[: max(0, limit)]:
-        paths = run_paths(cwd, root.name)
+    for root in roots:
+        try:
+            paths = run_paths(cwd, root.name)
+        except ValueError:
+            continue
         manifest = read_json(paths.manifest) or {}
-        status = read_json(paths.status) or {}
-        result.append(
-            {
-                "schema_version": RUN_SCHEMA_VERSION,
-                "run_id": paths.run_id,
-                "pipeline": status.get("pipeline") or manifest.get("pipeline"),
-                "status": _effective_status(paths, status),
-                "started_at": status.get("started_at") or manifest.get("started_at"),
-                "finished_at": status.get("finished_at"),
-                "log": str(paths.log),
-            }
-        )
-    return result
+        status_payload = read_json(paths.status) or {}
+        item = {
+            "schema_version": RUN_SCHEMA_VERSION,
+            "run_id": paths.run_id,
+            "pipeline": status_payload.get("pipeline") or manifest.get("pipeline"),
+            "status": _effective_status(paths, status_payload),
+            "started_at": status_payload.get("started_at") or manifest.get("started_at"),
+            "finished_at": status_payload.get("finished_at"),
+            "log": str(paths.log),
+        }
+        if pipeline is not None and item["pipeline"] != pipeline:
+            continue
+        if status is not None and item["status"] != status:
+            continue
+        result.append(item)
+    result.sort(key=lambda item: (str(item["started_at"] or ""), item["run_id"]), reverse=True)
+    return result[: max(0, limit)]
 
 
 def latest_marker(cwd: Path, pipeline: str) -> Path:

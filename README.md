@@ -66,8 +66,11 @@ cdt init
 cdt run <pipeline>
 cdt run <pipeline> --dry-run
 cdt history
+cdt history --pipeline test --status failed
+cdt status                         # newest run globally
 cdt status <run-id>
-cdt logs <run-id>
+cdt status --pipeline test
+cdt logs --pipeline test --tail 80
 cdt pipeline list
 cdt pipeline inspect <pipeline> --json
 cdt pipeline plan <pipeline> --json
@@ -82,7 +85,7 @@ cdt self-update --json --check
 
 Static planning commands (`cdt pipeline plan <pipeline>` and `cdt run <pipeline> --dry-run`) show the step tree, risk, warnings, and artifact flow without executing steps.
 
-Every real run is recorded under `.cdt/runs/<run-id>/` with an atomic status file, manifest, exit code, and log location. Human operators can continue to use `cdt run test` directly; run IDs are only needed for later inspection with `cdt history`, `cdt status`, or `cdt logs`. See [Run records](docs/runs.md) for lifecycle, concurrency, retention, and recovery.
+Every real run is recorded under `.cdt/runs/<run-id>/` with an atomic status file, manifest, exit code, and log location. Human operators can continue to use `cdt run test` directly. `cdt status` and `cdt logs` resolve the newest run automatically, while `--pipeline` selects the newest run for one pipeline. Detached output and persisted status errors redact known environment secrets and common credential forms before they are written; `cdt logs` applies the same protection again when reading older records. See [Run records](docs/runs.md) for lifecycle, redaction limitations, concurrency, retention, and recovery.
 
 Resume status migration note: current CDT status files store stable step ids (`0`, `1`, `1/0`, `1/0/1`) instead of step names. Older name-based status files are rejected because duplicate names such as anonymous `parallel` groups are ambiguous. Recreate the status file by rerunning without `--skip-completed`, or use `cdt pipeline inspect <pipeline>` / `cdt pipeline plan <pipeline>` to map completed work to step ids manually.
 

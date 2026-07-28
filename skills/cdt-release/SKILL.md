@@ -13,7 +13,7 @@ Use this skill for every request that executes a CDT release pipeline.
 - Inspect `cdt.yaml`; never infer platform coverage from a pipeline name.
 - Never run production-like work unless the user explicitly requests production and confirms the exact command.
 - Pipelines declared with `risk: production` require exact CDT confirmation, but agent review is still required.
-- Do not paste full build logs. Detached runs write to `.cdt/runs/<run-id>/output.log`; read only a short tail on failure.
+- Do not paste full build logs. Detached runs redact known credentials before writing `.cdt/runs/<run-id>/output.log`; use `cdt logs <run-id> --tail 80` only on failure for defense-in-depth redaction.
 - Prefer one unified test pipeline for a multi-platform release so platforms share one version/build number.
 - Request sufficient filesystem, network, keychain, and build-tool permissions before the first mutating attempt.
 
@@ -84,7 +84,7 @@ For an older CDT without `agent-release`, run `cdt run <pipeline>` with an expli
 
 1. Do not retry immediately if version files or generated project files changed.
 2. Check `git status --short`.
-3. Read only the relevant log tail.
+3. Read only the relevant log tail with `cdt logs <run-id> --tail 80`; do not read `output.log` directly when the command is available.
 4. Report failed step, error, changed version files, artifacts produced, and one recommended next action.
 5. Retry only after approval, except for a pure harness permission failure when elevated execution was already authorized.
 

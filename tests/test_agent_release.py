@@ -1,3 +1,4 @@
+import io
 import json
 import os
 
@@ -52,12 +53,13 @@ def test_agent_release_start_creates_metadata_without_streaming_log(tmp_path, mo
     assert calls[-1][1]["stderr"] == agent_release.subprocess.DEVNULL
 
 
-def test_agent_release_start_failure_creates_terminal_run(tmp_path, monkeypatch):
+def test_agent_release_start_failure_creates_terminal_redacted_run(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("START_TOKEN", "start-secret")
     _write_config(tmp_path)
 
     def fail_popen(*args, **kwargs):
-        raise OSError("cannot spawn")
+        raise OSError("cannot spawn with start-secret")
 
     monkeypatch.setattr(agent_release.subprocess, "Popen", fail_popen)
 
@@ -67,7 +69,9 @@ def test_agent_release_start_failure_creates_terminal_run(tmp_path, monkeypatch)
     assert result.exit_code == 1
     assert payload["status"] == "failed"
     assert payload["exit_code"] == 1
-    assert "cannot spawn" in payload["error"]
+    assert "cannot spawn with ***" in payload["error"]
+    run_dir = tmp_path / ".cdt" / "runs" / payload["run_id"]
+    assert all("start-secret" not in path.read_text(encoding="utf-8") for path in run_dir.iterdir())
 
 
 def test_agent_release_status_is_compact_and_does_not_read_log(tmp_path, monkeypatch):
@@ -129,10 +133,11 @@ def test_agent_release_wait_timeout_preserves_running_status(tmp_path, monkeypat
     assert payload["wait_status"] == "timeout"
 
 
-def test_agent_release_worker_writes_exit_file_when_popen_fails(tmp_path, monkeypatch):
+def test_agent_release_worker_writes_terminal_redacted_status_when_popen_fails(tmp_path, monkeypatch):
     log_path = tmp_path / ".cdt" / "agent-release-test.log"
     exit_path = tmp_path / ".cdt" / "agent-release-test.exit"
     status_path = tmp_path / ".cdt" / "agent-release-test.status.json"
+    monkeypatch.setenv("DEMO_TOKEN", "worker-secret")
     monkeypatch.setattr(
         agent_release_worker.sys,
         "argv",
@@ -150,13 +155,58 @@ def test_agent_release_worker_writes_exit_file_when_popen_fails(tmp_path, monkey
     )
 
     def fail_popen(*args, **kwargs):
-        raise OSError("cannot start")
+        raise OSError("cannot start with worker-secret")
 
     monkeypatch.setattr(agent_release_worker.subprocess, "Popen", fail_popen)
 
     assert agent_release_worker.main() == 1
     assert exit_path.read_text(encoding="utf-8") == "1\n"
-    assert "cannot start" in log_path.read_text(encoding="utf-8")
+    log = log_path.read_text(encoding="utf-8")
+    payload = json.loads(status_path.read_text(encoding="utf-8"))
+    assert "cannot start with ***" in log
+    assert "worker-secret" not in log
+    assert payload["status"] == "failed"
+    assert "cannot start with ***" in payload["error"]
+    assert "worker-secret" not in status_path.read_text(encoding="utf-8")
+
+
+def test_agent_release_worker_marks_missing_terminal_child_status_failed(tmp_path, monkeypatch):
+    log_path = tmp_path / ".cdt" / "output.log"
+    exit_path = tmp_path / ".cdt" / "exit-code"
+    status_path = tmp_path / ".cdt" / "status.json"
+    status_path.parent.mkdir()
+    status_path.write_text(json.dumps({"status": "running"}), encoding="utf-8")
+    monkeypatch.setattr(
+        agent_release_worker.sys,
+        "argv",
+        [
+            "agent_release_worker",
+            "--pipeline",
+            "test",
+            "--run-id",
+            "run-1",
+            "--log",
+            str(log_path),
+            "--exit-file",
+            str(exit_path),
+            "--status-file",
+            str(status_path),
+        ],
+    )
+
+    class CrashedProcess:
+        stdout = io.BytesIO(b"abrupt child exit\n")
+
+        def wait(self):
+            return 7
+
+    monkeypatch.setattr(agent_release_worker.subprocess, "Popen", lambda *args, **kwargs: CrashedProcess())
+
+    assert agent_release_worker.main() == 7
+    payload = json.loads(status_path.read_text(encoding="utf-8"))
+    assert payload["status"] == "failed"
+    assert payload["error"] == "CDT subprocess exited with code 7 before writing a terminal status"
+    assert exit_path.read_text(encoding="utf-8") == "7\n"
 
 
 def test_agent_release_stop_handles_missing_pid(tmp_path, monkeypatch):

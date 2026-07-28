@@ -99,12 +99,13 @@ class PipelineExecutor:
                     produced = sorted(set(ctx.artifacts) - before_artifacts)
                     command = _step_command(step)
                     artifacts = ", ".join(produced) or "none"
-                    exit_code = _exit_code(str(exc))
+                    message = ctx.redact(str(exc))
+                    exit_code = _exit_code(message)
                     summary = (
                         f"Failed step: {step_label}; command: {command}; "
                         f"exit code: {exit_code}; artifacts produced: {artifacts}"
                     )
-                    error = f"{exc}. {summary}"
+                    error = ctx.redact(f"{message}. {summary}")
                     failed_step_id = str(getattr(exc, "failed_step_id", step_id))
                     ctx.mark_status_failed(failed_step_id, error)
                     raise typer.BadParameter(error) from exc

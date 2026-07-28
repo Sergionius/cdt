@@ -73,6 +73,9 @@ def test_python_module_version_flag():
 def test_command_help_lists_key_options():
     cases = {
         "run": ("--id", "--dry-run", "--status-file", "--confirm"),
+        "history": ("--pipeline", "--status", "--limit", "--json"),
+        "status": ("--pipeline", "--json"),
+        "logs": ("--pipeline", "--tail"),
         "pipeline": (),
         "agent-release": (),
         "agent-release start": ("--id", "--confirm", "--json"),

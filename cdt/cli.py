@@ -15,6 +15,7 @@ from .pipeline.preflight import preflight_payload
 from .pipeline.registry import list_steps
 from .pipeline.runner import run_configured_pipeline
 from .pipeline.validation import inspect_payload, step_tree, steps_payload, validate_payload, validate_pipeline
+from .redaction import SecretRedactor
 from .runs import list_runs, resolve_run
 from .schema import bundled_schema_path
 from .self_update import SelfUpdateError, run_self_update
@@ -127,15 +128,28 @@ def init_project(
 @app.command(name="history")
 def run_history(
     limit: int = typer.Option(20, "--limit", min=1, max=500, help="Maximum runs to show"),
+    pipeline: str | None = typer.Option(None, "--pipeline", help="Only show runs for this pipeline"),
+    status_filter: str | None = typer.Option(None, "--status", help="Only show runs with this effective status"),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
 ):
     """List recent pipeline runs."""
-    runs = list_runs(Path.cwd(), limit=limit)
+    valid_statuses = {"queued", "running", "success", "failed", "cancelled", "blocked", "stale", "unknown"}
+    if status_filter is not None and status_filter not in valid_statuses:
+        choices = ", ".join(sorted(valid_statuses))
+        raise typer.BadParameter(f"Unknown run status: {status_filter}. Available statuses: {choices}")
+    runs = list_runs(Path.cwd(), limit=limit, pipeline=pipeline, status=status_filter)
     if json_output:
-        _echo_json({"schema_version": 1, "runs": runs})
+        _echo_json(
+            {
+                "schema_version": 1,
+                "filters": {"pipeline": pipeline, "status": status_filter, "limit": limit},
+                "runs": runs,
+            }
+        )
         return
     if not runs:
-        typer.echo("No recorded runs.")
+        message = "No recorded runs matched the selected filters." if pipeline or status_filter else "No recorded runs."
+        typer.echo(message)
         return
     for item in runs:
         typer.echo(f"{item['run_id']}  {item['status']:<9}  {item['pipeline']}")
@@ -143,11 +157,12 @@ def run_history(
 
 @app.command(name="status")
 def run_status(
-    run_id: str = typer.Argument(..., help="Run id from cdt history"),
+    run_id: str | None = typer.Argument(None, help="Run id from cdt history; defaults to the newest run"),
+    pipeline: str | None = typer.Option(None, "--pipeline", help="Use the newest run for this pipeline"),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
 ):
     """Show a recorded pipeline run."""
-    payload = release_status(run_id=run_id)
+    payload = release_status(pipeline=pipeline, run_id=run_id)
     _echo_json(payload) if json_output else typer.echo(format_yamlish(payload))
     if payload["status"] == "unknown":
         raise typer.Exit(code=1)
@@ -155,18 +170,22 @@ def run_status(
 
 @app.command(name="logs")
 def run_logs(
-    run_id: str = typer.Argument(..., help="Run id from cdt history"),
+    run_id: str | None = typer.Argument(None, help="Run id from cdt history; defaults to the newest run"),
+    pipeline: str | None = typer.Option(None, "--pipeline", help="Use the newest run for this pipeline"),
     tail: int = typer.Option(80, "--tail", min=1, max=10000, help="Number of trailing lines"),
 ):
     """Print the tail of a recorded run log."""
-    paths = resolve_run(Path.cwd(), run_id=run_id)
+    cwd = Path.cwd()
+    paths = resolve_run(cwd, run_id=run_id, pipeline=pipeline)
     if paths is None:
-        raise typer.BadParameter(f"Unknown run id: {run_id}")
+        selector = f"run id: {run_id}" if run_id else f"pipeline: {pipeline}" if pipeline else "recent runs"
+        raise typer.BadParameter(f"Unknown {selector}")
     try:
         lines = paths.log.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError as exc:
         raise typer.BadParameter(f"Cannot read run log: {exc}") from exc
-    typer.echo("\n".join(lines[-tail:]))
+    redactor = SecretRedactor.from_env(_load_project_env(cwd))
+    typer.echo(redactor.redact("\n".join(lines[-tail:])))
 
 
 @app.command(name="run")
