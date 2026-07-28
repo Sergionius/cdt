@@ -76,6 +76,14 @@ Pipeline-based status remains available for compatibility and resolves the lates
 cdt agent-release status test --json
 ```
 
+Detached output and persisted status errors redact known environment secrets and common credential forms before writing. On failure, prefer CDT's defense-in-depth log reader instead of reading `output.log` directly:
+
+```bash
+cdt logs <run-id> --tail 80
+```
+
+Redaction cannot classify every diagnostic, and run records may still expose project paths and artifact names.
+
 ### Exit codes
 
 - `agent-release start`: `0` when the worker starts, `1` for configuration/startup errors, `2` when production confirmation is required.

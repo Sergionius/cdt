@@ -1,3 +1,4 @@
+import pytest
 import typer
 
 from cdt.pipeline import PipelineContext, PipelineExecutor
@@ -11,6 +12,13 @@ class FailingStep:
 
     def run(self, ctx):
         raise typer.BadParameter("boom")
+
+
+class SecretFailingStep:
+    name = "demo.secret_fail"
+
+    def run(self, ctx):
+        raise typer.BadParameter(f"provider rejected {ctx.env['API_TOKEN']}")
 
 
 def setup_function():
@@ -52,3 +60,14 @@ def test_failed_step_summary_includes_step_command_exit_and_artifacts(tmp_path):
     assert "command: scripts/fail.py" in message
     assert "exit code:" in message
     assert "artifacts produced:" in message
+
+
+def test_failed_step_summary_redacts_known_secrets(tmp_path):
+    register_step("demo.secret_fail", lambda **kwargs: SecretFailingStep())
+    ctx = PipelineContext(cwd=tmp_path, env={"API_TOKEN": "provider-secret"}, runner=CommandRunner())
+
+    with pytest.raises(typer.BadParameter) as exc_info:
+        PipelineExecutor().run([ConfiguredStep("demo.secret_fail", {})], ctx)
+
+    assert "provider rejected ***" in str(exc_info.value)
+    assert "provider-secret" not in str(exc_info.value)

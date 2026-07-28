@@ -8,6 +8,7 @@ from typing import Any
 import typer
 
 from ..artifacts import BuildArtifact
+from ..redaction import SecretRedactor
 from ..runner import CommandRunner
 
 
@@ -38,6 +39,13 @@ class PipelineContext:
     finished_at: str | None = None
     _artifact_lock: Lock = field(default_factory=Lock, repr=False)
     _status_lock: Lock = field(default_factory=Lock, repr=False)
+    _redactor: SecretRedactor = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._redactor = SecretRedactor.from_env(self.env)
+
+    def redact(self, text: str) -> str:
+        return self._redactor.redact(text)
 
     def env_value(self, key: str, fallback_key: str | None = None, default: str = "") -> str:
         value = self.env.get(key, "").strip()
@@ -155,7 +163,8 @@ class PipelineContext:
                     continue
                 path.parent.mkdir(parents=True, exist_ok=True)
                 tmp = path.with_name(f".{path.name}.tmp")
-                serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+                sanitized = self._redactor.redact_data(payload)
+                serialized = json.dumps(sanitized, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
                 tmp.write_text(serialized, encoding="utf-8")
                 tmp.replace(path)
 

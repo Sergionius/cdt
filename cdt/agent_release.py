@@ -10,6 +10,8 @@ from typing import Any
 
 import yaml
 
+from .config import _load_project_env
+from .redaction import SecretRedactor
 from .runs import (
     RUN_SCHEMA_VERSION,
     RunPaths,
@@ -82,8 +84,15 @@ def start_release(
             stderr=subprocess.DEVNULL,
         )
     except Exception as exc:
+        redactor = SecretRedactor.from_env(_load_project_env(cwd))
         payload = read_json(paths.status) or {}
-        payload.update({"status": "failed", "error": f"Failed to start release worker: {exc}", "finished_at": now()})
+        payload.update(
+            {
+                "status": "failed",
+                "error": redactor.redact(f"Failed to start release worker: {exc}"),
+                "finished_at": now(),
+            }
+        )
         payload["updated_at"] = now()
         write_json_atomic(paths.status, payload)
         write_exit_code(paths.exit, 1)
@@ -162,7 +171,8 @@ def release_status(pipeline: str | None = None, *, run_id: str | None = None) ->
     for key in status_keys:
         if key in status_payload:
             payload[key] = status_payload[key]
-    return payload
+    redactor = SecretRedactor.from_env(_load_project_env(Path.cwd()))
+    return redactor.redact_data(payload)
 
 
 def wait_for_release(

@@ -209,3 +209,86 @@ def test_run_ids_are_unique_and_history_is_machine_readable(tmp_path, monkeypatc
     assert {item["run_id"] for item in payload["runs"]} == {first.run_id, second.run_id}
     statuses = {item["run_id"]: item["status"] for item in payload["runs"]}
     assert statuses == {first.run_id: "success", second.run_id: "failed"}
+
+
+def test_status_resolves_latest_global_and_pipeline_runs(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    first = create_run(tmp_path, "test", run_id="first-run")
+    second = create_run(tmp_path, "other", run_id="second-run")
+    first_status = read_json(first.status)
+    second_status = read_json(second.status)
+    first_status["started_at"] = "2026-07-28T10:00:00+00:00"
+    second_status["started_at"] = "2026-07-28T11:00:00+00:00"
+    first.status.write_text(json.dumps(first_status), encoding="utf-8")
+    second.status.write_text(json.dumps(second_status), encoding="utf-8")
+    write_exit_code(first.exit, 0)
+    write_exit_code(second.exit, 1)
+
+    latest = runner.invoke(app, ["status", "--json"])
+    pipeline = runner.invoke(app, ["status", "--pipeline", "test", "--json"])
+    explicit = runner.invoke(app, ["status", first.run_id, "--pipeline", "other", "--json"])
+
+    assert json.loads(latest.output)["run_id"] == second.run_id
+    assert json.loads(pipeline.output)["run_id"] == first.run_id
+    assert json.loads(explicit.output)["run_id"] == first.run_id
+
+
+def test_logs_resolve_latest_run_apply_tail_and_redaction(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DEMO_TOKEN", "persisted-secret")
+    paths = create_run(tmp_path, "test")
+    paths.log.write_text("first\nsecond persisted-secret\nthird\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["logs", "--pipeline", "test", "--tail", "2"])
+
+    assert result.exit_code == 0
+    assert result.output == "second ***\nthird\n"
+    assert "persisted-secret" not in result.output
+
+
+def test_history_combines_filters_before_limit(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    wanted = create_run(tmp_path, "test", run_id="wanted-run")
+    ignored_pipeline = create_run(tmp_path, "other", run_id="ignored-pipeline")
+    ignored_status = create_run(tmp_path, "test", run_id="ignored-status")
+    write_exit_code(wanted.exit, 1)
+    write_exit_code(ignored_pipeline.exit, 1)
+    write_exit_code(ignored_status.exit, 0)
+
+    result = runner.invoke(
+        app,
+        ["history", "--pipeline", "test", "--status", "failed", "--limit", "1", "--json"],
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0
+    assert payload["filters"] == {"limit": 1, "pipeline": "test", "status": "failed"}
+    assert [item["run_id"] for item in payload["runs"]] == [wanted.run_id]
+
+
+def test_run_navigation_tolerates_invalid_and_corrupt_run_directories(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    healthy = create_run(tmp_path, "test")
+    write_exit_code(healthy.exit, 0)
+    invalid = tmp_path / ".cdt" / "runs" / "..invalid"
+    invalid.mkdir()
+    corrupt = create_run(tmp_path, "other")
+    corrupt.manifest.write_text("{broken", encoding="utf-8")
+    corrupt.status.write_text("{broken", encoding="utf-8")
+
+    result = runner.invoke(app, ["history", "--json"])
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0
+    assert healthy.run_id in {item["run_id"] for item in payload["runs"]}
+    assert "..invalid" not in {item["run_id"] for item in payload["runs"]}
+
+
+def test_status_without_recorded_runs_returns_unknown(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["status", "--json"])
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 1
+    assert payload["status"] == "unknown"

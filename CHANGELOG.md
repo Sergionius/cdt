@@ -2,7 +2,10 @@
 
 ## Unreleased
 
-- Nothing yet.
+- Added defense-in-depth secret redaction for detached logs, persisted status errors, worker startup diagnostics, status payloads, and `cdt logs`, including known environment credentials, explicitly configured keys, Bearer credentials, authorization headers, password/token assignments, and JWT-looking values.
+- Added recent-run resolution to `cdt status` and `cdt logs`, with `--pipeline` selectors and defense-in-depth redaction when reading older logs.
+- Added composable `cdt history --pipeline` and `--status` filters that apply before `--limit` and report active filters in JSON output.
+- Hardened detached worker startup failures to write terminal redacted status and atomic exit metadata, and made run navigation tolerate corrupt or invalid record directories.
 
 ## v0.4.0 - 2026-07-21
 

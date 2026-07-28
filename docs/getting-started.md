@@ -62,13 +62,17 @@ cdt run test
 
 Direct execution remains the normal human workflow. Every real run is recorded automatically under `.cdt/runs/`; no run ID is required to start it.
 
-Inspect a completed or running record later:
+Inspect the newest completed or running record without copying its ID, or select one pipeline:
 
 ```bash
 cdt history
-cdt status <run-id>
-cdt logs <run-id> --tail 80
+cdt history --pipeline test --status failed
+cdt status
+cdt status --pipeline test
+cdt logs --pipeline test --tail 80
 ```
+
+Detached logs and persisted status errors redact known environment secrets and common credential forms. Run records can still contain project paths and artifact names, so continue treating `.cdt/runs/` as sensitive project data.
 
 ## Production pipelines
 

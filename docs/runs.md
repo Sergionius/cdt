@@ -21,13 +21,20 @@ A human runs the normal command:
 cdt run test
 ```
 
-CDT streams readable output and records state transparently. Run IDs are only needed for later inspection:
+CDT streams readable output and records state transparently. With no selector, status and logs use the newest run globally:
 
 ```bash
 cdt history
+cdt history --pipeline test --status failed
+cdt status
 cdt status <run-id>
+cdt status --pipeline test
+cdt logs
 cdt logs <run-id>
+cdt logs --pipeline test --tail 120
 ```
+
+An explicit run ID takes priority over `--pipeline`. History filters compose, use effective run status, and are applied before `--limit`.
 
 An automation client can start the same executor in detached mode:
 
@@ -67,11 +74,19 @@ cdt agent-release status test
 
 Exact run IDs are preferred for automation.
 
-## Logs
+## Logs and secret redaction
 
-Detached execution captures combined output in `output.log`. Direct execution keeps normal terminal streaming; its log file may be empty when underlying tools write directly to the terminal. Status and artifacts remain available in either mode.
+Detached execution captures combined output in `output.log`. Before writing it, CDT replaces known values from credential-like environment keys, additional keys named by `CDT_REDACT_KEYS`, Bearer credentials, authorization headers, password/token assignments, and JWT-looking values with `***`. Status errors and worker startup diagnostics use the same redactor. `cdt logs` redacts again when displaying a record as defense in depth for older logs.
 
-Treat logs as potentially sensitive because third-party build tools may print paths or diagnostic values.
+`CDT_REDACT_KEYS` is a comma-separated list of environment key names, not secret values:
+
+```bash
+export CDT_REDACT_KEYS=CUSTOM_SESSION,INTERNAL_AUTH
+```
+
+Redaction is defense in depth and cannot classify every provider diagnostic. Direct execution keeps normal third-party terminal streaming and CDT does not intercept inherited TTY output in this release. Use detached execution when persisted redacted output is required.
+
+Run records may still contain project paths, artifact names, task IDs, and other operational metadata. Continue treating `.cdt/runs/` as sensitive project data.
 
 ## Retention
 

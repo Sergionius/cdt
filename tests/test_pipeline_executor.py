@@ -189,6 +189,23 @@ def test_parallel_group_reports_failure_after_all_children_finish(tmp_path):
     assert sorted(events) == ["failed", "slow"]
 
 
+def test_parallel_group_preserves_all_child_failures_in_status(tmp_path):
+    events: list[str] = []
+    status_file = tmp_path / "status.json"
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner(), status_file=status_file)
+    first = SleepingStep("first", events, fail=True)
+    first.step_id = "0/0"
+    second = SleepingStep("second", events, fail=True)
+    second.step_id = "0/1"
+
+    with pytest.raises(Exception, match="Parallel group failed"):
+        PipelineExecutor().run([ParallelStepGroup([first, second], step_id="0")], ctx)
+
+    payload = json.loads(status_file.read_text(encoding="utf-8"))
+    assert sorted(payload["parallel_failed"]) == ["0/0: first", "0/1: second"]
+    assert payload["status"] == "failed"
+
+
 def test_parallel_group_values_are_visible_to_later_steps(tmp_path):
     ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner())
 
