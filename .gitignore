@@ -9,6 +9,7 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 .cdt/
+.pi/
 
 build/
 dist/
