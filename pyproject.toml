@@ -1,6 +1,6 @@
 [project]
 name = "cdt-release"
-version = "0.4.1"
+version = "0.5.0"
 description = "Agent-first release automation CLI for mobile, web, and custom deployments"
 readme = "README.md"
 requires-python = ">=3.10"
