@@ -6,7 +6,9 @@
           "enum": [
             "android.build_aab",
             "android.build_apk",
+            "appstore.complete_testflight",
             "appstore.upload_testflight",
+            "appstore.upload_testflight_ipa",
             "artifact.copy_to_downloads",
             "firebase.deploy",
             "firebase.ensure_cli",
@@ -153,6 +155,32 @@
         {
           "additionalProperties": false,
           "properties": {
+            "appstore.complete_testflight": {
+              "additionalProperties": false,
+              "properties": {
+                "changelog": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {}
+                  ]
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "appstore.complete_testflight"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "appstore.upload_testflight": {
               "additionalProperties": false,
               "properties": {
@@ -176,6 +204,27 @@
           },
           "required": [
             "appstore.upload_testflight"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "appstore.upload_testflight_ipa": {
+              "additionalProperties": false,
+              "properties": {
+                "artifact": {
+                  "type": "string"
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "appstore.upload_testflight_ipa"
           ],
           "type": "object"
         },
@@ -798,7 +847,9 @@
           "enum": [
             "android.build_aab",
             "android.build_apk",
+            "appstore.complete_testflight",
             "appstore.upload_testflight",
+            "appstore.upload_testflight_ipa",
             "artifact.copy_to_downloads",
             "firebase.deploy",
             "firebase.ensure_cli",
@@ -945,6 +996,32 @@
         {
           "additionalProperties": false,
           "properties": {
+            "appstore.complete_testflight": {
+              "additionalProperties": false,
+              "properties": {
+                "changelog": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {}
+                  ]
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "appstore.complete_testflight"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "appstore.upload_testflight": {
               "additionalProperties": false,
               "properties": {
@@ -968,6 +1045,27 @@
           },
           "required": [
             "appstore.upload_testflight"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "appstore.upload_testflight_ipa": {
+              "additionalProperties": false,
+              "properties": {
+                "artifact": {
+                  "type": "string"
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "appstore.upload_testflight_ipa"
           ],
           "type": "object"
         },

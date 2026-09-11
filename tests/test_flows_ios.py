@@ -3,11 +3,24 @@ from pathlib import Path
 import pytest
 import typer
 
+from cdt.artifacts import ArtifactKind, BuildArtifact
 from cdt.flows import ios_flow
+from cdt.pipeline import PipelineContext
+from cdt.runner import CommandRunner
 from cdt.steps import appstore as appstore_steps
 from cdt.steps import ios as ios_steps
 from cdt.steps import notify as notify_steps
 from cdt.steps import tracker as tracker_steps
+from cdt.steps.appstore import CompleteTestFlightStep, UploadTestFlightIpaStep, UploadTestFlightStep
+
+
+def _pipeline_context(tmp_path, env=None, new_version=None):
+    ctx = PipelineContext(cwd=tmp_path, env=env or {}, runner=CommandRunner(), new_version=new_version)
+    return ctx
+
+
+def _register_ipa(ctx, ipa: Path) -> None:
+    ctx.register_artifact("ipa", BuildArtifact(kind=ArtifactKind.IPA, path=ipa, label="ipa"))
 
 
 def test_ios_test_flow_runs_steps_and_keeps_repeated_ids(tmp_path, monkeypatch):
@@ -113,3 +126,84 @@ def test_ios_prod_flow_supports_legacy_scheme_and_prod_user_agent(tmp_path, monk
 def test_ios_flow_requires_scheme(tmp_path):
     with pytest.raises(typer.BadParameter, match="Missing IOS_TEST_SCHEME"):
         ios_flow.run_ios_test_flow(tmp_path, {}, [])
+
+
+def test_full_upload_step_keeps_compatible_cycle(tmp_path, monkeypatch):
+    ipa = tmp_path / "App.ipa"
+    calls = []
+    monkeypatch.setattr(
+        appstore_steps,
+        "_upload_testflight",
+        lambda path, env, changelog, new_version: calls.append((changelog, new_version)) or 0,
+    )
+    ctx = _pipeline_context(tmp_path, new_version="1.2.3+5")
+    _register_ipa(ctx, ipa)
+
+    UploadTestFlightStep("notes").run(ctx)
+
+    assert calls == [("notes", "1.2.3+5")]
+
+
+def test_upload_only_step_runs_transporter_without_completion(tmp_path, monkeypatch):
+    ipa = tmp_path / "App.ipa"
+    ipa.write_bytes(b"ipa")
+    calls = []
+    monkeypatch.setattr(
+        appstore_steps, "_upload_testflight_ipa", lambda path, env: calls.append(("upload", path)) or 0
+    )
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("upload-only step must not run post-upload processing")
+
+    monkeypatch.setattr(appstore_steps, "_complete_testflight_after_upload", forbidden)
+    ctx = _pipeline_context(tmp_path)
+    _register_ipa(ctx, ipa)
+
+    UploadTestFlightIpaStep().run(ctx)
+
+    assert calls == [("upload", ipa)]
+
+
+def test_upload_only_step_fails_on_transporter_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(appstore_steps, "_upload_testflight_ipa", lambda path, env: 7)
+    played = []
+    monkeypatch.setattr(appstore_steps, "_play_fail_sound", lambda env, cwd: played.append(cwd))
+    ctx = _pipeline_context(tmp_path)
+    _register_ipa(ctx, tmp_path / "App.ipa")
+
+    with pytest.raises(typer.Exit) as excinfo:
+        UploadTestFlightIpaStep().run(ctx)
+
+    assert excinfo.value.exit_code == 1
+    assert played == [tmp_path]
+
+
+def test_complete_only_step_updates_changelog_without_upload(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_complete(env, changelog, new_version):
+        calls.append((changelog, new_version))
+        return 0
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("completion step must not upload the IPA")
+
+    monkeypatch.setattr(appstore_steps, "_complete_testflight_after_upload", fake_complete)
+    monkeypatch.setattr(appstore_steps, "_upload_testflight", forbidden)
+    monkeypatch.setattr(appstore_steps, "_upload_testflight_ipa", forbidden)
+    ctx = _pipeline_context(
+        tmp_path, env={"IOS_BUNDLE_ID": "com.example.app"}, new_version="1.2.3+5"
+    )
+
+    step = CompleteTestFlightStep("notes")
+    step.run(ctx)
+    step.run(ctx)  # repeat completion for an already existing build stays upload-free
+
+    assert calls == [("notes", "1.2.3+5"), ("notes", "1.2.3+5")]
+
+
+def test_complete_only_step_requires_new_version(tmp_path):
+    ctx = _pipeline_context(tmp_path)
+
+    with pytest.raises(typer.BadParameter, match="Missing pipeline value: new_version"):
+        CompleteTestFlightStep().run(ctx)

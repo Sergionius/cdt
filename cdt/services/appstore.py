@@ -384,9 +384,19 @@ def _complete_testflight_after_upload(env: dict[str, str], changelog: str, new_v
     return 0
 
 
-def _upload_testflight(ipa_path: Path, env: dict[str, str], changelog: str, new_version: str) -> int:
+def _upload_testflight_ipa(ipa_path: Path, env: dict[str, str]) -> int:
+    """Run only the iTMSTransporter upload for a ready IPA artifact.
+
+    Contains no post-upload ASC processing so a resume of a completed upload
+    can continue with ``_complete_testflight_after_upload`` without re-uploading.
+    """
     transporter_cmd = _build_testflight_transporter_command(ipa_path, env)
-    upload_status = _run(transporter_cmd, cwd=Path.cwd())
+    return _run(transporter_cmd, cwd=Path.cwd())
+
+
+def _upload_testflight(ipa_path: Path, env: dict[str, str], changelog: str, new_version: str) -> int:
+    """Backwards-compatible orchestrator: full upload cycle in a single step."""
+    upload_status = _upload_testflight_ipa(ipa_path, env)
     if upload_status != 0:
         return upload_status
     return _complete_testflight_after_upload(env, changelog, new_version)

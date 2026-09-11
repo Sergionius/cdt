@@ -155,9 +155,23 @@ def test_schema_command_exposes_pipeline_risk_and_builtin_options():
     assert payload["$defs"]["pipeline"]["properties"]["risk"]["enum"] == ["standard", "production"]
     serialized = json.dumps(payload)
     assert "ios.flutter_build_ipa" in serialized
+    assert "appstore.upload_testflight_ipa" in serialized
+    assert "appstore.complete_testflight" in serialized
     assert "artifact" in serialized
     assert payload == schema_payload()
     assert payload == json.loads(bundled_schema_path().read_text(encoding="utf-8"))
+
+
+def test_schema_exposes_split_testflight_step_options():
+    payload = schema_payload()
+    step_schemas = [obj for obj in payload["$defs"]["step"]["oneOf"] if isinstance(obj, dict) and obj.get("properties")]
+    options_by_name = {next(iter(obj["properties"])): next(iter(obj["properties"].values())) for obj in step_schemas}
+
+    upload_options = options_by_name["appstore.upload_testflight_ipa"]
+    assert sorted(upload_options["properties"]) == ["artifact"]
+
+    complete_options = options_by_name["appstore.complete_testflight"]
+    assert sorted(complete_options["properties"]) == ["changelog"]
 
 
 def test_detached_stop_refuses_to_signal_direct_run(tmp_path, monkeypatch):
@@ -292,3 +306,76 @@ def test_status_without_recorded_runs_returns_unknown(tmp_path, monkeypatch):
 
     assert result.exit_code == 1
     assert payload["status"] == "unknown"
+
+
+def test_resume_skips_finished_upload_and_reruns_only_testflight_completion(tmp_path, monkeypatch):
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  iosapp:",
+                "    steps:",
+                "      - ios.bump_xcode_build_number",
+                "      - appstore.upload_testflight_ipa",
+                "      - appstore.complete_testflight",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    from cdt.steps import appstore as appstore_steps
+    from cdt.steps import ios as ios_steps
+
+    def forbidden(step):
+        def fail(*args, **kwargs):
+            raise AssertionError(f"resume must not run {step}")
+
+        return fail
+
+    completions = []
+
+    def fake_complete(env, changelog, new_version):
+        completions.append((changelog, new_version))
+        return 0
+
+    monkeypatch.setattr(ios_steps, "_increment_ios_build_number", forbidden("increment"))
+    monkeypatch.setattr(appstore_steps, "_upload_testflight", forbidden("appstore.upload_testflight"))
+    monkeypatch.setattr(appstore_steps, "_upload_testflight_ipa", forbidden("transporter upload"))
+    monkeypatch.setattr(appstore_steps, "_complete_testflight_after_upload", fake_complete)
+
+    resume_status = tmp_path / "failed-run.json"
+    resume_status.write_text(
+        json.dumps(
+            {
+                "completed_steps": ["0", "1"],
+                "old_version": "1.2.3+4",
+                "new_version": "1.2.3+5",
+                "artifacts": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    output_status = tmp_path / "out" / "status.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "iosapp",
+            "--resume-status-file",
+            str(resume_status),
+            "--status-file",
+            str(output_status),
+            "--skip-completed",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert completions == [("dev build", "1.2.3+5")]
+    status = json.loads(output_status.read_text(encoding="utf-8"))
+    assert status["status"] == "success"
+    assert status["completed_steps"] == ["0", "1", "2"]
+    assert status["new_version"] == "1.2.3+5"

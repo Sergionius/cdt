@@ -1,5 +1,5 @@
 from ..steps.android import AndroidBuildAabStep, AndroidBuildApkStep
-from ..steps.appstore import UploadTestFlightStep
+from ..steps.appstore import CompleteTestFlightStep, UploadTestFlightIpaStep, UploadTestFlightStep
 from ..steps.artifact import CopyArtifactToDownloadsStep
 from ..steps.firebase import EnsureFirebaseCliStep, FirebaseDeployStep, FirebaseUploadAppDistributionStep
 from ..steps.flutter import FlutterPubGetStep, IncrementFlutterBuildNumberStep
@@ -14,7 +14,9 @@ from .registry import ResultProduction, ResultRequirement, StepMetadata, list_st
 _BUILTINS: dict[str, type] = {
     "android.build_aab": AndroidBuildAabStep,
     "android.build_apk": AndroidBuildApkStep,
+    "appstore.complete_testflight": CompleteTestFlightStep,
     "appstore.upload_testflight": UploadTestFlightStep,
+    "appstore.upload_testflight_ipa": UploadTestFlightIpaStep,
     "artifact.copy_to_downloads": CopyArtifactToDownloadsStep,
     "firebase.ensure_cli": EnsureFirebaseCliStep,
     "firebase.deploy": FirebaseDeployStep,
@@ -60,6 +62,30 @@ _BUILTIN_METADATA: dict[str, StepMetadata] = {
         requires=(ResultRequirement(("ios_ipa",), name_options=("artifact",)),),
         produces=(ResultProduction("upload_result"),),
         external_tools=("xcrun",),
+        requires_env=("ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_PRIVATE_KEY_PATH", "IOS_BUNDLE_ID"),
+    ),
+    "appstore.upload_testflight_ipa": StepMetadata(
+        name="appstore.upload_testflight_ipa",
+        description=(
+            "Upload an IPA artifact to TestFlight with iTMSTransporter only, "
+            "without post-upload ASC processing."
+        ),
+        category="appstore",
+        risk="upload",
+        requires=(ResultRequirement(("ios_ipa",), name_options=("artifact",)),),
+        produces=(ResultProduction("upload_result"),),
+        external_tools=("xcrun",),
+        requires_env=("ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_PRIVATE_KEY_PATH"),
+    ),
+    "appstore.complete_testflight": StepMetadata(
+        name="appstore.complete_testflight",
+        description=(
+            "Find an already uploaded TestFlight build, wait for terminal processing "
+            "and idempotently set the changelog. Requires the pipeline version context "
+            "(new_version); does not need an artifact or iTMSTransporter."
+        ),
+        category="appstore",
+        risk="upload",
         requires_env=("ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_PRIVATE_KEY_PATH", "IOS_BUNDLE_ID"),
     ),
     "artifact.copy_to_downloads": StepMetadata(

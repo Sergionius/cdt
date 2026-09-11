@@ -528,6 +528,36 @@ def test_complete_testflight_after_upload_rejects_failed_processing(monkeypatch)
         appstore._complete_testflight_after_upload({"IOS_BUNDLE_ID": "com.example.app"}, "Changed", "1.0+7")
 
 
+def test_complete_testflight_repeats_idempotently_without_upload(monkeypatch):
+    transporter_calls = []
+    changelog_calls = []
+    monkeypatch.setattr(appstore, "_asc_token", lambda env: "token")
+    monkeypatch.setattr(appstore, "_asc_get_app_id", lambda bundle_id, client: "app-1")
+    monkeypatch.setattr(
+        appstore, "_asc_wait_build", lambda app_id, build_number, client, timeout_sec: ("build-1", "VALID")
+    )
+    monkeypatch.setattr(
+        appstore,
+        "_asc_set_changelog",
+        lambda build_id, changelog, client: changelog_calls.append((build_id, changelog, client)),
+    )
+
+    def forbidden(*args, **kwargs):
+        transporter_calls.append(1)
+        raise AssertionError("completion must not run the transporter")
+
+    monkeypatch.setattr(appstore, "_build_testflight_transporter_command", forbidden)
+    env = {"IOS_BUNDLE_ID": "com.example.app", "ASC_WAIT_TIMEOUT_SEC": "5"}
+
+    assert appstore._complete_testflight_after_upload(env, "Changed", "1.0+7") == 0
+    assert appstore._complete_testflight_after_upload(env, "Changed", "1.0+7") == 0
+    assert transporter_calls == []
+    assert [(build_id, changelog) for build_id, changelog, _ in changelog_calls] == [
+        ("build-1", "Changed"),
+        ("build-1", "Changed"),
+    ]
+
+
 def test_ensure_transporter_reports_missing_xcrun(monkeypatch):
     def missing(*args, **kwargs):
         raise FileNotFoundError
@@ -536,6 +566,38 @@ def test_ensure_transporter_reports_missing_xcrun(monkeypatch):
 
     with pytest.raises(typer.BadParameter, match="xcrun is not available"):
         appstore._ensure_itmstransporter_available()
+
+
+def test_upload_testflight_ipa_runs_transporter_only(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        appstore, "_build_testflight_transporter_command", lambda path, env: calls.append(("build", path)) or ["upload"]
+    )
+    monkeypatch.setattr(appstore, "_run", lambda command, cwd: calls.append(("run", command)) or 0)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("upload-only must not run post-upload processing")
+
+    monkeypatch.setattr(appstore, "_complete_testflight_after_upload", forbidden)
+
+    assert appstore._upload_testflight_ipa(tmp_path / "app.ipa", {}) == 0
+    assert calls == [("build", tmp_path / "app.ipa"), ("run", ["upload"])]
+
+
+def test_upload_testflight_orchestrates_upload_then_completion(tmp_path, monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        appstore, "_upload_testflight_ipa", lambda ipa, env: events.append(("upload", ipa)) or 0
+    )
+
+    def fake_complete(env, changelog, new_version):
+        events.append(("complete", changelog, new_version))
+        return 0
+
+    monkeypatch.setattr(appstore, "_complete_testflight_after_upload", fake_complete)
+
+    assert appstore._upload_testflight(tmp_path / "app.ipa", {}, "notes", "1.0+1") == 0
+    assert events == [("upload", tmp_path / "app.ipa"), ("complete", "notes", "1.0+1")]
 
 
 def test_upload_testflight_does_not_poll_after_transporter_failure(tmp_path, monkeypatch):

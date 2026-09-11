@@ -61,6 +61,8 @@ def test_builtin_metadata_registration():
 
     flutter = get_step_metadata("flutter.pub_get")
     appstore = get_step_metadata("appstore.upload_testflight")
+    upload_only = get_step_metadata("appstore.upload_testflight_ipa")
+    completion = get_step_metadata("appstore.complete_testflight")
     ios_ipa = get_step_metadata("ios.flutter_build_ipa")
     android_aab = get_step_metadata("android.build_aab")
     android_apk = get_step_metadata("android.build_apk")
@@ -74,6 +76,14 @@ def test_builtin_metadata_registration():
     assert appstore.risk == "upload"
     assert appstore.requires == (ResultRequirement(("ios_ipa",), name_options=("artifact",)),)
     assert appstore.produces == (ResultProduction("upload_result"),)
+    assert upload_only.requires == (ResultRequirement(("ios_ipa",), name_options=("artifact",)),)
+    assert upload_only.produces == (ResultProduction("upload_result"),)
+    assert upload_only.external_tools == ("xcrun",)
+    assert upload_only.requires_env == ("ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_PRIVATE_KEY_PATH")
+    assert completion.requires == ()
+    assert completion.produces == ()
+    assert completion.external_tools == ()
+    assert completion.requires_env == ("ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_PRIVATE_KEY_PATH", "IOS_BUNDLE_ID")
     assert ios_ipa.produces == (ResultProduction("ios_ipa", name_options=("artifact",)),)
     assert android_aab.produces == (ResultProduction("android_aab", name_options=("artifact",)),)
     assert android_apk.produces == (ResultProduction("android_apk", name_options=("artifact",)),)

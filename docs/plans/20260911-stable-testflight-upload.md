@@ -72,15 +72,15 @@
 - Modify: `tests/test_pipeline_registry.py`
 - Modify: `tests/test_agent_first.py`
 
-- [ ] Разделить service-level операции на upload-only функцию для `iTMSTransporter` и `_complete_testflight_after_upload()` для поиска build, ожидания terminal processing state и идемпотентной установки changelog.
-- [ ] Оставить `_upload_testflight()` совместимым оркестратором полного цикла: post-upload обработка запускается только после нулевого exit code transporter.
-- [ ] Добавить built-in `appstore.upload_testflight_ipa`, принимающий IPA artifact и выполняющий только transporter upload.
-- [ ] Добавить built-in `appstore.complete_testflight`, не требующий IPA и использующий `ctx.new_version`, `IOS_BUNDLE_ID` и ASC credentials для обработки уже загруженного build.
-- [ ] Сделать changelog-фазу идемпотентной: существующая `en-US` localization обновляется через PATCH, отсутствующая создаётся через POST; повтор completion не выполняет upload.
-- [ ] Зарегистрировать новые шаги и metadata: upload-only шаг требует `ios_ipa` и `xcrun`, completion-шаг требует ASC environment и version context, но не artifact и не transporter.
-- [ ] Перегенерировать bundled JSON Schema через существующий `schema_payload()` и проверить соответствие публичных опций новых шагов.
-- [ ] Добавить тесты полного совместимого шага, upload-only шага, completion-only шага, отсутствующей версии, transporter failure и повторной completion для уже существующего build.
-- [ ] Добавить интеграционный тест resume: status с завершённым upload-only шагом и failed completion восстанавливает `new_version`, запускает только `appstore.complete_testflight` и ни разу не вызывает transporter или increment step.
+- [x] Разделить service-level операции на upload-only функцию для `iTMSTransporter` и `_complete_testflight_after_upload()` для поиска build, ожидания terminal processing state и идемпотентной установки changelog.
+- [x] Оставить `_upload_testflight()` совместимым оркестратором полного цикла: post-upload обработка запускается только после нулевого exit code transporter.
+- [x] Добавить built-in `appstore.upload_testflight_ipa`, принимающий IPA artifact и выполняющий только transporter upload.
+- [x] Добавить built-in `appstore.complete_testflight`, не требующий IPA и использующий `ctx.new_version`, `IOS_BUNDLE_ID` и ASC credentials для обработки уже загруженного build.
+- [x] Сделать changelog-фазу идемпотентной: существующая `en-US` localization обновляется через PATCH, отсутствующая создаётся через POST; повтор completion не выполняет upload.
+- [x] Зарегистрировать новые шаги и metadata: upload-only шаг требует `ios_ipa` и `xcrun`, completion-шаг требует ASC environment и version context, но не artifact и не transporter.
+- [x] Перегенерировать bundled JSON Schema через существующий `schema_payload()` и проверить соответствие публичных опций новых шагов.
+- [x] Добавить тесты полного совместимого шага, upload-only шага, completion-only шага, отсутствующей версии, transporter failure и повторной completion для уже существующего build.
+- [x] Добавить интеграционный тест resume: status с завершённым upload-only шагом и failed completion восстанавливает `new_version`, запускает только `appstore.complete_testflight` и ни разу не вызывает transporter или increment step.
 
 ### Task 3: Сохранение причины ошибки дочернего parallel-шагa
 
@@ -173,3 +173,13 @@ Task 1 — Устойчивый клиент App Store Connect (autonomous decis
 - Retry-задержки ограничиваются дедлайном `_asc_wait_build()` через `client.deadline` (после истечения дедлайна задержка 0; внешний polling-цикл завершается по собственной проверке дедлайна).
 - Диагностика retry выводится через `typer.echo` в обоих UI-режимах: номер попытки, категория сбоя и следующая задержка; credentials и authorization headers не логируются.
 - Безопасная интеграционная проверка на реальном ASC (build 726, dry-run completion-only pipeline) не выполнялась: она опирается на шаг `appstore.complete_testflight`, появляющийся в Task 2, и требует живых ASC credentials. Валидация Task 1 покрыта unit-тестами (46 passed), полным `pytest` (371 passed), `ruff check .` и `python -m build`.
+
+Task 2 — Раздельные возобновляемые TestFlight-фазы (autonomous decisions):
+
+- Upload-only service-функция названа `_upload_testflight_ipa(ipa_path, env)`; `_upload_testflight()` теперь делегирует ей transporter-фазу, сохраняя прежний контракт (non-zero exit transporter → возврат кода без post-upload обработки).
+- `CompleteTestFlightStep` использует тот же `ChangelogProvider` и значение по умолчанию `"dev build"`, что и совместимый `UploadTestFlightStep`; upload-only шаг не имеет опции changelog, так как она не нужна transporter-фазе.
+- Metadata: `appstore.upload_testflight_ipa` требует `ios_ipa`, `xcrun` и три ASC-ключа (transporter не нуждается в `IOS_BUNDLE_ID`); `appstore.complete_testflight` требует все четыре ASC-ключа, но не artifact и не `xcrun`. Требование version context (`new_version`) в metadata выразить нечем — оно проверяется в рантайме (`Missing pipeline value: new_version`) и описано в description шага.
+- `appstore.upload_testflight_ipa` объявляет `produces: upload_result` (зеркально совместимому шагу); completion-шаг ничего не производит, так как upload уже выполнен.
+- Идемпотентность changelog уже обеспечивалась `_asc_set_changelog()` (GET → PATCH существующей `en-US` localization, POST отсутствующей); добавлены тесты повторного completion без upload на service- и step-уровне.
+- Безопасная проверка из Validation (ASC build 726) не выполнялась — требует живых ASC credentials; взамен по пункту 4 Validation сделан stub/spy интеграционный тест resume (`test_resume_skips_finished_upload_and_reruns_only_testflight_completion`), доказывающий, что при resume не запускаются transporter и increment step, а `new_version` восстанавливается из status. Пункт 2 (dry-run completion-only pipeline) проверен локально на временном проекте без credentials.
+- Валидация Task 2: `pytest tests/test_services_appstore.py` (49 passed), `pytest tests/test_pipeline_executor.py tests/test_pipeline_error_ux.py` (12 passed), `pytest tests/test_pipeline_resume.py tests/test_agent_first.py tests/test_redaction.py tests/test_pipeline_status_file.py` (40 passed), полный `pytest` (381 passed), `ruff check .`, `python -m build` (bundled schema с новыми шагами попала в wheel).
