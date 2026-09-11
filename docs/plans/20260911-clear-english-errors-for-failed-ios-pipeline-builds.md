@@ -82,9 +82,9 @@ Improve the Flutter IPA failure cause, pipeline failure formatting, CLI presenta
 - Modify: `docs/runs.md`
 - Modify: `CHANGELOG.md`
 
-- [ ] Add a concise failed-build example explaining failed leaf attribution, available command/exit details, successful parallel artifacts, and consulting existing Flutter/Xcode output and run logs.
-- [ ] Clarify that the displayed subprocess exit code is Flutter’s return code, not necessarily an embedded Xcode diagnostic such as 74.
-- [ ] Update the Unreleased notes to describe readable runtime errors without CLI usage wrappers and preservation of Flutter build failure details.
+- [x] Add a concise failed-build example explaining failed leaf attribution, available command/exit details, successful parallel artifacts, and consulting existing Flutter/Xcode output and run logs.
+- [x] Clarify that the displayed subprocess exit code is Flutter’s return code, not necessarily an embedded Xcode diagnostic such as 74.
+- [x] Update the Unreleased notes to describe readable runtime errors without CLI usage wrappers and preservation of Flutter build failure details.
 
 ## Validation
 
@@ -137,3 +137,6 @@ All new reproduction coverage must use temporary projects and mocked build execu
 - Decision: prove sibling completion with a `threading.Event` inside the fake runner (the Android branch blocks until the iOS branch has failed) instead of sleeps or post-hoc ordering assertions; Alternatives: sleep-based sequencing or only checking final status; Reason: deterministic synchronization shows the sibling finishes after the iOS failure without timing flakiness; Side effects: none.
 - Decision: put the CLI regression, validation-UX, success-output, and redaction tests in `tests/test_pipeline_error_ux.py` (a Task 3 file) rather than `tests/test_cli.py`; Alternatives: spread them across `tests/test_cli.py`; Reason: keeps the new failure-UX coverage in the file assigned by the plan with the existing executor-level UX tests; Side effects: `tests/test_pipeline_error_ux.py` gains a `CliRunner` harness and plugin-module cleanup in setup/teardown.
 - Validation evidence for Task 3: focused suite `pytest tests/test_ios_flutter.py tests/test_pipeline_error_ux.py tests/test_pipeline_executor.py tests/test_pipeline_status_file.py tests/test_agent_first.py tests/test_cli.py tests/test_pipeline_resume.py tests/test_agent_release.py tests/test_redaction.py tests/test_runner.py` → 121 passed; full `pytest` → 411 passed; `ruff check .` → all checks passed; `ruff format --check` on the five changed files reports them formatted.
+- Decision: document the failed-build contract as a new `## Failed-build output` section in `docs/runs.md` (between Status lifecycle and Concurrency) rather than in `docs/pipelines.md`; Alternatives: extend the pipeline docs or README; Reason: the contract spans terminal output, `output.log`, and `status.json`, which are all run-record concerns covered by `runs.md`; Side effects: none.
+- Decision: reproduce the example verbatim from the implemented output (`cdt/pipeline/executor.py` format strings, `cdt/steps/ios.py` cause, and the `tests/test_pipeline_error_ux.py` CLI regression) so the documentation cannot drift from behavior; Alternatives: a synthetic illustrative example; Reason: the plan asks for the contract as implemented; Side effects: none.
+- Validation evidence for Task 4: documentation-only change validated against the referenced source (example lines match the executor format strings and the CLI regression assertions, including the `shlex.join` command rendering); full `.venv/bin/python -m pytest` → 411 passed (unchanged test count, no code touched); `.venv/bin/ruff check .` → all checks passed; no project markdown formatter exists (docs follow the existing one-paragraph-per-line prose style).

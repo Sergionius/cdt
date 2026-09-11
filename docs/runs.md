@@ -64,6 +64,25 @@ The status includes current/completed step IDs, parallel child state, artifact m
 
 A status command may report `stale` when a detached PID disappeared without a terminal status or exit code. `timeout` is a wait result, not a pipeline terminal state.
 
+## Failed-build output
+
+A failed `cdt run` ends with a readable English summary instead of CLI usage help. For an iOS IPA build that fails inside a parallel group the summary looks like this:
+
+```text
+Pipeline failed at step 0/0 (ios.flutter_build_ipa).
+iOS IPA build failed. Check the Flutter/Xcode output above for details.
+Command: flutter build ipa --obfuscate --split-debug-info=obfsymbols --no-pub
+Exit code: 74
+Other parallel steps were allowed to finish.
+Artifacts produced: android_aab
+```
+
+The first line attributes the failure to the leaf step that actually failed: its position inside the parallel group plus its stable step ID (`0/0 (ios.flutter_build_ipa)`); sequential failures use the plain step name. The cause line describes what failed. `Command:` and `Exit code:` show the actual generated command and its exit code when CDT knows them, and are omitted when they are unavailable. The parallel sentence appears only for failures inside a parallel group: sibling steps were still allowed to finish, and `Artifacts produced:` lists what they completed (`none` when nothing was produced).
+
+The displayed exit code is the return code of the Flutter command itself, not an embedded Xcode diagnostic. Xcode may report its own error codes (such as 74) inside the build log; CDT neither substitutes nor guesses them and reports Flutter's return value as-is, so use the build output to find the actual Xcode failure.
+
+The summary identifies the failing step; it does not diagnose the underlying tool failure. Read the streamed Flutter/Xcode build output above the summary in the terminal, or inspect the saved record afterwards with `cdt logs <run-id>` — the same redacted summary is persisted in `output.log` and in the `status.json` error field.
+
 ## Concurrency
 
 Run directories are immutable identities, so different pipelines and repeated runs of one pipeline cannot overwrite each other. A `latest-<pipeline>` pointer resolves compatibility commands such as:
