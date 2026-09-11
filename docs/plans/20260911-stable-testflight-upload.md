@@ -106,12 +106,12 @@
 - Modify: `tests/test_redaction.py`
 - Modify: `tests/test_pipeline_status_file.py`
 
-- [ ] Добавить run-scoped потокобезопасный tee/recorder, который сохраняет CDT-owned stdout/stderr в `output.log`, продолжая выводить их в текущий терминал.
-- [ ] Подключать recorder после создания run record для обычного `cdt run`, но не дублировать вывод внутри detached worker, который уже захватывает объединённый subprocess stream.
-- [ ] Применять `StreamingRedactor` только к сохраняемой копии, оставляя текущую интерактивную семантику терминала и гарантируя flush остатка при успехе, исключении и interrupt.
-- [ ] Явно записывать в лог terminal summary исключения до повторного выброса, чтобы сетевой сбой оставался диагностируемым даже если Typer форматирует финальную ошибку за пределами run context.
-- [ ] Обеспечить корректную конкурентную запись сообщений parallel branches и отсутствие JWT, authorization headers и известных environment secrets в файле.
-- [ ] Добавить direct-run тесты непустого success/failure лога, сохранения ASC retry diagnostics, terminal error summary, redaction и отсутствия двойных строк в detached execution.
+- [x] Добавить run-scoped потокобезопасный tee/recorder, который сохраняет CDT-owned stdout/stderr в `output.log`, продолжая выводить их в текущий терминал.
+- [x] Подключать recorder после создания run record для обычного `cdt run`, но не дублировать вывод внутри detached worker, который уже захватывает объединённый subprocess stream.
+- [x] Применять `StreamingRedactor` только к сохраняемой копии, оставляя текущую интерактивную семантику терминала и гарантируя flush остатка при успехе, исключении и interrupt.
+- [x] Явно записывать в лог terminal summary исключения до повторного выброса, чтобы сетевой сбой оставался диагностируемым даже если Typer форматирует финальную ошибку за пределами run context.
+- [x] Обеспечить корректную конкурентную запись сообщений parallel branches и отсутствие JWT, authorization headers и известных environment secrets в файле.
+- [x] Добавить direct-run тесты непустого success/failure лога, сохранения ASC retry diagnostics, terminal error summary, redaction и отсутствия двойных строк в detached execution.
 
 ### Task 5: Документация миграции и релизные заметки
 
@@ -192,3 +192,13 @@ Task 3 — Сохранение причины ошибки дочернего p
 - `command: unknown` заменён на `command: not applicable (built-in step <label>)`, а `exit code: unknown` — на `exit code: not applicable`; exit code по-прежнему извлекается из текста ошибки subprocess-сбоев.
 - Поведение ожидания всех веток, `failed_step`, `parallel_failed`, redaction и множественных ошибок сохранено; итоговое сообщение redact'ится executor'ом как раньше, status-файл дополнительно проходит `redact_data`.
 - Безопасная ASC-интеграция из Validation к Task 3 неприменима: задача не затрагивает ASC-код и требует живых credentials; взамен поведение покрыто unit-тестами. Валидация Task 3: `pytest tests/test_pipeline_executor.py tests/test_pipeline_error_ux.py` (18 passed), `pytest tests/test_services_appstore.py` (49 passed), `pytest tests/test_pipeline_resume.py tests/test_agent_first.py tests/test_redaction.py tests/test_pipeline_status_file.py` (40 passed), полный `pytest` (387 passed), `ruff check .`, `ruff format --check`, `python -m build`.
+
+Task 4 — Диагностический output.log для direct run (autonomous decisions):
+
+- Run-scoped tee/recorder реализован в `cdt/runs.py` (`RunOutputRecorder` + `_TeeStream`) как run-инфраструктура рядом с `RunPaths`; `cdt/redaction.py` остался без изменений — существующие `StreamingRedactor`/`SecretRedactor` уже покрывают требования (feed с удержанием незавершённой строки, flush остатка через `feed(..., final=True)`, паттерны JWT/Authorization/assignment), recorder лишь компонует их под общим `threading.Lock`.
+- Recorder подключается в `run_configured_pipeline` сразу после создания run record и pid-файла только при `not detached`: worker всегда передаёт `--run-id`, поэтому во detached-исполнении recorder не ставится и строки не дублируются (покрыто тестом `test_detached_execution_does_not_duplicate_output_lines` с подсчётом вхождений маркера).
+- Лог открывается лениво в режиме append внутри lock'а; при `OSError` recorder отключает себя (fail-open), терминальные потоки оборачиваются только если лог доступен — диагностика никогда не ломает запуск; `close()` восстанавливает `sys.stdout`/`sys.stderr`, сбрасывает redaction-остаток и идемпотентен.
+- Terminal summary исключения пишется в формате `CDT run failed: <ExceptionType>: <message>` через redacting recorder до повторного выброса; для исключений без сообщения (например, `KeyboardInterrupt`) выводится только имя типа. Ошибки `_restore_resume_status` сохраняют прежнее поведение (exit-code файл не пишется) и просто проходят через `finally` с закрытием recorder.
+- rich Live-трекер не активен в pipeline-пути `cdt run` (`_tracker_start` используется только legacy-флоу), поэтому tee на уровне `sys.stdout` не может захватывать Live-кадры — изменение `cdt/ui.py` не потребовалось.
+- Тест `test_direct_run_log_captures_asc_retry_diagnostics` прогоняет реальный `appstore.complete_testflight` против `urlopen`, всегда бросающего transient `URLError` (sleep замокан), и проверяет попадание retry-строк `==> ASC transient failure, attempt N/4`, итогового сообщения об исчерпании попыток и terminal summary в лог; безопасная ASC-интеграция из Validation (build 726, dry-run) неприменима к Task 4 — задача не трогает ASC-код и живые credentials недоступны. Дополнительно поведение проверено smoke-запуском реального subprocess: терминал получает сырой токен, `output.log` — `***`, failure-лог содержит summary с redaction.
+- Валидация Task 4: `pytest tests/test_services_appstore.py` (49 passed), `pytest tests/test_pipeline_executor.py tests/test_pipeline_error_ux.py` (18 passed), `pytest tests/test_pipeline_resume.py tests/test_agent_first.py tests/test_redaction.py tests/test_pipeline_status_file.py` (50 passed), полный `pytest` (397 passed), `ruff check .`, `ruff format`, `python -m build`.

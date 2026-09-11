@@ -8,8 +8,9 @@ from typing import Any
 import typer
 
 from ..artifacts import BuildArtifact
+from ..redaction import SecretRedactor
 from ..runner import CommandRunner
-from ..runs import ensure_run, write_exit_code, write_text_atomic
+from ..runs import RunOutputRecorder, ensure_run, write_exit_code, write_text_atomic
 from .builtins import register_builtin_steps
 from .config import configured_steps, load_pipeline_config, load_plugins
 from .context import PipelineContext
@@ -59,6 +60,12 @@ def run_configured_pipeline(
         )
     if run_paths is not None and not detached:
         write_text_atomic(run_paths.pid, f"{os.getpid()}\n")
+    # Direct runs tee CDT-owned output into the run log. Detached workers already
+    # capture the combined subprocess stream, so no recorder is installed there.
+    recorder: RunOutputRecorder | None = None
+    if run_paths is not None and not detached:
+        recorder = RunOutputRecorder(run_paths.log, SecretRedactor.from_env(env))
+        recorder.install()
     primary_status = run_paths.status if run_paths is not None else status_file
     mirror_status = status_file if run_paths is not None and status_file != primary_status else None
     ctx = PipelineContext(
@@ -72,18 +79,32 @@ def run_configured_pipeline(
         run_id=run_paths.run_id if run_paths is not None else run_id,
         skip_completed=skip_completed,
     )
-    if resume_from or skip_completed:
-        _restore_resume_status(ctx, resume_status_file)
     try:
-        PipelineExecutor().run(steps, ctx, resume_from=resume_step_id)
-    except BaseException:
-        if run_paths is not None:
-            write_exit_code(run_paths.exit, 1)
-        raise
-    else:
-        if run_paths is not None:
-            write_exit_code(run_paths.exit, 0)
+        if resume_from or skip_completed:
+            _restore_resume_status(ctx, resume_status_file)
+        try:
+            PipelineExecutor().run(steps, ctx, resume_from=resume_step_id)
+        except BaseException as exc:
+            if run_paths is not None:
+                write_exit_code(run_paths.exit, 1)
+            if recorder is not None:
+                recorder.record_line(_terminal_failure_summary(exc))
+            raise
+        else:
+            if run_paths is not None:
+                write_exit_code(run_paths.exit, 0)
+    finally:
+        if recorder is not None:
+            recorder.close()
     return run_paths.run_id if run_paths is not None else None
+
+
+def _terminal_failure_summary(exc: BaseException) -> str:
+    """One-line terminal summary recorded into the run log before re-raising."""
+    detail = str(exc).strip()
+    if not detail:
+        return f"CDT run failed: {type(exc).__name__}"
+    return f"CDT run failed: {type(exc).__name__}: {detail}"
 
 
 def _resolve_resume_from(steps: Sequence[Any], selector: str) -> str:

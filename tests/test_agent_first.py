@@ -1,7 +1,9 @@
 import json
 import os
 import re
+import subprocess
 import sys
+import urllib.error
 from pathlib import Path
 
 import yaml
@@ -10,7 +12,7 @@ from typer.testing import CliRunner
 from cdt.agent_release import release_status, stop_release
 from cdt.cli import app
 from cdt.pipeline.registry import _clear_steps_for_tests
-from cdt.runs import create_run, list_runs, read_json, write_exit_code
+from cdt.runs import create_run, list_runs, read_json, run_paths, write_exit_code
 from cdt.schema import bundled_schema_path, schema_payload
 
 runner = CliRunner()
@@ -306,6 +308,174 @@ def test_status_without_recorded_runs_returns_unknown(tmp_path, monkeypatch):
 
     assert result.exit_code == 1
     assert payload["status"] == "unknown"
+
+
+def _write_echo_project(path: Path, *, failing: bool = False) -> None:
+    package = path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "demo.py").write_text(
+        "\n".join(
+            [
+                "import typer",
+                "from cdt.sdk import step",
+                "",
+                "@step('demo.echo')",
+                "def echo(ctx):",
+                "    typer.echo('demo diagnostics line')",
+                "",
+                "@step('demo.fail')",
+                "def fail(ctx):",
+                "    raise typer.BadParameter('boom')",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    steps = ["demo.echo", "demo.fail"] if failing else ["demo.echo"]
+    (path / "cdt.yaml").write_text(
+        "version: 1\nplugins:\n  - cdt_steps.demo\npipelines:\n  test:\n    steps:\n"
+        + "".join(f"      - {step}\n" for step in steps),
+        encoding="utf-8",
+    )
+
+
+def _read_run_log(cwd: Path, run_id: str) -> str:
+    return run_paths(cwd, run_id).log.read_text(encoding="utf-8")
+
+
+def test_direct_run_writes_nonempty_success_log(tmp_path, monkeypatch):
+    _write_echo_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    result = runner.invoke(app, ["run", "test"])
+    runs = list_runs(tmp_path)
+    log = _read_run_log(tmp_path, runs[0]["run_id"])
+
+    assert result.exit_code == 0
+    assert runs[0]["status"] == "success"
+    assert "demo diagnostics line" in log
+    assert "demo diagnostics line" in result.output
+
+
+def test_direct_run_failure_log_keeps_terminal_summary(tmp_path, monkeypatch):
+    _write_echo_project(tmp_path, failing=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    result = runner.invoke(app, ["run", "test"])
+    runs = list_runs(tmp_path)
+    log = _read_run_log(tmp_path, runs[0]["run_id"])
+    exit_code = run_paths(tmp_path, runs[0]["run_id"]).exit.read_text(encoding="utf-8")
+
+    assert result.exit_code != 0
+    assert runs[0]["status"] == "failed"
+    assert exit_code == "1\n"
+    assert "demo diagnostics line" in log
+    assert "CDT run failed: BadParameter:" in log
+    assert "boom" in log
+    assert "Failed step:" in log
+
+
+def test_direct_run_log_captures_asc_retry_diagnostics(tmp_path, monkeypatch):
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  iosapp:\n    steps:\n      - appstore.complete_testflight\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    key_path = tmp_path / "AuthKey.p8"
+    key_path.write_bytes(
+        key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    )
+    monkeypatch.setenv("ASC_KEY_ID", "key-id")
+    monkeypatch.setenv("ASC_ISSUER_ID", "issuer-id")
+    monkeypatch.setenv("ASC_PRIVATE_KEY_PATH", str(key_path))
+    monkeypatch.setenv("IOS_BUNDLE_ID", "com.example.app")
+    monkeypatch.setattr("time.sleep", lambda seconds: None)
+
+    def always_transient(request, timeout=None):
+        raise urllib.error.URLError(TimeoutError("connection timed out"))
+
+    monkeypatch.setattr("urllib.request.urlopen", always_transient)
+
+    resume_status = tmp_path / "resume.json"
+    resume_status.write_text(
+        json.dumps({"completed_steps": [], "new_version": "1.2.3+7"}),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        ["run", "iosapp", "--resume-status-file", str(resume_status), "--skip-completed"],
+    )
+    runs = list_runs(tmp_path)
+    log = _read_run_log(tmp_path, runs[0]["run_id"])
+
+    assert result.exit_code != 0
+    assert "==> Completing TestFlight upload for build 7" in log
+    assert "ASC transient failure, attempt 1/4" in log
+    assert "App Store Connect request failed after 4 attempts" in log
+    assert "CDT run failed: BadParameter:" in log
+    assert "connection timed out" in log
+
+
+def test_detached_execution_does_not_duplicate_output_lines(tmp_path):
+    package = tmp_path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "demo.py").write_text(
+        "from cdt.sdk import step\n\n"
+        "@step('demo.output')\n"
+        "def output(ctx):\n"
+        "    print('detached marker line', flush=True)\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\nplugins:\n  - cdt_steps.demo\npipelines:\n  test:\n    steps:\n      - demo.output\n",
+        encoding="utf-8",
+    )
+    run_dir = tmp_path / ".cdt" / "runs" / "marker-run"
+    run_dir.mkdir(parents=True)
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(tmp_path), env.get("PYTHONPATH")]))
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "cdt.agent_release_worker",
+            "--pipeline",
+            "test",
+            "--run-id",
+            "marker-run",
+            "--log",
+            str(run_dir / "output.log"),
+            "--exit-file",
+            str(run_dir / "exit-code"),
+            "--status-file",
+            str(run_dir / "status.json"),
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    log = (run_dir / "output.log").read_text(encoding="utf-8")
+    assert log.count("detached marker line") == 1
 
 
 def test_resume_skips_finished_upload_and_reruns_only_testflight_completion(tmp_path, monkeypatch):

@@ -5,12 +5,15 @@ import os
 import re
 import secrets
 import subprocess
+import sys
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 from . import __version__
+from .redaction import SecretRedactor, StreamingRedactor
 
 RUN_SCHEMA_VERSION = 1
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -207,6 +210,119 @@ def write_text_atomic(path: Path, value: str) -> None:
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     temporary.write_text(value, encoding="utf-8")
     temporary.replace(path)
+
+
+class _TeeStream:
+    """Text stream forwarding writes to the terminal and the run log recorder."""
+
+    def __init__(self, original: Any, recorder: RunOutputRecorder) -> None:
+        self._original = original
+        self._recorder = recorder
+
+    def write(self, text: str) -> int:
+        written = self._original.write(text)
+        self._recorder.record(text)
+        return written if isinstance(written, int) else len(text)
+
+    def flush(self) -> None:
+        self._original.flush()
+
+    def isatty(self) -> bool:
+        return bool(self._original.isatty())
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._original, name)
+
+
+class RunOutputRecorder:
+    """Run-scoped thread-safe tee of CDT-owned stdout/stderr into ``output.log``.
+
+    Writes keep flowing to the original terminal streams; only the saved copy
+    passes through :class:`StreamingRedactor`. A lock serializes concurrent
+    writes (parallel branches) so saved lines never interleave mid-line, and
+    :meth:`close` flushes the redaction remainder on success, failure and
+    interrupt alike. Logging failures never break the run.
+    """
+
+    def __init__(self, log_path: Path, redactor: SecretRedactor) -> None:
+        self._log_path = log_path
+        self._stream = StreamingRedactor(redactor)
+        self._lock = threading.Lock()
+        self._log: IO[str] | None = None
+        self._log_disabled = False
+        self._closed = False
+        self._saved_stdout: Any = None
+        self._saved_stderr: Any = None
+
+    def install(self) -> None:
+        """Start teeing the process-level stdout/stderr into the run log."""
+        with self._lock:
+            if self._closed:
+                return
+            self._open_log_locked()
+            if self._log is None:
+                return
+            self._saved_stdout = sys.stdout
+            self._saved_stderr = sys.stderr
+            sys.stdout = _TeeStream(self._saved_stdout, self)
+            sys.stderr = _TeeStream(self._saved_stderr, self)
+
+    def record(self, text: str) -> None:
+        """Append ``text`` to the redacted log copy; callable from any thread."""
+        if not text:
+            return
+        with self._lock:
+            self._append_locked(text)
+
+    def record_line(self, text: str) -> None:
+        """Append ``text`` as one complete line to the redacted log copy."""
+        self.record(text.rstrip("\n") + "\n")
+
+    def close(self) -> None:
+        """Restore terminal streams and flush the redaction remainder; idempotent."""
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            log = self._log
+            self._log = None
+            if log is not None:
+                try:
+                    log.write(self._stream.feed("", final=True))
+                except Exception:
+                    pass
+        if self._saved_stdout is not None:
+            sys.stdout = self._saved_stdout
+            self._saved_stdout = None
+        if self._saved_stderr is not None:
+            sys.stderr = self._saved_stderr
+            self._saved_stderr = None
+        if log is not None:
+            try:
+                log.close()
+            except Exception:
+                pass
+
+    def _append_locked(self, text: str) -> None:
+        if self._closed:
+            return
+        self._open_log_locked()
+        if self._log is None:
+            return
+        try:
+            self._log.write(self._stream.feed(text))
+            self._log.flush()
+        except Exception:
+            pass
+
+    def _open_log_locked(self) -> None:
+        if self._log is not None or self._log_disabled:
+            return
+        try:
+            self._log_path.parent.mkdir(parents=True, exist_ok=True)
+            self._log = self._log_path.open("a", encoding="utf-8")
+        except OSError:
+            self._log_disabled = True
 
 
 def read_json(path: Path) -> dict[str, Any] | None:

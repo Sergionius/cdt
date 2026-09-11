@@ -1,11 +1,15 @@
+import io
 import json
 import os
+import re
 import subprocess
 import sys
+import threading
 
 from cdt.pipeline.context import PipelineContext
 from cdt.redaction import SecretRedactor, StreamingRedactor
 from cdt.runner import CommandRunner
+from cdt.runs import RunOutputRecorder
 
 
 def test_redactor_uses_credential_and_explicit_environment_keys():
@@ -100,6 +104,87 @@ def test_pipeline_status_errors_are_redacted(tmp_path):
 
     assert payload["error"] == "provider rejected ***"
     assert "status-secret" not in status_file.read_text(encoding="utf-8")
+
+
+def test_run_output_recorder_keeps_terminal_raw_and_log_redacted(tmp_path, monkeypatch):
+    terminal = io.StringIO()
+    errors = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", terminal)
+    monkeypatch.setattr(sys, "stderr", errors)
+    log = tmp_path / "output.log"
+    recorder = RunOutputRecorder(log, SecretRedactor.from_env({"API_TOKEN": "terminal-secret"}))
+
+    recorder.install()
+    try:
+        sys.stdout.write("visible terminal-secret\n")
+        sys.stderr.write("error terminal-secret\n")
+        sys.stdout.flush()
+        assert not sys.stdout.isatty()
+    finally:
+        recorder.close()
+
+    assert sys.stdout is terminal
+    assert sys.stderr is errors
+    assert terminal.getvalue() == "visible terminal-secret\n"
+    assert errors.getvalue() == "error terminal-secret\n"
+    saved = log.read_text(encoding="utf-8")
+    assert "visible ***\n" in saved
+    assert "error ***\n" in saved
+    assert "terminal-secret" not in saved
+
+
+def test_run_output_recorder_flushes_pending_line_on_close(tmp_path):
+    log = tmp_path / "output.log"
+    recorder = RunOutputRecorder(log, SecretRedactor.from_env({"API_TOKEN": "pending-secret"}))
+
+    recorder.install()
+    recorder.record("complete line\n")
+    recorder.record("partial line without newline holds pending-secret")
+    recorder.close()
+
+    saved = log.read_text(encoding="utf-8")
+    assert "complete line\n" in saved
+    assert "partial line without newline holds ***" in saved
+    assert "pending-secret" not in saved
+
+
+def test_run_output_recorder_serializes_parallel_branch_writes(tmp_path):
+    log = tmp_path / "output.log"
+    recorder = RunOutputRecorder(log, SecretRedactor())
+
+    def worker(branch: int) -> None:
+        for index in range(25):
+            recorder.record(f"branch-{branch}-line-{index}\n")
+
+    threads = [threading.Thread(target=worker, args=(branch,)) for branch in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    recorder.close()
+
+    saved = log.read_text(encoding="utf-8").splitlines()
+    expected = [f"branch-{branch}-line-{index}" for branch in range(8) for index in range(25)]
+    assert sorted(saved) == sorted(expected)
+    assert all(re.fullmatch(r"branch-\d+-line-\d+", line) for line in saved)
+
+
+def test_run_output_recorder_redacts_jwt_authorization_and_multiline_key(tmp_path):
+    log = tmp_path / "output.log"
+    jwt = "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJ0ZXN0aW5nIn0.qETJbV0mZKcLMDM23zvFsq"
+    recorder = RunOutputRecorder(
+        log,
+        SecretRedactor.from_env({"ASC_PRIVATE_KEY": "key-line-one\nkey-line-two"}),
+    )
+
+    recorder.record(f"Authorization: Bearer {jwt}\n")
+    recorder.record_line("debug key-line-one value")
+    recorder.close()
+
+    saved = log.read_text(encoding="utf-8")
+    assert jwt not in saved
+    assert "Authorization: ***" in saved
+    assert "key-line-one" not in saved
 
 
 def test_detached_worker_persists_only_redacted_output(tmp_path):

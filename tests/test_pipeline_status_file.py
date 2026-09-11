@@ -5,6 +5,7 @@ from typer.testing import CliRunner
 
 from cdt.cli import app
 from cdt.pipeline.registry import _clear_steps_for_tests
+from cdt.runs import list_runs
 
 runner = CliRunner()
 
@@ -33,6 +34,7 @@ def _write_demo_project(tmp_path, *, failing: bool = False, artifact: bool = Fal
                 "",
                 "@step('demo.ok')",
                 "def ok(ctx):",
+                "    typer.echo('demo.ok diagnostics line')",
                 "    ctx.values['ok'] = '1'",
                 "",
                 "@step('demo.fail')",
@@ -103,6 +105,41 @@ def test_run_status_file_records_failure(tmp_path, monkeypatch):
     assert payload["completed_steps"] == ["0"]
     assert payload["failed_step"] == "1"
     assert "boom" in payload["error"]
+
+
+def test_run_status_file_coexists_with_nonempty_run_log(tmp_path, monkeypatch):
+    _write_demo_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    status_file = tmp_path / ".cdt" / "status.json"
+
+    result = runner.invoke(app, ["run", "demo", "--status-file", str(status_file)])
+    runs = list_runs(tmp_path)
+    log = (tmp_path / ".cdt" / "runs" / runs[0]["run_id"] / "output.log").read_text(encoding="utf-8")
+    payload = json.loads(status_file.read_text(encoding="utf-8"))
+
+    assert result.exit_code == 0
+    assert payload["status"] == "success"
+    assert "demo.ok diagnostics line" in log
+
+
+def test_run_status_file_failure_log_contains_terminal_summary(tmp_path, monkeypatch):
+    _write_demo_project(tmp_path, failing=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    status_file = tmp_path / ".cdt" / "status.json"
+
+    result = runner.invoke(app, ["run", "demo", "--status-file", str(status_file)])
+    runs = list_runs(tmp_path)
+    log = (tmp_path / ".cdt" / "runs" / runs[0]["run_id"] / "output.log").read_text(encoding="utf-8")
+    payload = json.loads(status_file.read_text(encoding="utf-8"))
+
+    assert result.exit_code != 0
+    assert payload["status"] == "failed"
+    assert payload["failed_step"] == "1"
+    assert "boom" in log
+    assert "CDT run failed: BadParameter:" in log
+    assert "Failed step:" in log
 
 
 def test_run_resume_from_restores_artifacts_and_skips_prior_steps(tmp_path, monkeypatch):
