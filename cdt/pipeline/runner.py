@@ -14,7 +14,7 @@ from ..runs import RunOutputRecorder, ensure_run, write_exit_code, write_text_at
 from .builtins import register_builtin_steps
 from .config import configured_steps, load_pipeline_config, load_plugins
 from .context import PipelineContext
-from .executor import PipelineExecutor
+from .executor import PipelineExecutionError, PipelineExecutor
 from .validation import validate_pipeline
 
 
@@ -100,7 +100,9 @@ def run_configured_pipeline(
 
 
 def _terminal_failure_summary(exc: BaseException) -> str:
-    """One-line terminal summary recorded into the run log before re-raising."""
+    """Readable terminal summary recorded into the run log before re-raising."""
+    if isinstance(exc, PipelineExecutionError):
+        return exc.message
     detail = str(exc).strip()
     if not detail:
         return f"CDT run failed: {type(exc).__name__}"

@@ -138,8 +138,9 @@ def test_run_status_file_failure_log_contains_terminal_summary(tmp_path, monkeyp
     assert payload["status"] == "failed"
     assert payload["failed_step"] == "1"
     assert "boom" in log
-    assert "CDT run failed: PipelineExecutionError:" in log
+    assert "PipelineExecutionError" not in log
     assert "Pipeline failed at step" in log
+    assert "Artifacts produced: none" in log
 
 
 def test_run_resume_from_restores_artifacts_and_skips_prior_steps(tmp_path, monkeypatch):

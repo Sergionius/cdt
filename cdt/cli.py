@@ -10,6 +10,7 @@ from .doctor import run_doctor
 from .init_project import initialize_project
 from .pipeline.builtins import register_builtin_steps
 from .pipeline.config import load_pipeline_config, load_plugins
+from .pipeline.executor import PipelineExecutionError
 from .pipeline.planning import plan_payload
 from .pipeline.preflight import preflight_payload
 from .pipeline.registry import list_steps
@@ -217,18 +218,22 @@ def run_pipeline(
     _confirm_pipeline_risk(config, name, confirm)
     env = _load_project_env(cwd)
     _set_ui_mode(env)
-    completed_run_id = run_configured_pipeline(
-        cwd,
-        env,
-        name,
-        ids=id,
-        status_file=status_file,
-        resume_from=resume_from,
-        skip_completed=skip_completed,
-        resume_status_file=resume_status_file,
-        run_id=run_id,
-        detached=run_id is not None,
-    )
+    try:
+        completed_run_id = run_configured_pipeline(
+            cwd,
+            env,
+            name,
+            ids=id,
+            status_file=status_file,
+            resume_from=resume_from,
+            skip_completed=skip_completed,
+            resume_status_file=resume_status_file,
+            run_id=run_id,
+            detached=run_id is not None,
+        )
+    except PipelineExecutionError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
     if completed_run_id is not None and run_id is None:
         typer.echo(f"Run: {completed_run_id}")
 

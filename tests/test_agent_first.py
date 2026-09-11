@@ -373,9 +373,10 @@ def test_direct_run_failure_log_keeps_terminal_summary(tmp_path, monkeypatch):
     assert runs[0]["status"] == "failed"
     assert exit_code == "1\n"
     assert "demo diagnostics line" in log
-    assert "CDT run failed: PipelineExecutionError:" in log
+    assert "PipelineExecutionError" not in log
     assert "boom" in log
     assert "Pipeline failed at step" in log
+    assert "Artifacts produced: none" in log
 
 
 def test_direct_run_log_captures_asc_retry_diagnostics(tmp_path, monkeypatch):
@@ -425,7 +426,8 @@ def test_direct_run_log_captures_asc_retry_diagnostics(tmp_path, monkeypatch):
     assert "==> Completing TestFlight upload for build 7" in log
     assert "ASC transient failure, attempt 1/4" in log
     assert "App Store Connect request failed after 4 attempts" in log
-    assert "CDT run failed: PipelineExecutionError:" in log
+    assert "PipelineExecutionError" not in log
+    assert "Pipeline failed at step" in log
     assert "connection timed out" in log
 
 

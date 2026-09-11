@@ -1,13 +1,20 @@
 import json
+import re
+import sys
+import threading
+from pathlib import Path
 
 import pytest
 import typer
+from typer.testing import CliRunner
 
+from cdt.cli import app
 from cdt.pipeline import ParallelStepGroup, PipelineContext, PipelineExecutor
 from cdt.pipeline.config import ConfiguredStep, load_pipeline_config
 from cdt.pipeline.executor import PipelineExecutionError
 from cdt.pipeline.registry import _clear_steps_for_tests, register_step
 from cdt.runner import CommandExecutionError, CommandRunner
+from cdt.runs import list_runs, run_paths
 
 
 class FailingStep:
@@ -61,12 +68,115 @@ class CommandFailStep:
         raise CommandExecutionError(self.cause, command=self.command, exit_code=self.exit_code)
 
 
+cli_runner = CliRunner()
+
+
+class _SyncFakeRunner:
+    """Fake command runner: the iOS build fails first, the sibling waits for that failure."""
+
+    def __init__(self, ios_exit_code: int = 74):
+        self.ios_exit_code = ios_exit_code
+        self.ios_failed = threading.Event()
+        self.commands: list[list[str]] = []
+        self._lock = threading.Lock()
+
+    def run(self, command: list[str], *, cwd: Path) -> int:
+        with self._lock:
+            self.commands.append(list(command))
+        if command[:3] == ["flutter", "build", "ipa"]:
+            self.ios_failed.set()
+            return self.ios_exit_code
+        assert self.ios_failed.wait(timeout=10), "sibling finished before the iOS failure"
+        return 0
+
+
+class _OkFakeRunner:
+    def __init__(self) -> None:
+        self.commands: list[list[str]] = []
+
+    def run(self, command: list[str], *, cwd: Path) -> int:
+        self.commands.append(list(command))
+        return 0
+
+
 def setup_function():
     _clear_steps_for_tests()
+    sys.modules.pop("cdt_steps.demo", None)
+    sys.modules.pop("cdt_steps", None)
 
 
 def teardown_function():
     _clear_steps_for_tests()
+    sys.modules.pop("cdt_steps.demo", None)
+    sys.modules.pop("cdt_steps", None)
+
+
+def _write_ios_cli_project(tmp_path: Path) -> None:
+    aab = tmp_path / "build" / "app" / "outputs" / "bundle" / "release" / "app.aab"
+    aab.parent.mkdir(parents=True)
+    aab.write_text("aab", encoding="utf-8")
+    ipa = tmp_path / "build" / "ios" / "ipa" / "Runner.ipa"
+    ipa.parent.mkdir(parents=True)
+    ipa.write_text("ipa", encoding="utf-8")
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  iosapp:",
+                "    steps:",
+                "      - parallel:",
+                "          steps:",
+                "            - ios.flutter_build_ipa",
+                "            - android.build_aab:",
+                "                artifact: android_aab",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_secret_cli_project(tmp_path: Path) -> None:
+    package = tmp_path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "demo.py").write_text(
+        "\n".join(
+            [
+                "import typer",
+                "from cdt.sdk import step",
+                "",
+                "@step('demo.secret_fail')",
+                "def secret_fail(ctx):",
+                "    token = ctx.env['API_TOKEN']",
+                "    raise typer.BadParameter('provider rejected ' + token)",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".env").write_text("API_TOKEN=provider-secret-value\n", encoding="utf-8")
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "plugins:",
+                "  - cdt_steps.demo",
+                "pipelines:",
+                "  iosapp:",
+                "    steps:",
+                "      - parallel:",
+                "          steps:",
+                "            - ios.flutter_build_ipa:",
+                "                dart_defines:",
+                "                  - API_TOKEN=provider-secret-value",
+                "            - demo.secret_fail",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def test_yaml_parse_error_includes_path_line_column_and_example(tmp_path):
@@ -260,3 +370,111 @@ def test_parallel_command_arguments_are_redacted(tmp_path):
     message = str(exc_info.value)
     assert "provider-secret" not in message
     assert "--dart-define=API_TOKEN=***" in message
+
+
+def test_cli_parallel_ios_failure_renders_readable_summary(tmp_path, monkeypatch):
+    _write_ios_cli_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    sounds: list[str] = []
+    monkeypatch.setattr("cdt.steps.ios._play_fail_sound", lambda env, cwd: sounds.append("fail"))
+    monkeypatch.setattr("cdt.steps.android._play_fail_sound", lambda env, cwd: sounds.append("fail"))
+    fake_runner = _SyncFakeRunner(ios_exit_code=74)
+    monkeypatch.setattr("cdt.pipeline.runner.CommandRunner", lambda: fake_runner)
+
+    result = cli_runner.invoke(app, ["run", "iosapp"])
+
+    assert result.exit_code == 1
+    output = result.output
+    assert "Pipeline failed at step 0/0 (ios.flutter_build_ipa)." in output
+    assert "iOS IPA build failed. Check the Flutter/Xcode output above for details." in output
+    assert "Command: flutter build ipa --obfuscate --split-debug-info=obfsymbols --no-pub" in output
+    assert "Exit code: 74" in output
+    assert "Other parallel steps were allowed to finish." in output
+    assert "Artifacts produced: android_aab" in output
+    assert "Invalid value" not in output
+    assert "Usage:" not in output
+    assert "Parallel group failed after all steps finished" not in output
+    assert "Failed step:" not in output
+    assert "unknown" not in output
+    assert "not applicable" not in output
+    assert sounds == ["fail"]
+
+    runs = list_runs(tmp_path)
+    assert len(runs) == 1
+    assert runs[0]["status"] == "failed"
+    paths = run_paths(tmp_path, runs[0]["run_id"])
+    payload = json.loads(paths.status.read_text(encoding="utf-8"))
+    assert payload["status"] == "failed"
+    assert payload["failed_step"] == "0/0"
+    assert payload["parallel_completed"] == ["0/1"]
+    assert payload["completed_steps"] == ["0/1"]
+    assert [artifact["name"] for artifact in payload["artifacts"]] == ["android_aab"]
+    assert paths.exit.read_text(encoding="utf-8") == "1\n"
+    log = paths.log.read_text(encoding="utf-8")
+    assert log.strip() != ""
+    assert "Pipeline failed at step 0/0 (ios.flutter_build_ipa)." in log
+    assert "Exit code: 74" in log
+
+
+def test_cli_run_without_config_keeps_validation_ux(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    result = cli_runner.invoke(app, ["run", "anything"])
+
+    assert result.exit_code != 0
+    assert "Invalid value" in result.output
+    assert "Pipeline config not found" in result.output
+    assert "Usage:" in result.output
+
+
+def test_cli_run_unknown_pipeline_keeps_validation_ux(tmp_path, monkeypatch):
+    _write_ios_cli_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    result = cli_runner.invoke(app, ["run", "missing"])
+
+    assert result.exit_code != 0
+    assert "Invalid value" in result.output
+    assert "Unknown pipeline: missing" in result.output
+    assert "Usage:" in result.output
+
+
+def test_cli_successful_run_keeps_existing_output(tmp_path, monkeypatch):
+    _write_ios_cli_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("cdt.pipeline.runner.CommandRunner", lambda: _OkFakeRunner())
+
+    result = cli_runner.invoke(app, ["run", "iosapp"])
+
+    assert result.exit_code == 0
+    assert re.fullmatch(r"Run: \S+\n", result.output)
+    assert "Invalid value" not in result.output
+    assert "Usage:" not in result.output
+
+
+def test_cli_ios_failure_redacts_secret_from_terminal_status_and_log(tmp_path, monkeypatch):
+    _write_secret_cli_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr("cdt.steps.ios._play_fail_sound", lambda env, cwd: None)
+    monkeypatch.setattr("cdt.steps.android._play_fail_sound", lambda env, cwd: None)
+    fake_runner = _SyncFakeRunner(ios_exit_code=1)
+    monkeypatch.setattr("cdt.pipeline.runner.CommandRunner", lambda: fake_runner)
+
+    result = cli_runner.invoke(app, ["run", "iosapp"])
+
+    assert result.exit_code == 1
+    assert "provider-secret-value" not in result.output
+    assert "--dart-define=API_TOKEN=***" in result.output
+    assert "provider rejected ***" in result.output
+
+    runs = list_runs(tmp_path)
+    assert runs[0]["status"] == "failed"
+    paths = run_paths(tmp_path, runs[0]["run_id"])
+    status_json = paths.status.read_text(encoding="utf-8")
+    log = paths.log.read_text(encoding="utf-8")
+    assert "provider-secret-value" not in status_json
+    assert "--dart-define=API_TOKEN=***" in status_json
+    assert "provider-secret-value" not in log
+    assert "--dart-define=API_TOKEN=***" in log
+    assert "provider rejected ***" in log
