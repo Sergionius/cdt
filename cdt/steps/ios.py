@@ -7,6 +7,7 @@ from ..platforms.ios_xcode import (
     _ios_xcode_build_ipa,
     _ios_xcode_ipa_artifact,
 )
+from ..runner import CommandExecutionError
 from ..sounds import _play_fail_sound
 
 
@@ -77,7 +78,12 @@ class IosFlutterBuildIpaStep:
             "extra_args": self.extra_args,
         }
         command = _build_ios_ipa_command(profile=self.profile, **options)
-        if ctx.runner.run(command, cwd=ctx.cwd) != 0:
+        exit_code = ctx.runner.run(command, cwd=ctx.cwd)
+        if exit_code != 0:
             _play_fail_sound(ctx.env, ctx.cwd)
-            raise typer.Exit(code=1)
+            raise CommandExecutionError(
+                "iOS IPA build failed. Check the Flutter/Xcode output above for details.",
+                command=command,
+                exit_code=exit_code,
+            )
         ctx.register_artifact(self.artifact, _ios_ipa_artifact(ctx.cwd))

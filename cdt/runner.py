@@ -16,6 +16,23 @@ class SpawnedProcess:
     log_path: Path | None
 
 
+class CommandExecutionError(Exception):
+    """A caller-raised failure for a command that exited with a nonzero code.
+
+    ``CommandRunner.run()`` keeps returning an integer exit code; this exception
+    exists so steps can surface a readable cause together with the exact command
+    and exit code for aggregation and reporting.
+    """
+
+    def __init__(self, cause: str, *, command: list[str], exit_code: int) -> None:
+        if not cause.strip():
+            raise ValueError("CommandExecutionError requires a nonempty cause")
+        super().__init__(cause)
+        self.cause = cause
+        self.command = list(command)
+        self.exit_code = exit_code
+
+
 class CommandRunner:
     def run(self, command: list[str], *, cwd: Path) -> int:
         return _run(command, cwd=cwd)
