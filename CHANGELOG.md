@@ -2,7 +2,10 @@
 
 ## Unreleased
 
-- Nothing yet.
+- Added App Store Connect request resilience: a token-aware client refreshes the JWT before its 20 minute expiry and once after a 401, transient network failures and HTTP 429/5xx are retried with bounded exponential backoff and jitter honoring `Retry-After`, while permanent 4xx responses fail immediately without retries.
+- Added resumable TestFlight built-in steps: `appstore.upload_testflight_ipa` runs only the iTMSTransporter upload, and `appstore.complete_testflight` re-finds the already uploaded build from the saved version context, waits for processing, and idempotently sets the changelog without re-uploading the IPA or changing the build number. The existing `appstore.upload_testflight` keeps its full-cycle behavior.
+- Improved parallel group failure reports: the top-level error now names each failed child step and its original exception instead of `command: unknown; exit code: unknown`.
+- Added redacted `output.log` capture for direct `cdt run` executions, including ASC retry diagnostics and the terminal error summary; detached runs continue to record redacted combined output.
 
 ## v0.4.1 - 2026-07-28
 

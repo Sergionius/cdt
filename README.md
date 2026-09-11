@@ -85,7 +85,7 @@ cdt self-update --json --check
 
 Static planning commands (`cdt pipeline plan <pipeline>` and `cdt run <pipeline> --dry-run`) show the step tree, risk, warnings, and artifact flow without executing steps.
 
-Every real run is recorded under `.cdt/runs/<run-id>/` with an atomic status file, manifest, exit code, and log location. Human operators can continue to use `cdt run test` directly. `cdt status` and `cdt logs` resolve the newest run automatically, while `--pipeline` selects the newest run for one pipeline. Detached output and persisted status errors redact known environment secrets and common credential forms before they are written; `cdt logs` applies the same protection again when reading older records. See [Run records](docs/runs.md) for lifecycle, redaction limitations, concurrency, retention, and recovery.
+Every real run is recorded under `.cdt/runs/<run-id>/` with an atomic status file, manifest, exit code, and log location. Human operators can continue to use `cdt run test` directly. `cdt status` and `cdt logs` resolve the newest run automatically, while `--pipeline` selects the newest run for one pipeline. Direct and detached runs save a redacted `output.log` (direct runs tee CDT diagnostics while streaming to the terminal; detached runs record the redacted combined output), and persisted status errors redact known environment secrets and common credential forms before they are written; `cdt logs` applies the same protection again when reading older records. See [Run records](docs/runs.md) for lifecycle, redaction limitations, concurrency, retention, and recovery.
 
 Resume status migration note: current CDT status files store stable step ids (`0`, `1`, `1/0`, `1/0/1`) instead of step names. Older name-based status files are rejected because duplicate names such as anonymous `parallel` groups are ambiguous. Recreate the status file by rerunning without `--skip-completed`, or use `cdt pipeline inspect <pipeline>` / `cdt pipeline plan <pipeline>` to map completed work to step ids manually.
 
@@ -157,12 +157,16 @@ Use `cdt pipeline steps` for the complete list. Common built-ins:
 - `android.build_aab`
 - `android.build_apk`
 - `appstore.upload_testflight`
+- `appstore.upload_testflight_ipa`
+- `appstore.complete_testflight`
 - `artifact.copy_to_downloads`
 - `hook.python_script`
 - `notify.prod_user_agent`
 - `notify.success`
 
 Build steps use `profile` for CDT presets (`profile: prod` adds `--dart-define=ENV=prod`). Flutter `flavor` is separate. Build steps do not run `flutter pub get` or increment versions implicitly.
+
+`appstore.upload_testflight` keeps the full upload cycle in one step and remains supported. New pipelines should prefer the resumable pair `appstore.upload_testflight_ipa` (iTMSTransporter upload only) followed by `appstore.complete_testflight` (find the uploaded build, wait for processing, set the changelog), so a failed completion can resume without re-uploading the IPA. See [Pipelines](docs/pipelines.md) for details.
 
 ## Python hooks
 

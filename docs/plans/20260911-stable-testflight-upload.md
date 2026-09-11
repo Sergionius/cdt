@@ -122,12 +122,12 @@
 - Modify: `examples/cdt.yaml`
 - Modify: `CHANGELOG.md`
 
-- [ ] Описать совместимость `appstore.upload_testflight` и рекомендованную sequence-конфигурацию из `appstore.upload_testflight_ipa` и `appstore.complete_testflight`.
-- [ ] Привести общий пример resume из failed status, который пропускает завершённые build/upload шаги и начинает с `appstore.complete_testflight`.
-- [ ] Уточнить, что completion повторно ищет build по сохранённому `new_version`, не загружает IPA и не изменяет build number.
-- [ ] Документировать retry-классификацию, `Retry-After`, обновление JWT, общий `ASC_WAIT_TIMEOUT_SEC` и диагностические сообщения без обещания retry постоянных 4xx.
-- [ ] Обновить описание `output.log`: direct run сохраняет redacted CDT diagnostics, detached run продолжает сохранять redacted combined output.
-- [ ] Добавить запись в `CHANGELOG.md` об устойчивости ASC, новых resumable шагах, улучшенных parallel errors и direct-run logging.
+- [x] Описать совместимость `appstore.upload_testflight` и рекомендованную sequence-конфигурацию из `appstore.upload_testflight_ipa` и `appstore.complete_testflight`.
+- [x] Привести общий пример resume из failed status, который пропускает завершённые build/upload шаги и начинает с `appstore.complete_testflight`.
+- [x] Уточнить, что completion повторно ищет build по сохранённому `new_version`, не загружает IPA и не изменяет build number.
+- [x] Документировать retry-классификацию, `Retry-After`, обновление JWT, общий `ASC_WAIT_TIMEOUT_SEC` и диагностические сообщения без обещания retry постоянных 4xx.
+- [x] Обновить описание `output.log`: direct run сохраняет redacted CDT diagnostics, detached run продолжает сохранять redacted combined output.
+- [x] Добавить запись в `CHANGELOG.md` об устойчивости ASC, новых resumable шагах, улучшенных parallel errors и direct-run logging.
 
 ## Validation
 
@@ -202,3 +202,10 @@ Task 4 — Диагностический output.log для direct run (autonomo
 - rich Live-трекер не активен в pipeline-пути `cdt run` (`_tracker_start` используется только legacy-флоу), поэтому tee на уровне `sys.stdout` не может захватывать Live-кадры — изменение `cdt/ui.py` не потребовалось.
 - Тест `test_direct_run_log_captures_asc_retry_diagnostics` прогоняет реальный `appstore.complete_testflight` против `urlopen`, всегда бросающего transient `URLError` (sleep замокан), и проверяет попадание retry-строк `==> ASC transient failure, attempt N/4`, итогового сообщения об исчерпании попыток и terminal summary в лог; безопасная ASC-интеграция из Validation (build 726, dry-run) неприменима к Task 4 — задача не трогает ASC-код и живые credentials недоступны. Дополнительно поведение проверено smoke-запуском реального subprocess: терминал получает сырой токен, `output.log` — `***`, failure-лог содержит summary с redaction.
 - Валидация Task 4: `pytest tests/test_services_appstore.py` (49 passed), `pytest tests/test_pipeline_executor.py tests/test_pipeline_error_ux.py` (18 passed), `pytest tests/test_pipeline_resume.py tests/test_agent_first.py tests/test_redaction.py tests/test_pipeline_status_file.py` (50 passed), полный `pytest` (397 passed), `ruff check .`, `ruff format`, `python -m build`.
+
+Task 5 — Документация миграции и релизные заметки (autonomous decisions):
+
+- Основной материал миграции (совместимость полного шага, рекомендованная пара шагов, resume, устойчивость ASC-запросов) собран в новом разделе «TestFlight upload and completion» в `docs/pipelines.md`; `docs/runs.md` получил обновлённое описание `output.log` (direct tee с redaction сохранённой копии, detached combined output) и краткий TestFlight-resume пример со ссылкой на pipelines.md; в `README.md` добавлены новые built-ins и краткое примечание о совместимости/рекомендованной паре.
+- `examples/cdt.yaml`: prod-pipeline переведён на рекомендованную последовательность `appstore.upload_testflight_ipa` → `appstore.complete_testflight` с комментарием о совместимости, а `mobile-upload` намеренно оставлен на полном цикле `appstore.upload_testflight` с комментарием — пример демонстрирует оба пути; пользовательские `cdt.yaml` не изменяются (out of scope).
+- Все числа и форматы сообщений в документации сверены с исходниками: 4 попытки, база 1s/кап 15s/jitter 0.5s, JWT 20 минут + однократный refresh после 401, `ASC_WAIT_TIMEOUT_SEC` по умолчанию 30, форматы строк `==> ASC transient failure, attempt N/4 ...`; постоянные 4xx описаны как не повторяемые (кроме однократного 401-refresh).
+- Валидация Task 5 (docs-only, команды compile/test/build из плана не требуются для отдельной задачи): скриптовая сверка документации с исходниками и bundled schema — YAML примера парсится, все built-in шаги примера присутствуют в schema, опции `artifact`/`changelog` существуют, якоря и межфайловые ссылки разрешаются, формулировки совпадают с константами и сообщениями `cdt/services/appstore.py`, метаданными `cdt/pipeline/builtins.py` и recorder-логикой `cdt/pipeline/runner.py`. Единственный «сбой» проверки (`offline.fetch_config` отсутствует в bundled schema) — заранее существующее свойство plugin-шага из `cdt_steps.offline`, не затронутое задачей (проверено на base-версии через `git stash`). Безопасная ASC-интеграция из Validation к Task 5 неприменима: задача не меняет код и живые ASC credentials недоступны.

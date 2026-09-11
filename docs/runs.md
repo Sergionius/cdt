@@ -76,7 +76,7 @@ Exact run IDs are preferred for automation.
 
 ## Logs and secret redaction
 
-Detached execution captures combined output in `output.log`. Before writing it, CDT replaces known values from credential-like environment keys, additional keys named by `CDT_REDACT_KEYS`, Bearer credentials, authorization headers, password/token assignments, and JWT-looking values with `***`. Status errors and worker startup diagnostics use the same redactor. `cdt logs` redacts again when displaying a record as defense in depth for older logs.
+Both direct and detached executions save diagnostics in `output.log`. Detached execution captures the full combined output of the run. Direct `cdt run` tees the CDT-owned stdout/stderr into `output.log` while it is produced, so ASC retries, step progress, and the terminal error summary of a failed run remain inspectable afterwards; output that CDT does not own, such as raw third-party subprocess streaming on the interactive terminal, is not intercepted. Before writing either log, CDT replaces known values from credential-like environment keys, additional keys named by `CDT_REDACT_KEYS`, Bearer credentials, authorization headers, password/token assignments, and JWT-looking values with `***`. The redactor is applied only to the saved copy — the direct terminal keeps its normal interactive output. Status errors and worker startup diagnostics use the same redactor. `cdt logs` redacts again when displaying a record as defense in depth for older logs.
 
 `CDT_REDACT_KEYS` is a comma-separated list of environment key names, not secret values:
 
@@ -84,7 +84,7 @@ Detached execution captures combined output in `output.log`. Before writing it, 
 export CDT_REDACT_KEYS=CUSTOM_SESSION,INTERNAL_AUTH
 ```
 
-Redaction is defense in depth and cannot classify every provider diagnostic. Direct execution keeps normal third-party terminal streaming and CDT does not intercept inherited TTY output in this release. Use detached execution when persisted redacted output is required.
+Redaction is defense in depth and cannot classify every provider diagnostic. Continue treating run logs as sensitive project data.
 
 Run records may still contain project paths, artifact names, task IDs, and other operational metadata. Continue treating `.cdt/runs/` as sensitive project data.
 
@@ -105,3 +105,13 @@ cdt run test \
 ```
 
 Before resuming, inspect `git status --short`, verify that recorded artifacts still exist, and check whether version files changed during the failed run.
+
+For TestFlight pipelines, resume skips completed build and upload steps and starts at `appstore.complete_testflight` with the version context restored from the status file, so the IPA is not re-uploaded and the build number is unchanged:
+
+```bash
+cdt run prod \
+  --resume-status-file .cdt/runs/<run-id>/status.json \
+  --skip-completed
+```
+
+See [Resuming a failed TestFlight upload](pipelines.md#resuming-a-failed-testflight-upload) in the pipeline documentation for the full description.

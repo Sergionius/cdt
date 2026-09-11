@@ -110,6 +110,8 @@ Important built-ins include:
 - `android.build_aab`
 - `android.build_apk`
 - `appstore.upload_testflight`
+- `appstore.upload_testflight_ipa`
+- `appstore.complete_testflight`
 - `artifact.copy_to_downloads`
 - `hook.python_script`
 - `notify.prod_user_agent`
@@ -120,6 +122,53 @@ Build steps use `profile` for CDT presets (`prod` adds `ENV=prod`). Flutter `fla
 `artifact.copy_to_downloads` copies a named file artifact to `~/Downloads` by default.
 
 `notify.prod_user_agent` is separate from `notify.success`. When `NOTIFY_PROVIDER=pachca`, it sends production user-agent details using `PACHCA_USER_AGENT_WEBHOOK_URL` and `UA_APP_NAME`; optional formatting variables are `UA_TITLE`, `UA_IOS_DEVICE`, and `UA_ANDROID_DEVICE`. With another provider the step is a no-op.
+
+## TestFlight upload and completion
+
+There are two ways to configure a TestFlight upload:
+
+- `appstore.upload_testflight` remains fully supported and keeps its previous full-cycle behavior: it uploads the IPA with `iTMSTransporter` and then performs the post-upload App Store Connect processing (find the build, wait for processing, set the changelog) inside one step. Existing pipelines do not require migration.
+- The recommended configuration splits the same work into two resumable steps, so a failure after a successful upload can be fixed without re-uploading the IPA:
+
+```yaml
+- sequence:
+    steps:
+      - ios.flutter_build_ipa:
+          profile: prod
+          artifact: ios_ipa
+      - appstore.upload_testflight_ipa:
+          artifact: ios_ipa
+      - appstore.complete_testflight:
+          changelog: prod build
+```
+
+`appstore.upload_testflight_ipa` requires an `ios_ipa` artifact, `xcrun`, and the ASC credentials `ASC_KEY_ID`, `ASC_ISSUER_ID`, and `ASC_PRIVATE_KEY_PATH`. It only runs the transporter upload and does not touch build status or changelog.
+
+`appstore.complete_testflight` requires the ASC credentials plus `IOS_BUNDLE_ID`, but no artifact and no `xcrun`. It performs only the post-upload processing: it parses the build number from the saved pipeline version context `new_version` (for example `1.2.3+726`), queries App Store Connect for that build of the configured app, waits for a terminal processing state (`VALID`), and idempotently creates or updates the `en-US` TestFlight changelog (PATCH for an existing localization, POST for a missing one). It never uploads an IPA and never changes the build number, so rerunning completion for an already uploaded build is safe. It is also the resume entry point after a finished upload; see [Resuming a failed TestFlight upload](#resuming-a-failed-testflight-upload).
+
+### Resuming a failed TestFlight upload
+
+If `appstore.upload_testflight_ipa` completed but `appstore.complete_testflight` failed (for example, App Store Connect was unreachable or processing timed out), resume from the failed run's status file:
+
+```bash
+cdt run prod \
+  --resume-status-file .cdt/runs/<run-id>/status.json \
+  --skip-completed
+```
+
+Resume skips all completed steps, including the IPA build and the transporter upload, and starts at `appstore.complete_testflight`. The pipeline version context (`new_version`) is restored from the status file, so the IPA is not re-uploaded and the build number is not changed. The same applies to the compatible full-cycle `appstore.upload_testflight`: a rerun with `--skip-completed` skips the whole step when it is already recorded as completed, while a step failed during post-upload processing reruns from its start.
+
+### App Store Connect request resilience
+
+All App Store Connect requests in the TestFlight steps use a token-aware client with bounded retries. This applies to both the compatible `appstore.upload_testflight` and the split `appstore.upload_testflight_ipa` / `appstore.complete_testflight` pair.
+
+Transient failures are retried up to 4 attempts per request with bounded exponential backoff (1s base, capped at 15s, plus up to 0.5s jitter). Transient means network-level failures such as timeouts, SSL errors (including SSL EOF), connection reset/abort, and other temporary OS-level socket errors, plus HTTP 429 and temporary 5xx responses.
+
+- HTTP 429 and temporary 5xx honor a `Retry-After` header, either as a delay in seconds or as an HTTP-date. The effective delay is still capped at 15 seconds and never sleeps past the remaining wait deadline.
+- Permanent HTTP 4xx responses are not retried. They fail immediately with the HTTP status and a safe response body. The only exception is HTTP 401: the JWT is force-refreshed once and the request is retried a single time; a second 401 fails immediately.
+- The JWT is cached and refreshed automatically before its 20 minute expiry, so long waits do not fail because of token age.
+- `ASC_WAIT_TIMEOUT_SEC` (integer, default `30`) sets the overall completion wait for the build to appear and finish processing in TestFlight. It bounds the whole wait, and request retry delays are clamped to the same deadline so retries cannot extend it.
+- Progress is written to the run log as `==> ASC transient failure, attempt N/4 (category); retrying in Xs` lines. When the retry budget is exhausted, the error names the attempt count and the last failure category. No credentials or authorization headers are included in these messages.
 
 ## Python hook
 

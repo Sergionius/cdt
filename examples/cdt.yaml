@@ -26,8 +26,13 @@ pipelines:
                       profile: prod
                       flavor: prod
                       artifact: ios_ipa
-                  - appstore.upload_testflight:
+                  # Recommended: resumable TestFlight phases. On resume after a
+                  # failed completion only `appstore.complete_testflight` reruns;
+                  # the IPA is not re-uploaded. The single full-cycle step
+                  # `appstore.upload_testflight` remains supported as before.
+                  - appstore.upload_testflight_ipa:
                       artifact: ios_ipa
+                  - appstore.complete_testflight:
                       changelog: prod build
             - sequence:
                 steps:
@@ -74,6 +79,7 @@ pipelines:
                 no_shrink: true
       - parallel:
           steps:
+            # Compatible full-cycle step: upload + post-upload processing in one step.
             - appstore.upload_testflight:
                 artifact: ios_ipa
                 changelog: dev build ${ids}
