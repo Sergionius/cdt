@@ -3,6 +3,7 @@ import threading
 import time
 
 import pytest
+import typer
 
 from cdt.pipeline import ParallelStepGroup, PipelineContext, PipelineExecutor, SequentialStepGroup
 from cdt.runner import CommandRunner
@@ -61,6 +62,25 @@ class SleepingStep:
         self.events.append(self.name)
         if self.fail:
             raise RuntimeError(self.name)
+
+
+class MessageFailingStep:
+    def __init__(self, name: str, message: str, command: str | None = None):
+        self.name = name
+        self.message = message
+        if command is not None:
+            self.options = {"script": command}
+
+    def run(self, ctx: PipelineContext) -> None:
+        raise RuntimeError(self.message)
+
+
+class NetworkFailingStep:
+    def __init__(self, name: str):
+        self.name = name
+
+    def run(self, ctx: PipelineContext) -> None:
+        raise TimeoutError("SSL connection unexpectedly closed")
 
 
 class BarrierStep:
@@ -204,6 +224,86 @@ def test_parallel_group_preserves_all_child_failures_in_status(tmp_path):
     payload = json.loads(status_file.read_text(encoding="utf-8"))
     assert sorted(payload["parallel_failed"]) == ["0/0: first", "0/1: second"]
     assert payload["status"] == "failed"
+
+
+def test_parallel_single_failure_names_child_id_name_and_cause(tmp_path):
+    events: list[str] = []
+    status_file = tmp_path / "status.json"
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner(), status_file=status_file)
+    failing = MessageFailingStep("ios.upload", "transporter hung up", command="xcrun iTMSTransporter")
+    failing.step_id = "0/0"
+    healthy = SleepingStep("android", events, delay=0.05)
+    healthy.step_id = "0/1"
+
+    with pytest.raises(typer.BadParameter) as exc_info:
+        PipelineExecutor().run([ParallelStepGroup([failing, healthy], step_id="0")], ctx)
+
+    message = str(exc_info.value)
+    assert "0/0 (ios.upload): transporter hung up" in message
+    assert "Failed step: 0/0 (ios.upload)" in message
+    assert "command: xcrun iTMSTransporter" in message
+    assert "exit code: not applicable" in message
+    assert "command: unknown" not in message
+    assert "exit code: unknown" not in message
+    payload = json.loads(status_file.read_text(encoding="utf-8"))
+    assert payload["failed_step"] == "0/0"
+    assert payload["status"] == "failed"
+
+
+def test_parallel_multiple_failures_list_each_child_cause(tmp_path):
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner())
+    first = MessageFailingStep("ios.upload", "transporter hung up")
+    first.step_id = "0/0"
+    second = MessageFailingStep("android.build", "gradle daemon died")
+    second.step_id = "0/1"
+
+    with pytest.raises(typer.BadParameter) as exc_info:
+        PipelineExecutor().run([ParallelStepGroup([first, second], step_id="0")], ctx)
+
+    message = str(exc_info.value)
+    assert "0/0 (ios.upload): transporter hung up" in message
+    assert "0/1 (android.build): gradle daemon died" in message
+
+
+def test_parallel_network_failure_reports_no_exit_code(tmp_path):
+    events: list[str] = []
+    status_file = tmp_path / "status.json"
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner(), status_file=status_file)
+    failing = NetworkFailingStep("asc.wait")
+    failing.step_id = "0/0"
+    healthy = SleepingStep("slow", events, delay=0.05)
+    healthy.step_id = "0/1"
+
+    with pytest.raises(typer.BadParameter) as exc_info:
+        PipelineExecutor().run([ParallelStepGroup([failing, healthy], step_id="0")], ctx)
+
+    message = str(exc_info.value)
+    assert "0/0 (asc.wait): SSL connection unexpectedly closed" in message
+    assert "exit code: not applicable" in message
+    assert "exit code: unknown" not in message
+    payload = json.loads(status_file.read_text(encoding="utf-8"))
+    assert payload["failed_step"] == "0/0"
+
+
+def test_parallel_sequence_failure_reports_deepest_failed_child(tmp_path):
+    events: list[str] = []
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner())
+    aab = MessageFailingStep("android.build.aab", "gradle daemon died", command="./gradlew bundleReleaseAab")
+    aab.step_id = "0/1/0"
+    apk = SleepingStep("apk", events)
+    apk.step_id = "0/1/1"
+    branch = SequentialStepGroup([aab, apk], step_id="0/1")
+    ios = SleepingStep("ios", events, delay=0.05)
+    ios.step_id = "0/0"
+
+    with pytest.raises(typer.BadParameter) as exc_info:
+        PipelineExecutor().run([ParallelStepGroup([ios, branch], step_id="0")], ctx)
+
+    message = str(exc_info.value)
+    assert "0/1/0 (android.build.aab): gradle daemon died" in message
+    assert "Failed step: 0/1/0 (android.build.aab)" in message
+    assert "command: ./gradlew bundleReleaseAab" in message
+    assert "parallel" not in message.split("Failed step: ")[1].split(";")[0]
 
 
 def test_parallel_group_values_are_visible_to_later_steps(tmp_path):

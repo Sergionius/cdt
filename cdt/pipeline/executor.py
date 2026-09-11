@@ -43,6 +43,22 @@ class SequentialStepGroup:
 
 
 @dataclass
+class ChildFailure:
+    """Metadata of a single failed parallel child step."""
+
+    step_id: str
+    step_name: str
+    exception: Exception
+    command: str | None
+
+    @property
+    def label(self) -> str:
+        if self.step_id == self.step_name:
+            return self.step_name
+        return f"{self.step_id} ({self.step_name})"
+
+
+@dataclass
 class ParallelStepGroup:
     steps: Sequence[Step]
     step_id: str = "parallel"
@@ -52,7 +68,7 @@ class ParallelStepGroup:
         return "parallel"
 
     def run(self, ctx: PipelineContext) -> None:
-        failures: list[tuple[str, Exception]] = []
+        failures: list[ChildFailure] = []
         selected_child = _selected_parallel_child(ctx.resume_from, self.step_id)
         runnable_steps = [step for step in self.steps if selected_child is None or _step_id(step) == selected_child]
         with ThreadPoolExecutor(max_workers=len(runnable_steps)) as pool:
@@ -62,13 +78,17 @@ class ParallelStepGroup:
                 try:
                     future.result()
                 except Exception as exc:
-                    failures.append((_step_label(step), exc))
+                    failures.append(_describe_child_failure(step, ctx, exc))
 
         if failures:
-            names = ", ".join(name for name, _ in failures)
-            error = typer.BadParameter(f"Parallel group failed after all steps finished: {names}")
-            error.failed_step_id = _deepest_failed_step_id(ctx, self.step_id)  # type: ignore[attr-defined]
-            raise error from failures[0][1]
+            causes = "; ".join(f"{failure.label}: {failure.exception}" for failure in failures)
+            error = typer.BadParameter(f"Parallel group failed after all steps finished: {causes}")
+            failed_step_id = _deepest_failed_step_id(ctx, self.step_id)
+            primary = next((failure for failure in failures if failure.step_id == failed_step_id), failures[0])
+            error.failed_step_id = failed_step_id  # type: ignore[attr-defined]
+            error.failed_step_label = primary.label  # type: ignore[attr-defined]
+            error.failed_step_command = primary.command  # type: ignore[attr-defined]
+            raise error from primary.exception
 
 
 class PipelineExecutor:
@@ -97,12 +117,14 @@ class PipelineExecutor:
                     ctx.resume_from = None
                 except typer.BadParameter as exc:
                     produced = sorted(set(ctx.artifacts) - before_artifacts)
-                    command = _step_command(step)
+                    summary_label = str(getattr(exc, "failed_step_label", step_label))
+                    command = getattr(exc, "failed_step_command", _step_command(step))
                     artifacts = ", ".join(produced) or "none"
                     message = ctx.redact(str(exc))
                     exit_code = _exit_code(message)
+                    command_text = command if command is not None else f"not applicable (built-in step {summary_label})"
                     summary = (
-                        f"Failed step: {step_label}; command: {command}; "
+                        f"Failed step: {summary_label}; command: {command_text}; "
                         f"exit code: {exit_code}; artifacts produced: {artifacts}"
                     )
                     error = ctx.redact(f"{message}. {summary}")
@@ -134,9 +156,37 @@ def _run_parallel_child(step: Step, ctx: PipelineContext) -> None:
         ctx.mark_parallel_step_completed(step_id)
 
 
+def _describe_child_failure(step: Any, ctx: PipelineContext, exc: Exception) -> ChildFailure:
+    """Collect id, name, original exception and command of a failed parallel child."""
+    step_id = _step_id(step)
+    failed_id = _deepest_failed_step_id(ctx, step_id)
+    target: Any = step if failed_id == step_id else (_find_step_by_id(step, failed_id) or step)
+    return ChildFailure(
+        step_id=_step_id(target),
+        step_name=_step_name(target),
+        exception=exc,
+        command=_step_command(target),
+    )
+
+
+def _find_step_by_id(step: Any, target_id: str) -> Any:
+    if _step_id(step) == target_id:
+        return step
+    nested = getattr(step, "steps", None)
+    if isinstance(nested, (list, tuple)):
+        for child in nested:
+            found = _find_step_by_id(child, target_id)
+            if found is not None:
+                return found
+    return None
+
+
+def _step_name(step: Any) -> str:
+    return str(getattr(step, "name", step.__class__.__name__))
+
+
 def _step_id(step: Any) -> str:
-    step_name = getattr(step, "name", step.__class__.__name__)
-    return str(getattr(step, "step_id", None) or step_name)
+    return str(getattr(step, "step_id", None) or _step_name(step))
 
 
 def _is_descendant(selector: str | None, parent_id: str) -> bool:
@@ -158,16 +208,16 @@ def _deepest_failed_step_id(ctx: PipelineContext, group_id: str) -> str:
 
 def _exit_code(message: str) -> str:
     match = re.search(r"exit code\s+(-?\d+)", message, flags=re.IGNORECASE)
-    return match.group(1) if match else "unknown"
+    return match.group(1) if match else "not applicable"
 
 
 def _step_label(step: Any) -> str:
-    step_name = getattr(step, "name", step.__class__.__name__)
-    step_id = getattr(step, "step_id", None) or step_name
+    step_name = _step_name(step)
+    step_id = _step_id(step)
     return step_name if step_id == step_name else f"{step_id} {step_name}"
 
 
-def _step_command(step: Any) -> str:
+def _step_command(step: Any) -> str | None:
     options = getattr(step, "options", None)
     if isinstance(options, dict):
         for key in ("command", "script"):
@@ -178,4 +228,4 @@ def _step_command(step: Any) -> str:
         value = getattr(step, key, None)
         if isinstance(value, str):
             return value
-    return "unknown"
+    return None

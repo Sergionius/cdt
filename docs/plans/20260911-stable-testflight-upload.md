@@ -89,12 +89,12 @@
 - Modify: `tests/test_pipeline_executor.py`
 - Modify: `tests/test_pipeline_error_ux.py`
 
-- [ ] Сохранять для каждого failed future идентификатор, имя шага, исходное исключение и доступное описание команды вместо агрегации только имён.
-- [ ] Формировать верхнеуровневую ошибку parallel group с реальной причиной каждого failed child; для одного сбоя явно показывать его step id/name и сообщение исключения.
-- [ ] Передавать metadata фактически упавшего child в общую failed-step сводку, чтобы она не приписывала ошибку абстрактному шагу `parallel`.
-- [ ] Использовать осмысленное обозначение built-in шага и `not applicable` вместо `command: unknown` и `exit code: unknown`, когда ошибка не относится к subprocess exit code.
-- [ ] Сохранить ожидание завершения остальных parallel branches, `failed_step`, `parallel_failed`, redaction и поддержку нескольких одновременных ошибок.
-- [ ] Добавить тесты одиночной и множественной parallel-ошибки, дочерней команды, сетевого исключения без exit code и отсутствия секретов в итоговом status.
+- [x] Сохранять для каждого failed future идентификатор, имя шага, исходное исключение и доступное описание команды вместо агрегации только имён.
+- [x] Формировать верхнеуровневую ошибку parallel group с реальной причиной каждого failed child; для одного сбоя явно показывать его step id/name и сообщение исключения.
+- [x] Передавать metadata фактически упавшего child в общую failed-step сводку, чтобы она не приписывала ошибку абстрактному шагу `parallel`.
+- [x] Использовать осмысленное обозначение built-in шага и `not applicable` вместо `command: unknown` и `exit code: unknown`, когда ошибка не относится к subprocess exit code.
+- [x] Сохранить ожидание завершения остальных parallel branches, `failed_step`, `parallel_failed`, redaction и поддержку нескольких одновременных ошибок.
+- [x] Добавить тесты одиночной и множественной parallel-ошибки, дочерней команды, сетевого исключения без exit code и отсутствия секретов в итоговом status.
 
 ### Task 4: Диагностический output.log для direct run
 
@@ -183,3 +183,12 @@ Task 2 — Раздельные возобновляемые TestFlight-фазы
 - Идемпотентность changelog уже обеспечивалась `_asc_set_changelog()` (GET → PATCH существующей `en-US` localization, POST отсутствующей); добавлены тесты повторного completion без upload на service- и step-уровне.
 - Безопасная проверка из Validation (ASC build 726) не выполнялась — требует живых ASC credentials; взамен по пункту 4 Validation сделан stub/spy интеграционный тест resume (`test_resume_skips_finished_upload_and_reruns_only_testflight_completion`), доказывающий, что при resume не запускаются transporter и increment step, а `new_version` восстанавливается из status. Пункт 2 (dry-run completion-only pipeline) проверен локально на временном проекте без credentials.
 - Валидация Task 2: `pytest tests/test_services_appstore.py` (49 passed), `pytest tests/test_pipeline_executor.py tests/test_pipeline_error_ux.py` (12 passed), `pytest tests/test_pipeline_resume.py tests/test_agent_first.py tests/test_redaction.py tests/test_pipeline_status_file.py` (40 passed), полный `pytest` (381 passed), `ruff check .`, `python -m build` (bundled schema с новыми шагами попала в wheel).
+
+Task 3 — Сохранение причины ошибки дочернего parallel-шага (autonomous decisions):
+
+- Каждый failed future описывается dataclass `ChildFailure` (step id, имя шага, исходное исключение, описание команды), а не парой `(label, exception)`; для nested sequence-веток через `ctx.parallel_failed` разрешается самый глубокий фактически упавший шаг и его metadata (`_describe_child_failure` / `_find_step_by_id`).
+- Формат верхнеуровневой ошибки: `Parallel group failed after all steps finished: <id> (<name>): <причина>; ...` — единый для одиночного и множественного сбоя; префикс сохранён, чтобы не ломать существующие ожидания resume-логов и тестов.
+- Первичный child для failed-step сводки выбирается тем же `_deepest_failed_step_id()`, что и `failed_step`, и передаётся через атрибуты исключения `failed_step_label` / `failed_step_command`; executor применяет их только если они выставлены (non-parallel шаги работают как раньше).
+- `command: unknown` заменён на `command: not applicable (built-in step <label>)`, а `exit code: unknown` — на `exit code: not applicable`; exit code по-прежнему извлекается из текста ошибки subprocess-сбоев.
+- Поведение ожидания всех веток, `failed_step`, `parallel_failed`, redaction и множественных ошибок сохранено; итоговое сообщение redact'ится executor'ом как раньше, status-файл дополнительно проходит `redact_data`.
+- Безопасная ASC-интеграция из Validation к Task 3 неприменима: задача не затрагивает ASC-код и требует живых credentials; взамен поведение покрыто unit-тестами. Валидация Task 3: `pytest tests/test_pipeline_executor.py tests/test_pipeline_error_ux.py` (18 passed), `pytest tests/test_services_appstore.py` (49 passed), `pytest tests/test_pipeline_resume.py tests/test_agent_first.py tests/test_redaction.py tests/test_pipeline_status_file.py` (40 passed), полный `pytest` (387 passed), `ruff check .`, `ruff format --check`, `python -m build`.
