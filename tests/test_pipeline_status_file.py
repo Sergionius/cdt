@@ -5,7 +5,7 @@ from typer.testing import CliRunner
 
 from cdt.cli import app
 from cdt.pipeline.registry import _clear_steps_for_tests
-from cdt.runs import list_runs
+from cdt.runs import list_runs, read_json
 
 runner = CliRunner()
 
@@ -22,7 +22,7 @@ def teardown_function():
     sys.modules.pop("cdt_steps", None)
 
 
-def _write_demo_project(tmp_path, *, failing: bool = False, artifact: bool = False) -> None:
+def _write_demo_project(tmp_path, *, failing: bool = False, artifact: bool = False, inputs_yaml: str = "") -> None:
     package = tmp_path / "cdt_steps"
     package.mkdir()
     (package / "__init__.py").write_text("", encoding="utf-8")
@@ -67,7 +67,9 @@ def _write_demo_project(tmp_path, *, failing: bool = False, artifact: bool = Fal
     else:
         steps = ["demo.ok", "demo.fail"] if failing else ["demo.ok"]
     (tmp_path / "cdt.yaml").write_text(
-        "version: 1\nplugins:\n  - cdt_steps.demo\npipelines:\n  demo:\n    steps:\n"
+        "version: 1\nplugins:\n  - cdt_steps.demo\npipelines:\n  demo:\n"
+        + inputs_yaml
+        + "    steps:\n"
         + "".join(f"      - {step}\n" for step in steps),
         encoding="utf-8",
     )
@@ -221,3 +223,53 @@ def test_run_resume_fails_when_restored_artifact_is_missing(tmp_path, monkeypatc
     assert first.exit_code == 0
     assert second.exit_code != 0
     assert "Resume artifact does not exist" in second.output
+
+
+def test_run_records_inputs_in_status_and_manifest(tmp_path, monkeypatch):
+    _write_demo_project(tmp_path, inputs_yaml="    inputs:\n      version:\n      channel:\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    result = runner.invoke(app, ["run", "demo", "--input", "version=0.5.2", "--input", "channel=beta"])
+
+    assert result.exit_code == 0, result.output
+    runs = list_runs(tmp_path)
+    assert len(runs) == 1
+    run_dir = tmp_path / ".cdt" / "runs" / runs[0]["run_id"]
+    status = read_json(run_dir / "status.json")
+    manifest = read_json(run_dir / "manifest.json")
+    assert status["inputs"] == {"version": "0.5.2", "channel": "beta"}
+    assert manifest["inputs"] == {"version": "0.5.2", "channel": "beta"}
+    assert manifest["command"] == [
+        "cdt",
+        "run",
+        "demo",
+        "--input",
+        "version=0.5.2",
+        "--input",
+        "channel=beta",
+    ]
+
+
+def test_run_redacts_secret_shaped_inputs_before_persistence(tmp_path, monkeypatch):
+    _write_demo_project(
+        tmp_path,
+        inputs_yaml="    inputs:\n      version:\n      release_token:\n",
+    )
+    (tmp_path / ".env").write_text("RELEASE_TOKEN=supersecret7\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    result = runner.invoke(
+        app,
+        ["run", "demo", "--input", "version=0.5.2", "--input", "release_token=supersecret7"],
+    )
+
+    assert result.exit_code == 0, result.output
+    runs = list_runs(tmp_path)
+    run_dir = tmp_path / ".cdt" / "runs" / runs[0]["run_id"]
+    status_text = (run_dir / "status.json").read_text(encoding="utf-8")
+    manifest_text = (run_dir / "manifest.json").read_text(encoding="utf-8")
+    assert "supersecret7" not in status_text
+    assert "supersecret7" not in manifest_text
+    assert "***" in status_text

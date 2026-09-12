@@ -551,3 +551,138 @@ def test_resume_skips_finished_upload_and_reruns_only_testflight_completion(tmp_
     assert status["status"] == "success"
     assert status["completed_steps"] == ["0", "1", "2"]
     assert status["new_version"] == "1.2.3+5"
+
+
+def _write_release_project(path: Path) -> None:
+    package = path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "demo.py").write_text(
+        "from cdt.sdk import step\n\n@step('demo.ok')\ndef ok(ctx):\n    ctx.values['ok'] = '1'\n",
+        encoding="utf-8",
+    )
+    (path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "plugins:",
+                "  - cdt_steps.demo",
+                "pipelines:",
+                "  release:",
+                "    risk: production",
+                "    inputs:",
+                "      version:",
+                "        required: true",
+                "        pattern: '^\\d+\\.\\d+\\.\\d+$'",
+                "    steps:",
+                "      - demo.ok",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_production_pipeline_requires_and_accepts_declared_input(tmp_path, monkeypatch):
+    _write_release_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    missing = runner.invoke(app, ["run", "release", "--confirm", "release"])
+    mismatch = runner.invoke(
+        app,
+        ["run", "release", "--input", "version=not-semver", "--confirm", "release"],
+    )
+    accepted = runner.invoke(
+        app,
+        ["run", "release", "--input", "version=0.5.2", "--confirm", "release"],
+    )
+
+    assert missing.exit_code != 0
+    assert "Missing required pipeline input" in missing.output
+    assert mismatch.exit_code != 0
+    assert "does not match pattern" in mismatch.output
+    assert accepted.exit_code == 0, accepted.output
+    runs = list_runs(tmp_path)
+    assert len(runs) == 1
+    manifest = read_json(tmp_path / ".cdt" / "runs" / runs[0]["run_id"] / "manifest.json")
+    assert manifest["command"] == ["cdt", "run", "release", "--input", "version=0.5.2"]
+    assert manifest["inputs"] == {"version": "0.5.2"}
+
+
+def test_schema_exposes_pipeline_inputs():
+    payload = schema_payload()
+
+    input_def = payload["$defs"]["input"]
+    assert input_def["additionalProperties"] is False
+    assert sorted(input_def["properties"]) == ["pattern", "required"]
+    pipeline_inputs = payload["$defs"]["pipeline"]["properties"]["inputs"]
+    assert pipeline_inputs["additionalProperties"] == {"$ref": "#/$defs/input"}
+    assert payload == json.loads(bundled_schema_path().read_text(encoding="utf-8"))
+
+
+def test_detached_execution_propagates_inputs(tmp_path):
+    package = tmp_path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "demo.py").write_text(
+        "from cdt.sdk import step\n\n"
+        "@step('demo.echo')\n"
+        "def echo(ctx, message: str):\n"
+        "    (ctx.cwd / 'message.txt').write_text(message, encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "plugins:",
+                "  - cdt_steps.demo",
+                "pipelines:",
+                "  test:",
+                "    inputs:",
+                "      version:",
+                "        required: true",
+                "    steps:",
+                "      - demo.echo:",
+                "          message: ${inputs.version}",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    run_dir = tmp_path / ".cdt" / "runs" / "input-run"
+    run_dir.mkdir(parents=True)
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(tmp_path), env.get("PYTHONPATH")]))
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "cdt.agent_release_worker",
+            "--pipeline",
+            "test",
+            "--run-id",
+            "input-run",
+            "--log",
+            str(run_dir / "output.log"),
+            "--exit-file",
+            str(run_dir / "exit-code"),
+            "--status-file",
+            str(run_dir / "status.json"),
+            "--input",
+            "version=0.5.2",
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "message.txt").read_text(encoding="utf-8") == "0.5.2"
+    status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+    assert status["inputs"] == {"version": "0.5.2"}

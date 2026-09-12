@@ -12,7 +12,7 @@ from ..redaction import SecretRedactor
 from ..runner import CommandRunner
 from ..runs import RunOutputRecorder, ensure_run, write_exit_code, write_text_atomic
 from .builtins import register_builtin_steps
-from .config import configured_steps, load_pipeline_config, load_plugins
+from .config import configured_steps, load_pipeline_config, load_plugins, validate_pipeline_inputs
 from .context import PipelineContext
 from .executor import PipelineExecutionError, PipelineExecutor
 from .validation import validate_pipeline
@@ -31,6 +31,7 @@ def run_configured_pipeline(
     run_id: str | None = None,
     detached: bool = False,
     record_run: bool = True,
+    inputs: dict[str, str] | None = None,
 ) -> str | None:
     config = load_pipeline_config(cwd)
     register_builtin_steps()
@@ -43,11 +44,15 @@ def run_configured_pipeline(
     errors = validate_pipeline(config, name)
     if errors:
         raise typer.BadParameter("Invalid pipeline config: " + "; ".join(error["message"] for error in errors))
+    inputs = dict(inputs or {})
+    validate_pipeline_inputs(pipeline, inputs)
     steps = configured_steps(pipeline)
     resume_step_id = _resolve_resume_from(steps, resume_from) if resume_from is not None else None
     run_paths = None
     if record_run:
         command = ["cdt", "run", name]
+        for input_name, input_value in inputs.items():
+            command.extend(["--input", f"{input_name}={input_value}"])
         for task_id in ids or []:
             command.extend(["--id", task_id])
         run_paths = ensure_run(
@@ -57,6 +62,8 @@ def run_configured_pipeline(
             run_id=run_id,
             command=command,
             detached=detached,
+            inputs=inputs,
+            env=env,
         )
     if run_paths is not None and not detached:
         write_text_atomic(run_paths.pid, f"{os.getpid()}\n")
@@ -74,6 +81,7 @@ def run_configured_pipeline(
         runner=runner or CommandRunner(),
         ids=ids or [],
         pipeline_name=name,
+        inputs=inputs,
         status_file=primary_status,
         mirror_status_file=mirror_status,
         run_id=run_paths.run_id if run_paths is not None else run_id,
@@ -175,6 +183,14 @@ def _restore_resume_status(ctx: PipelineContext, status_file: Path | None) -> No
     completed_steps = [step for step in raw_completed_steps if isinstance(step, str)]
     _validate_resume_step_ids(completed_steps)
     ctx.completed_steps = completed_steps
+    raw_inputs = payload.get("inputs")
+    saved_inputs = _validate_resume_inputs(raw_inputs)
+    if saved_inputs != ctx.inputs:
+        raise typer.BadParameter(
+            "Resume inputs do not match the original run: "
+            f"original inputs: {saved_inputs or {}}, current inputs: {ctx.inputs or {}}. "
+            "A release cannot be continued with different inputs."
+        )
     ctx.old_version = payload.get("old_version") if isinstance(payload.get("old_version"), str) else None
     ctx.new_version = payload.get("new_version") if isinstance(payload.get("new_version"), str) else None
     artifacts = payload.get("artifacts", [])
@@ -187,6 +203,16 @@ def _restore_resume_status(ctx: PipelineContext, status_file: Path | None) -> No
         if not artifact.path.exists():
             raise typer.BadParameter(f"Resume artifact does not exist: {artifact.path}")
         ctx.artifacts[artifact_payload["name"]] = artifact
+
+
+def _validate_resume_inputs(raw_inputs: Any) -> dict[str, str]:
+    if raw_inputs is None:
+        return {}
+    if not isinstance(raw_inputs, dict) or not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in raw_inputs.items()
+    ):
+        raise typer.BadParameter("Resume status inputs must be a mapping of strings")
+    return dict(raw_inputs)
 
 
 def _validate_resume_step_ids(step_ids: list[str]) -> None:

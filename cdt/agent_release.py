@@ -45,15 +45,27 @@ def start_release(
     *,
     run_id: str | None = None,
     confirm: str | None = None,
+    inputs: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     ids = ids or []
     cwd = Path.cwd()
     command = ["cdt", "run", pipeline]
+    for input_name, input_value in (inputs or {}).items():
+        command.extend(["--input", f"{input_name}={input_value}"])
     for task_id in ids:
         command.extend(["--id", task_id])
     if confirm is not None:
         command.extend(["--confirm", confirm])
-    paths = create_run(cwd, pipeline, ids=ids, run_id=run_id, command=command, detached=True)
+    paths = create_run(
+        cwd,
+        pipeline,
+        ids=ids,
+        run_id=run_id,
+        command=command,
+        detached=True,
+        inputs=inputs,
+        env=_load_project_env(cwd),
+    )
 
     worker_cmd = [
         sys.executable,
@@ -72,6 +84,8 @@ def start_release(
     ]
     for task_id in ids:
         worker_cmd.extend(["--id", task_id])
+    for input_name, input_value in (inputs or {}).items():
+        worker_cmd.extend(["--input", f"{input_name}={input_value}"])
     if confirm is not None:
         worker_cmd.extend(["--confirm", confirm])
 
@@ -162,6 +176,7 @@ def release_status(pipeline: str | None = None, *, run_id: str | None = None) ->
         "failed_step",
         "error",
         "artifacts",
+        "inputs",
         "old_version",
         "new_version",
         "started_at",

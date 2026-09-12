@@ -22,6 +22,25 @@ def _write_config(tmp_path):
     )
 
 
+def _write_inputs_config(tmp_path):
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  test:",
+                "    inputs:",
+                "      version:",
+                "      channel:",
+                "    steps:",
+                "      - notify.success",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def test_agent_release_start_creates_metadata_without_streaming_log(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_config(tmp_path)
@@ -218,3 +237,123 @@ def test_agent_release_stop_handles_missing_pid(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert payload["status"] == "unknown"
     assert payload["stop_result"] == "missing_pid"
+
+
+def test_agent_release_start_propagates_inputs_to_worker_and_manifest(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write_inputs_config(tmp_path)
+    calls = []
+
+    def fake_popen(cmd, **kwargs):
+        calls.append(cmd)
+        return FakeProcess()
+
+    monkeypatch.setattr(agent_release.subprocess, "Popen", fake_popen)
+
+    result = runner.invoke(
+        app,
+        ["agent-release", "start", "test", "--input", "version=0.5.2", "--id", "BRH-1", "--json"],
+    )
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0
+    run_dir = tmp_path / ".cdt" / "runs" / payload["run_id"]
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["inputs"] == {"version": "0.5.2"}
+    assert manifest["command"] == ["cdt", "run", "test", "--input", "version=0.5.2", "--id", "BRH-1"]
+    worker_cmd = calls[-1]
+    assert worker_cmd[worker_cmd.index("--input") + 1] == "version=0.5.2"
+    initial_status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+    assert initial_status["inputs"] == {"version": "0.5.2"}
+
+
+def test_agent_release_start_rejects_unknown_input(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write_config(tmp_path)
+
+    result = runner.invoke(app, ["agent-release", "start", "test", "--input", "version=0.5.2"])
+
+    assert result.exit_code != 0
+    assert "Unknown pipeline input" in result.output
+    assert not (tmp_path / ".cdt" / "runs").exists()
+
+
+def test_agent_release_start_requires_declared_input(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  test:",
+                "    inputs:",
+                "      version:",
+                "        required: true",
+                "    steps:",
+                "      - notify.success",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["agent-release", "start", "test"])
+
+    assert result.exit_code != 0
+    assert "Missing required pipeline input" in result.output
+    assert not (tmp_path / ".cdt" / "runs").exists()
+
+
+def test_agent_release_worker_passes_inputs_to_cdt_run(tmp_path, monkeypatch):
+    log_path = tmp_path / ".cdt" / "agent-release-test.log"
+    exit_path = tmp_path / ".cdt" / "agent-release-test.exit"
+    status_path = tmp_path / ".cdt" / "agent-release-test.status.json"
+    captured = {}
+
+    def fail_popen(cmd, **kwargs):
+        captured["cmd"] = list(cmd)
+        raise OSError("stop before start")
+
+    monkeypatch.setattr(agent_release_worker.subprocess, "Popen", fail_popen)
+    monkeypatch.setattr(
+        agent_release_worker.sys,
+        "argv",
+        [
+            "agent_release_worker",
+            "--pipeline",
+            "test",
+            "--log",
+            str(log_path),
+            "--exit-file",
+            str(exit_path),
+            "--status-file",
+            str(status_path),
+            "--input",
+            "version=0.5.2",
+            "--input",
+            "channel=beta",
+        ],
+    )
+
+    assert agent_release_worker.main() == 1
+
+    cmd = captured["cmd"]
+    inputs = [cmd[index + 1] for index, flag in enumerate(cmd) if flag == "--input"]
+    assert inputs == ["version=0.5.2", "channel=beta"]
+
+
+def test_agent_release_status_includes_inputs(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cdt_dir = tmp_path / ".cdt"
+    cdt_dir.mkdir()
+    (cdt_dir / "agent-release-test.exit").write_text("0\n", encoding="utf-8")
+    (cdt_dir / "agent-release-test.status.json").write_text(
+        json.dumps({"status": "success", "inputs": {"version": "0.5.2"}}),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["agent-release", "status", "test", "--json"])
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0
+    assert payload["inputs"] == {"version": "0.5.2"}

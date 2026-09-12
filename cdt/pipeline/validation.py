@@ -37,6 +37,16 @@ def validate_pipeline(config: PipelineConfig, name: str | None = None) -> list[d
     return errors
 
 
+def declared_inputs_payload(pipeline: PipelineSpec | None) -> dict[str, dict[str, Any]]:
+    """Declarations only: never include runtime input values."""
+    if pipeline is None:
+        return {}
+    return {
+        name: ({"required": spec.required, "pattern": spec.pattern} if spec.pattern else {"required": spec.required})
+        for name, spec in pipeline.inputs.items()
+    }
+
+
 def inspect_payload(
     config: PipelineConfig,
     name: str,
@@ -50,6 +60,7 @@ def inspect_payload(
         "pipelines": pipeline_names(config),
         "plugins": list(config.plugins),
         "declared_risk": pipeline.risk if pipeline is not None else None,
+        "inputs": declared_inputs_payload(pipeline),
         "steps": step_tree(pipeline.steps) if pipeline is not None else [],
         "registered_steps": list_steps(),
         "errors": errors or [],

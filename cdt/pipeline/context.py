@@ -23,6 +23,7 @@ class PipelineContext:
     new_version: str | None = None
     artifacts: dict[str, BuildArtifact] = field(default_factory=dict)
     values: dict[str, str] = field(default_factory=dict)
+    inputs: dict[str, str] = field(default_factory=dict)
     status_file: Path | None = None
     mirror_status_file: Path | None = None
     run_id: str | None = None
@@ -149,6 +150,7 @@ class PipelineContext:
                 "parallel_completed": list(self.parallel_completed),
                 "parallel_failed": list(self.parallel_failed),
                 "artifacts": [artifact.to_json(name) for name, artifact in sorted(self.artifacts.items())],
+                "inputs": dict(self.inputs),
                 "old_version": self.old_version,
                 "new_version": self.new_version,
                 "started_at": self.started_at,

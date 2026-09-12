@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,8 @@ except ModuleNotFoundError:  # pragma: no cover - exercised only without depende
     yaml = None
 
 _INTERPOLATION_RE = re.compile(r"\$\{([^}]+)\}")
+_INPUT_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
+_INPUT_FIELDS = {"required", "pattern"}
 
 
 @dataclass(frozen=True)
@@ -41,10 +44,18 @@ PipelineItemSpec = StepSpec | ParallelSpec | SequenceSpec
 
 
 @dataclass(frozen=True)
+class InputSpec:
+    name: str
+    required: bool = False
+    pattern: str | None = None
+
+
+@dataclass(frozen=True)
 class PipelineSpec:
     name: str
     steps: list[PipelineItemSpec]
     risk: str = "standard"
+    inputs: dict[str, InputSpec] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -111,7 +122,7 @@ def load_pipeline_config(cwd: Path, filename: str = "cdt.yaml") -> PipelineConfi
             raise typer.BadParameter("Pipeline names must be non-empty strings")
         if not isinstance(pipeline_data, dict):
             raise typer.BadParameter(f"Pipeline '{pipeline_name}' must be a mapping")
-        unknown_pipeline_fields = sorted(set(pipeline_data) - {"steps", "risk"})
+        unknown_pipeline_fields = sorted(set(pipeline_data) - {"steps", "risk", "inputs"})
         if unknown_pipeline_fields:
             raise typer.BadParameter(
                 f"Pipeline '{pipeline_name}' has unsupported fields: " + ", ".join(unknown_pipeline_fields)
@@ -122,13 +133,82 @@ def load_pipeline_config(cwd: Path, filename: str = "cdt.yaml") -> PipelineConfi
         raw_steps = pipeline_data.get("steps")
         if not isinstance(raw_steps, list):
             raise typer.BadParameter(f"Pipeline '{pipeline_name}' steps must be a list")
+        raw_inputs = pipeline_data.get("inputs") or {}
+        if not isinstance(raw_inputs, dict):
+            raise typer.BadParameter(f"Pipeline '{pipeline_name}' inputs must be a mapping")
         pipelines[pipeline_name] = PipelineSpec(
             name=pipeline_name,
             steps=[_parse_step_spec(pipeline_name, index, item) for index, item in enumerate(raw_steps, start=1)],
             risk=risk,
+            inputs={
+                input_name: _parse_input_spec(pipeline_name, input_name, input_data)
+                for input_name, input_data in raw_inputs.items()
+            },
         )
 
     return PipelineConfig(path=path, plugins=list(raw_plugins), pipelines=pipelines)
+
+
+def _parse_input_spec(pipeline_name: str, input_name: Any, input_data: Any) -> InputSpec:
+    prefix = f"Pipeline '{pipeline_name}' input"
+    if not isinstance(input_name, str) or _INPUT_NAME_RE.fullmatch(input_name) is None:
+        raise typer.BadParameter(
+            f"{prefix} name {input_name!r} is invalid; use letters, digits, '-' and '_' starting with a letter"
+        )
+    if input_data is None:
+        return InputSpec(name=input_name)
+    if not isinstance(input_data, dict):
+        raise typer.BadParameter(f"{prefix} '{input_name}' must be a mapping")
+    unknown_fields = sorted(set(input_data) - _INPUT_FIELDS)
+    if unknown_fields:
+        raise typer.BadParameter(f"{prefix} '{input_name}' has unsupported fields: " + ", ".join(unknown_fields))
+    required = input_data.get("required", False)
+    if not isinstance(required, bool):
+        raise typer.BadParameter(f"{prefix} '{input_name}' required must be a boolean")
+    pattern = input_data.get("pattern")
+    if pattern is not None:
+        if not isinstance(pattern, str) or not pattern.strip():
+            raise typer.BadParameter(f"{prefix} '{input_name}' pattern must be a non-empty string")
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            raise typer.BadParameter(f"{prefix} '{input_name}' pattern is not a valid regex: {exc}") from exc
+    return InputSpec(name=input_name, required=required, pattern=pattern)
+
+
+def parse_pipeline_inputs(entries: Sequence[str]) -> dict[str, str]:
+    """Parse repeatable ``--input KEY=VALUE`` entries preserving order."""
+    inputs: dict[str, str] = {}
+    for entry in entries:
+        if "=" not in entry:
+            raise typer.BadParameter(f"Invalid --input entry '{entry}'. Use --input KEY=VALUE")
+        key, value = entry.split("=", 1)
+        if not key.strip():
+            raise typer.BadParameter(f"Invalid --input entry '{entry}': key must not be empty")
+        if key in inputs:
+            raise typer.BadParameter(f"Duplicate --input key: {key}")
+        inputs[key] = value
+    return inputs
+
+
+def validate_pipeline_inputs(pipeline: PipelineSpec, inputs: Mapping[str, str]) -> None:
+    """Reject unknown, missing required, or pattern-violating pipeline inputs."""
+    declared = pipeline.inputs
+    unknown = sorted(set(inputs) - set(declared))
+    if unknown:
+        available = ", ".join(sorted(declared)) or "none"
+        raise typer.BadParameter(
+            f"Unknown pipeline input for '{pipeline.name}': {', '.join(unknown)}. Declared inputs: {available}"
+        )
+    missing = [name for name, spec in declared.items() if spec.required and not inputs.get(name, "").strip()]
+    if missing:
+        raise typer.BadParameter(f"Missing required pipeline input(s) for '{pipeline.name}': {', '.join(missing)}")
+    for name, spec in declared.items():
+        value = inputs.get(name)
+        if value is None or spec.pattern is None:
+            continue
+        if re.fullmatch(spec.pattern, value) is None:
+            raise typer.BadParameter(f"Pipeline input '{name}' does not match pattern '{spec.pattern}': {value!r}")
 
 
 def load_plugins(plugins: list[str]) -> None:
@@ -232,6 +312,12 @@ def _resolve_expression(expression: str, ctx: PipelineContext) -> str:
         return ", ".join(ctx.ids)
     if key == "flutter.version":
         return ctx.values.get("flutter.version") or _current_flutter_version(ctx.cwd)
+    if key.startswith("inputs."):
+        input_key = key.removeprefix("inputs.")
+        try:
+            return ctx.inputs[input_key]
+        except KeyError as exc:
+            raise typer.BadParameter(f"Missing pipeline input: {input_key}") from exc
     if key.startswith("values."):
         value_key = key.removeprefix("values.")
         try:

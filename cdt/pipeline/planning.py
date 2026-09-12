@@ -5,7 +5,7 @@ from typing import Any
 
 from .config import ParallelSpec, PipelineConfig, PipelineItemSpec, SequenceSpec, StepSpec
 from .registry import StepMetadata, get_step_metadata
-from .validation import pipeline_names, validate_pipeline
+from .validation import declared_inputs_payload, pipeline_names, validate_pipeline
 
 _RISK_ORDER = {
     "safe": 0,
@@ -41,6 +41,7 @@ def plan_payload(config: PipelineConfig, name: str, *, errors: list[dict[str, st
         "pipelines": pipeline_names(config),
         "plugins": list(config.plugins),
         "declared_risk": pipeline.risk if pipeline is not None else None,
+        "inputs": declared_inputs_payload(pipeline),
         "overall_risk": _aggregate_risks([_node_risk(step) for step in steps]),
         "steps": steps,
         "warnings": warnings,

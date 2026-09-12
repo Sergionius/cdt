@@ -47,8 +47,21 @@ def schema_payload() -> dict[str, Any]:
                 "additionalProperties": False,
                 "required": ["steps"],
                 "properties": {
+                    "inputs": {
+                        "type": "object",
+                        "additionalProperties": {"$ref": "#/$defs/input"},
+                        "default": {},
+                    },
                     "risk": {"enum": ["standard", "production"], "default": "standard"},
                     "steps": {"type": "array", "items": {"$ref": "#/$defs/item"}},
+                },
+            },
+            "input": {
+                "type": ["object", "null"],
+                "additionalProperties": False,
+                "properties": {
+                    "required": {"type": "boolean", "default": False},
+                    "pattern": {"type": "string"},
                 },
             },
             "item": {

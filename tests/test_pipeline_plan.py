@@ -14,6 +14,7 @@ def setup_function():
     _clear_steps_for_tests()
     sys.modules.pop("cdt_steps.artifacts", None)
     sys.modules.pop("cdt_steps.side_effect", None)
+    sys.modules.pop("cdt_steps.inputs_demo", None)
     sys.modules.pop("cdt_steps", None)
 
 
@@ -21,7 +22,49 @@ def teardown_function():
     _clear_steps_for_tests()
     sys.modules.pop("cdt_steps.artifacts", None)
     sys.modules.pop("cdt_steps.side_effect", None)
+    sys.modules.pop("cdt_steps.inputs_demo", None)
     sys.modules.pop("cdt_steps", None)
+
+
+def _write_inputs_project(tmp_path, monkeypatch) -> None:
+    package = tmp_path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "inputs_demo.py").write_text(
+        "\n".join(
+            [
+                "from cdt.sdk import step",
+                "",
+                "@step('demo.echo_input')",
+                "def echo_input(ctx, message: str):",
+                "    (ctx.cwd / 'message.txt').write_text(message, encoding='utf-8')",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "plugins:",
+                "  - cdt_steps.inputs_demo",
+                "pipelines:",
+                "  demo:",
+                "    inputs:",
+                "      version:",
+                "        required: true",
+                "        pattern: '^\\d+\\.\\d+\\.\\d+$'",
+                "    steps:",
+                "      - demo.echo_input:",
+                "          message: ${inputs.version}",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
 
 
 def test_pipeline_plan_json_includes_risks_and_parallel_steps(tmp_path, monkeypatch):
@@ -655,3 +698,72 @@ def _write_any_artifact_plugin(tmp_path):
         + "\n",
         encoding="utf-8",
     )
+
+
+def test_pipeline_plan_json_includes_inputs_declarations(tmp_path, monkeypatch):
+    _write_inputs_project(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["pipeline", "plan", "demo", "--json"])
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0
+    assert payload["inputs"] == {"version": {"required": True, "pattern": r"^\d+\.\d+\.\d+$"}}
+    assert "0.5.2" not in result.output
+
+
+def test_pipeline_inspect_human_output_lists_inputs(tmp_path, monkeypatch):
+    _write_inputs_project(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["pipeline", "inspect", "demo"])
+
+    assert result.exit_code == 0
+    assert "Inputs:" in result.output
+    pattern = r"^\d+\.\d+\.\d+$"
+    assert f"version (required, pattern: {pattern})" in result.output
+
+
+def test_run_dry_run_validates_declared_inputs(tmp_path, monkeypatch):
+    _write_inputs_project(tmp_path, monkeypatch)
+
+    missing = runner.invoke(app, ["run", "demo", "--dry-run"])
+    unknown = runner.invoke(app, ["run", "demo", "--dry-run", "--input", "version=0.5.2", "--input", "oops=1"])
+    mismatch = runner.invoke(app, ["run", "demo", "--dry-run", "--input", "version=not-semver"])
+    valid = runner.invoke(app, ["run", "demo", "--dry-run", "--input", "version=0.5.2"])
+
+    assert missing.exit_code != 0
+    assert "Missing required pipeline input" in missing.output
+    assert unknown.exit_code != 0
+    assert "Unknown pipeline input" in unknown.output
+    assert mismatch.exit_code != 0
+    assert "does not match pattern" in mismatch.output
+    assert valid.exit_code == 0, valid.output
+    assert "Pipeline: demo" in valid.output
+    assert not (tmp_path / ".cdt" / "runs").exists()
+    assert not (tmp_path / "message.txt").exists()
+
+
+def test_run_passes_inputs_to_step_interpolation(tmp_path, monkeypatch):
+    _write_inputs_project(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["run", "demo", "--input", "version=0.5.2"])
+
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "message.txt").read_text(encoding="utf-8") == "0.5.2"
+
+
+def test_run_rejects_malformed_input_entries(tmp_path, monkeypatch):
+    _write_inputs_project(tmp_path, monkeypatch)
+
+    missing_equals = runner.invoke(app, ["run", "demo", "--input", "version"])
+    empty_key = runner.invoke(app, ["run", "demo", "--input", "=0.5.2"])
+    duplicate = runner.invoke(
+        app,
+        ["run", "demo", "--input", "version=0.5.2", "--input", "version=0.5.3"],
+    )
+
+    assert missing_equals.exit_code != 0
+    assert "Use --input KEY=VALUE" in missing_equals.output
+    assert empty_key.exit_code != 0
+    assert "key must not be empty" in empty_key.output
+    assert duplicate.exit_code != 0
+    assert "Duplicate --input key: version" in duplicate.output

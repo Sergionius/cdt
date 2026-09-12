@@ -5,7 +5,17 @@ import typer
 
 from cdt.pipeline import PipelineContext, PipelineExecutor
 from cdt.pipeline.builtins import register_builtin_steps
-from cdt.pipeline.config import ParallelSpec, SequenceSpec, configured_steps, load_pipeline_config, load_plugins
+from cdt.pipeline.config import (
+    InputSpec,
+    ParallelSpec,
+    PipelineSpec,
+    SequenceSpec,
+    configured_steps,
+    load_pipeline_config,
+    load_plugins,
+    parse_pipeline_inputs,
+    validate_pipeline_inputs,
+)
 from cdt.pipeline.registry import _clear_steps_for_tests
 from cdt.pipeline.validation import validate_pipeline
 from cdt.runner import CommandRunner
@@ -26,6 +36,145 @@ class RecordingRunner:
     def run(self, cmd: list[str], *, cwd):
         self.runs.append((cmd, cwd))
         return 0
+
+
+def test_pipeline_inputs_declaration_is_parsed(tmp_path):
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  demo:",
+                "    inputs:",
+                "      version:",
+                "        required: true",
+                "        pattern: '^\\d+\\.\\d+\\.\\d+$'",
+                "      channel:",
+                "    steps: []",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config = load_pipeline_config(tmp_path)
+
+    inputs = config.pipelines["demo"].inputs
+    assert set(inputs) == {"version", "channel"}
+    assert inputs["version"] == InputSpec(name="version", required=True, pattern=r"^\d+\.\d+\.\d+$")
+    assert inputs["channel"] == InputSpec(name="channel")
+    assert validate_pipeline(config, "demo") == []
+
+
+def test_pipeline_inputs_reject_unknown_fields(tmp_path):
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  demo:",
+                "    inputs:",
+                "      version:",
+                "        required: true",
+                "        secret: true",
+                "    steps: []",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(typer.BadParameter, match="input 'version' has unsupported fields: secret"):
+        load_pipeline_config(tmp_path)
+
+
+def test_pipeline_inputs_reject_invalid_names(tmp_path):
+    for name in ("1version", "bad name", "v.ersion"):
+        (tmp_path / "cdt.yaml").write_text(
+            f"version: 1\npipelines:\n  demo:\n    inputs:\n      {name}:\n    steps: []\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(typer.BadParameter, match="input name.*is invalid"):
+            load_pipeline_config(tmp_path)
+
+
+def test_pipeline_inputs_reject_non_boolean_required(tmp_path):
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    inputs:\n      version:\n        required: always\n    steps: []\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(typer.BadParameter, match="input 'version' required must be a boolean"):
+        load_pipeline_config(tmp_path)
+
+
+def test_pipeline_inputs_reject_non_string_pattern(tmp_path):
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    inputs:\n      version:\n        pattern: 5\n    steps: []\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(typer.BadParameter, match="input 'version' pattern must be a non-empty string"):
+        load_pipeline_config(tmp_path)
+
+
+def test_pipeline_inputs_reject_invalid_regex_pattern(tmp_path):
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    inputs:\n      version:\n        pattern: '['\n    steps: []\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(typer.BadParameter, match="input 'version' pattern is not a valid regex"):
+        load_pipeline_config(tmp_path)
+
+
+def test_pipeline_inputs_must_be_mapping(tmp_path):
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    inputs:\n      - version\n    steps: []\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(typer.BadParameter, match="inputs must be a mapping"):
+        load_pipeline_config(tmp_path)
+
+
+def test_parse_pipeline_inputs_preserves_order_and_values():
+    inputs = parse_pipeline_inputs(["version=0.5.2", "channel=beta"])
+
+    assert inputs == {"version": "0.5.2", "channel": "beta"}
+    assert list(inputs) == ["version", "channel"]
+
+
+def test_parse_pipeline_inputs_rejects_malformed_entries():
+    with pytest.raises(typer.BadParameter, match="Use --input KEY=VALUE"):
+        parse_pipeline_inputs(["version"])
+    with pytest.raises(typer.BadParameter, match="key must not be empty"):
+        parse_pipeline_inputs(["=0.5.2"])
+    with pytest.raises(typer.BadParameter, match="Duplicate --input key: version"):
+        parse_pipeline_inputs(["version=1", "version=2"])
+
+
+def test_validate_pipeline_inputs_rejects_unknown_missing_and_pattern_mismatch():
+    pipeline = PipelineSpec(
+        name="demo",
+        steps=[],
+        inputs={
+            "version": InputSpec(name="version", required=True, pattern=r"\d+\.\d+\.\d+"),
+            "channel": InputSpec(name="channel"),
+        },
+    )
+
+    with pytest.raises(
+        typer.BadParameter,
+        match="Unknown pipeline input for 'demo': oops. Declared inputs: channel, version",
+    ):
+        validate_pipeline_inputs(pipeline, {"oops": "1"})
+    with pytest.raises(typer.BadParameter, match=r"Missing required pipeline input\(s\) for 'demo': version"):
+        validate_pipeline_inputs(pipeline, {})
+    with pytest.raises(typer.BadParameter, match="input 'version' does not match pattern"):
+        validate_pipeline_inputs(pipeline, {"version": "abc"})
+    validate_pipeline_inputs(pipeline, {"version": "0.5.2"})
 
 
 def test_yaml_plugin_function_step_runs_with_interpolated_options(tmp_path, monkeypatch):

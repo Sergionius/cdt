@@ -5,6 +5,7 @@ import typer
 
 from cdt.artifacts import ArtifactKind, BuildArtifact
 from cdt.pipeline import PipelineContext
+from cdt.pipeline.config import resolve_value
 from cdt.runner import CommandRunner
 
 
@@ -49,3 +50,18 @@ def test_context_errors_when_artifact_is_missing(tmp_path):
 
     with pytest.raises(typer.BadParameter, match="Missing pipeline artifact: ipa"):
         ctx.artifact("ipa")
+
+
+def test_resolve_value_interpolates_inputs(tmp_path):
+    ctx = _ctx(tmp_path)
+    ctx.inputs = {"version": "0.5.2"}
+
+    assert resolve_value("${inputs.version}", ctx) == "0.5.2"
+    assert resolve_value("v${inputs.version}", ctx) == "v0.5.2"
+
+
+def test_resolve_value_missing_input_errors_clearly(tmp_path):
+    ctx = _ctx(tmp_path)
+
+    with pytest.raises(typer.BadParameter, match="Missing pipeline input: version"):
+        resolve_value("${inputs.version}", ctx)

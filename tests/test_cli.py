@@ -347,3 +347,30 @@ def test_pipeline_steps_json_includes_plugin_steps(tmp_path, monkeypatch):
     assert firebase["produces"] == [{"result_type": "upload_result", "name_options": []}]
     assert steps["offline.fetch_config"]["risk"] == "custom"
     assert steps["offline.fetch_config"]["plugin"] is True
+
+
+def test_pipeline_inspect_json_includes_inputs_declarations(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  demo:",
+                "    inputs:",
+                "      version:",
+                "        required: true",
+                "        pattern: '^\\d+\\.\\d+\\.\\d+$'",
+                "    steps:",
+                "      - flutter.pub_get",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["pipeline", "inspect", "demo", "--json"])
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0
+    assert payload["inputs"] == {"version": {"required": True, "pattern": r"^\d+\.\d+\.\d+$"}}

@@ -18,6 +18,7 @@ def main() -> int:
     parser.add_argument("--exit-file", required=True)
     parser.add_argument("--status-file", required=True)
     parser.add_argument("--id", action="append", default=[])
+    parser.add_argument("--input", action="append", default=[])
     parser.add_argument("--confirm")
     args = parser.parse_args()
 
@@ -26,6 +27,8 @@ def main() -> int:
         cmd.extend(["--run-id", args.run_id])
     for task_id in args.id:
         cmd.extend(["--id", task_id])
+    for entry in args.input:
+        cmd.extend(["--input", entry])
     if args.confirm is not None:
         cmd.extend(["--confirm", args.confirm])
 

@@ -1,5 +1,6 @@
 import json
 import sys
+from pathlib import Path
 
 from typer.testing import CliRunner
 
@@ -244,6 +245,126 @@ def test_status_file_is_output_only_when_resuming(tmp_path, monkeypatch):
     assert not (tmp_path / "skipped.txt").exists()
     assert (tmp_path / "ran.txt").exists()
     assert json.loads(output_status.read_text(encoding="utf-8"))["status"] == "success"
+
+
+def _write_input_project(tmp_path: Path) -> None:
+    package = tmp_path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "resume.py").write_text(
+        "\n".join(
+            [
+                "from cdt.sdk import step",
+                "",
+                "@step('demo.touch')",
+                "def touch(ctx, output: str):",
+                "    path = ctx.cwd / output",
+                "    path.write_text('ran', encoding='utf-8')",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "plugins:",
+                "  - cdt_steps.resume",
+                "pipelines:",
+                "  demo:",
+                "    inputs:",
+                "      version:",
+                "        required: true",
+                "    steps:",
+                "      - demo.touch: {output: ran.txt}",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_resume_accepts_matching_inputs(tmp_path, monkeypatch):
+    _write_input_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    status = tmp_path / "status.json"
+    status.write_text(
+        json.dumps({"completed_steps": [], "inputs": {"version": "0.5.2"}, "artifacts": []}),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "demo",
+            "--input",
+            "version=0.5.2",
+            "--resume-status-file",
+            str(status),
+            "--skip-completed",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "ran.txt").exists()
+
+
+def test_resume_rejects_continuation_with_different_version(tmp_path, monkeypatch):
+    _write_input_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    status = tmp_path / "status.json"
+    status.write_text(
+        json.dumps({"completed_steps": [], "inputs": {"version": "0.5.2"}, "artifacts": []}),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "demo",
+            "--input",
+            "version=0.5.3",
+            "--resume-status-file",
+            str(status),
+            "--skip-completed",
+        ],
+    )
+
+    assert result.exit_code != 0
+    normalized = " ".join(result.output.translate({ord(ch): " " for ch in "│╭─╮╰╯"}).split())
+    assert "Resume inputs do not match the original run" in normalized
+    assert "A release cannot be continued with different inputs" in normalized
+    assert not (tmp_path / "ran.txt").exists()
+
+
+def test_resume_rejects_inputs_when_original_run_had_none(tmp_path, monkeypatch):
+    _write_input_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    status = tmp_path / "status.json"
+    status.write_text(json.dumps({"completed_steps": [], "artifacts": []}), encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "demo",
+            "--input",
+            "version=0.5.2",
+            "--resume-status-file",
+            str(status),
+            "--skip-completed",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Resume inputs do not match the original run" in result.output
+    assert not (tmp_path / "ran.txt").exists()
 
 
 def test_old_name_based_resume_status_is_rejected(tmp_path, monkeypatch):

@@ -9,7 +9,12 @@ from .config import _load_project_env, _set_ui_mode
 from .doctor import run_doctor
 from .init_project import initialize_project
 from .pipeline.builtins import register_builtin_steps
-from .pipeline.config import load_pipeline_config, load_plugins
+from .pipeline.config import (
+    load_pipeline_config,
+    load_plugins,
+    parse_pipeline_inputs,
+    validate_pipeline_inputs,
+)
 from .pipeline.executor import PipelineExecutionError
 from .pipeline.planning import plan_payload
 from .pipeline.preflight import preflight_payload
@@ -193,6 +198,7 @@ def run_logs(
 def run_pipeline(
     name: str = typer.Argument(..., help="Pipeline name from cdt.yaml"),
     id: list[str] = typer.Option([], "--id", help="Repeatable: --id A --id B"),
+    input: list[str] = typer.Option([], "--input", help="Repeatable pipeline input: --input KEY=VALUE"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show pipeline plan without executing steps"),
     status_file: Path | None = typer.Option(None, "--status-file", help="Write machine-readable run status JSON"),
     resume_from: str | None = typer.Option(None, "--resume-from", help="Resume execution from this top-level step"),
@@ -211,10 +217,12 @@ def run_pipeline(
 ):
     """Run a pipeline from cdt.yaml."""
     cwd = Path.cwd()
+    inputs = parse_pipeline_inputs(input)
     if dry_run:
-        _pipeline_plan(cwd, name, json_output=False)
+        _pipeline_plan(cwd, name, json_output=False, inputs=inputs)
         return
     config = load_pipeline_config(cwd)
+    _validate_inputs(config, name, inputs)
     _confirm_pipeline_risk(config, name, confirm)
     env = _load_project_env(cwd)
     _set_ui_mode(env)
@@ -224,6 +232,7 @@ def run_pipeline(
             env,
             name,
             ids=id,
+            inputs=inputs,
             status_file=status_file,
             resume_from=resume_from,
             skip_completed=skip_completed,
@@ -276,6 +285,7 @@ def pipeline_inspect(
         raise typer.BadParameter(f"Unknown pipeline: {name}. Available pipelines: {available}")
     typer.echo(f"Pipeline: {name}")
     typer.echo(f"Declared risk: {config.pipelines[name].risk}")
+    _echo_declared_inputs(config.pipelines[name].inputs)
     typer.echo("Steps:")
     _echo_step_tree(step_tree(config.pipelines[name].steps))
     typer.echo("")
@@ -403,6 +413,7 @@ def pipeline_steps(json_output: bool = typer.Option(False, "--json", help="Emit 
 def agent_release_start(
     pipeline: str = typer.Argument(..., help="Pipeline name from cdt.yaml"),
     id: list[str] = typer.Option([], "--id", help="Repeatable: --id A --id B"),
+    input: list[str] = typer.Option([], "--input", help="Repeatable pipeline input: --input KEY=VALUE"),
     confirm: str | None = typer.Option(None, "--confirm", help="Exact pipeline name required for production"),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
 ):
@@ -428,6 +439,14 @@ def agent_release_start(
             raise typer.BadParameter(message)
         _echo_json({"schema_version": 1, "status": "error", "pipeline": pipeline, "error": message})
         raise typer.Exit(code=1)
+    try:
+        inputs = parse_pipeline_inputs(input)
+        validate_pipeline_inputs(config.pipelines[pipeline], inputs)
+    except typer.BadParameter as exc:
+        if not json_output:
+            raise
+        _echo_json({"schema_version": 1, "status": "error", "pipeline": pipeline, "error": str(exc)})
+        raise typer.Exit(code=1) from exc
     if _confirmation_required(config, pipeline, confirm):
         payload = {
             "schema_version": 1,
@@ -437,7 +456,7 @@ def agent_release_start(
         }
         _echo_json(payload) if json_output else typer.echo(format_yamlish(payload))
         raise typer.Exit(code=2)
-    payload = start_release(pipeline, ids=id, confirm=confirm)
+    payload = start_release(pipeline, ids=id, confirm=confirm, inputs=inputs)
     _echo_json(payload) if json_output else typer.echo(format_yamlish(payload))
     if payload["status"] == "failed":
         raise typer.Exit(code=1)
@@ -485,6 +504,12 @@ def _confirmation_required(config, name: str, confirm: str | None) -> bool:
     return pipeline is not None and pipeline.risk == "production" and confirm != name
 
 
+def _validate_inputs(config, name: str, inputs: dict[str, str]) -> None:
+    pipeline = config.pipelines.get(name)
+    if pipeline is not None:
+        validate_pipeline_inputs(pipeline, inputs)
+
+
 def _confirm_pipeline_risk(config, name: str, confirm: str | None) -> None:
     if not _confirmation_required(config, name, confirm):
         return
@@ -495,13 +520,14 @@ def _confirm_pipeline_risk(config, name: str, confirm: str | None) -> None:
         raise typer.BadParameter(f"Production pipeline '{name}' was not confirmed")
 
 
-def _pipeline_plan(cwd: Path, name: str, *, json_output: bool) -> None:
+def _pipeline_plan(cwd: Path, name: str, *, json_output: bool, inputs: dict[str, str] | None = None) -> None:
     if json_output:
         register_builtin_steps()
         config, errors = _load_config_for_json(cwd)
         if config is not None:
             errors.extend(_load_plugins_for_json(config.plugins))
             errors.extend(validate_pipeline(config, name))
+            _validate_plan_inputs(config, name, inputs, errors)
             _echo_json(plan_payload(config, name, errors=errors))
         else:
             _echo_json(_error_payload(name, errors))
@@ -513,6 +539,7 @@ def _pipeline_plan(cwd: Path, name: str, *, json_output: bool) -> None:
     register_builtin_steps()
     load_plugins(config.plugins)
     errors = validate_pipeline(config, name)
+    _validate_plan_inputs(config, name, inputs, errors)
     payload = plan_payload(config, name, errors=errors)
     if name not in config.pipelines:
         available = ", ".join(sorted(config.pipelines)) or "none"
@@ -520,6 +547,7 @@ def _pipeline_plan(cwd: Path, name: str, *, json_output: bool) -> None:
     typer.echo(f"Pipeline: {name}")
     typer.echo(f"Declared risk: {payload['declared_risk']}")
     typer.echo(f"Overall step risk: {payload['overall_risk']}")
+    _echo_declared_inputs(config.pipelines[name].inputs)
     typer.echo("Steps:")
     _echo_plan_tree(payload["steps"])
     if payload["warnings"]:
@@ -533,6 +561,33 @@ def _pipeline_plan(cwd: Path, name: str, *, json_output: bool) -> None:
         for error in errors:
             typer.echo(f"  {error.get('path', '')}: {error['message']}")
         raise typer.Exit(code=1)
+
+
+def _validate_plan_inputs(config, name: str, inputs: dict[str, str] | None, errors: list[dict[str, str]]) -> None:
+    """Validate run-mode inputs during dry-run; ``None`` inputs skip validation."""
+    if inputs is None:
+        return
+    pipeline = config.pipelines.get(name)
+    if pipeline is None:
+        return
+    try:
+        validate_pipeline_inputs(pipeline, inputs)
+    except typer.BadParameter as exc:
+        errors.append({"code": "invalid_pipeline_input", "message": str(exc), "path": f"pipelines.{name}.inputs"})
+
+
+def _echo_declared_inputs(inputs: dict) -> None:
+    if not inputs:
+        return
+    typer.echo("Inputs:")
+    for input_name, spec in inputs.items():
+        details = []
+        if spec.required:
+            details.append("required")
+        if spec.pattern:
+            details.append(f"pattern: {spec.pattern}")
+        suffix = f" ({', '.join(details)})" if details else ""
+        typer.echo(f"  {input_name}{suffix}")
 
 
 def _strict_warnings(config, name: str | None) -> list[dict[str, str]]:

@@ -1,5 +1,21 @@
 {
   "$defs": {
+    "input": {
+      "additionalProperties": false,
+      "properties": {
+        "pattern": {
+          "type": "string"
+        },
+        "required": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "item": {
       "oneOf": [
         {
@@ -822,6 +838,13 @@
     "pipeline": {
       "additionalProperties": false,
       "properties": {
+        "inputs": {
+          "additionalProperties": {
+            "$ref": "#/$defs/input"
+          },
+          "default": {},
+          "type": "object"
+        },
         "risk": {
           "default": "standard",
           "enum": [

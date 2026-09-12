@@ -42,22 +42,28 @@ def create_run(
     run_id: str | None = None,
     command: list[str] | None = None,
     detached: bool = False,
+    inputs: dict[str, str] | None = None,
+    env: dict[str, str] | None = None,
 ) -> RunPaths:
     run_id = run_id or generate_run_id(pipeline)
     paths = run_paths(cwd, run_id)
     paths.root.mkdir(parents=True, exist_ok=False)
     paths.log.touch()
+    # Defense-in-depth: inputs are declared non-secret, but run records still pass
+    # through the same redaction layer as every other persisted value.
+    redactor = SecretRedactor.from_env(env or {})
     manifest = {
         "schema_version": RUN_SCHEMA_VERSION,
         "run_id": run_id,
         "pipeline": pipeline,
         "ids": list(ids or []),
+        "inputs": redactor.redact_data(dict(inputs or {})),
         "cdt_version": __version__,
         "project_root": str(cwd.resolve()),
         "git_commit": _git_value(cwd, ["rev-parse", "HEAD"]),
         "git_branch": _git_value(cwd, ["branch", "--show-current"]),
         "started_at": now(),
-        "command": command or ["cdt", "run", pipeline],
+        "command": redactor.redact_data(command or ["cdt", "run", pipeline]),
         "detached": detached,
     }
     write_json_atomic(paths.manifest, manifest)
@@ -76,6 +82,7 @@ def create_run(
             "parallel_completed": [],
             "parallel_failed": [],
             "artifacts": [],
+            "inputs": redactor.redact_data(dict(inputs or {})),
             "old_version": None,
             "new_version": None,
             "started_at": manifest["started_at"],
@@ -95,12 +102,23 @@ def ensure_run(
     run_id: str | None = None,
     command: list[str] | None = None,
     detached: bool = False,
+    inputs: dict[str, str] | None = None,
+    env: dict[str, str] | None = None,
 ) -> RunPaths:
     if run_id is not None:
         paths = run_paths(cwd, run_id)
         if paths.root.exists():
             return paths
-    return create_run(cwd, pipeline, ids=ids, run_id=run_id, command=command, detached=detached)
+    return create_run(
+        cwd,
+        pipeline,
+        ids=ids,
+        run_id=run_id,
+        command=command,
+        detached=detached,
+        inputs=inputs,
+        env=env,
+    )
 
 
 def generate_run_id(pipeline: str) -> str:
