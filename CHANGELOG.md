@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Nothing yet.
+
+## v0.5.1 - 2026-09-12
+
 - Preserved failure diagnostics for Android/Firebase steps: failed `android.build_aab`, `android.build_apk`, and `firebase.upload_app_distribution` runs now report the leaf step, its cause, the actual generated command with a redacted token, and the original exit code instead of collapsing to a generic failure; parallel siblings still finish and previously built artifacts are kept. This improves reporting only and does not change Firebase upload availability or behavior.
 
 ## v0.5.0 - 2026-09-11
