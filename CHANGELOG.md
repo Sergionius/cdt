@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Nothing yet.
+
+## v0.5.2 - 2026-09-12
+
 - Added declarative non-secret pipeline inputs: pipelines declare `inputs` with `required` and optional regex `pattern`, values are passed as repeatable `--input KEY=VALUE` on `cdt run` and `cdt agent-release start`, interpolated as `${inputs.<name>}`, persisted in run manifests/status, and enforced on resume; pipelines without `inputs` keep their previous behavior.
 - Added Python release built-in steps: `release.require_version_available` (explicit semver preflight against the changelog, git tags, GitHub Releases via `gh`, and the public PyPI JSON API), `python.ruff_check`, `python.pytest`, `python.prepare_release` (version bump, changelog transition, tag-reference updates with pre-commit rollback snapshots), `python.build_distribution` (clean build plus `twine check`), `git.require_synced_main`, `git.release_commit` (exact staging only), and the resumable atomic `git.release_tag_push`, plus `github.wait_release` for waiting on the GitHub Actions workflow, GitHub Release assets, and PyPI publication.
 - Replaced `scripts/release.py` with a dogfooding production `release` pipeline in the repository root `cdt.yaml`: `cdt run release --input version=X.Y.Z --confirm release` now prepares, pushes, and confirms CDT's own releases; documentation and agent guidance describe the pipeline, required tools, bootstrap via `.venv/bin/cdt`, and the fix-branch repair loop with a three-attempt limit.
