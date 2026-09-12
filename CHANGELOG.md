@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Nothing yet.
+
+## v0.5.3 - 2026-09-12
+
 - Made CLI error-output assertions portable across Rich terminal widths and color settings so the release workflow passes consistently on Linux and macOS runners.
 
 ## v0.5.2 - 2026-09-12
