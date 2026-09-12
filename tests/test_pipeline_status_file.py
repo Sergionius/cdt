@@ -145,6 +145,46 @@ def test_run_status_file_failure_log_contains_terminal_summary(tmp_path, monkeyp
     assert "Artifacts produced: none" in log
 
 
+def test_run_status_file_records_release_confirmation_results(tmp_path, monkeypatch):
+    package = tmp_path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "demo.py").write_text(
+        "\n".join(
+            [
+                "from cdt.sdk import step",
+                "",
+                "@step('demo.confirm')",
+                "def confirm(ctx):",
+                "    ctx.register_release_results({",
+                "        'github_release_url': 'https://github.com/example/cdt/releases/tag/v0.5.2',",
+                "        'pypi_release_url': 'https://pypi.org/project/cdt-release/0.5.2/',",
+                "        'blank': '  ',",
+                "    })",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\nplugins:\n  - cdt_steps.demo\npipelines:\n  demo:\n    steps:\n      - demo.confirm\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    status_file = tmp_path / ".cdt" / "status.json"
+
+    result = runner.invoke(app, ["run", "demo", "--status-file", str(status_file)])
+    payload = json.loads(status_file.read_text(encoding="utf-8"))
+
+    assert result.exit_code == 0, result.output
+    assert payload["status"] == "success"
+    assert payload["release_results"] == {
+        "github_release_url": "https://github.com/example/cdt/releases/tag/v0.5.2",
+        "pypi_release_url": "https://pypi.org/project/cdt-release/0.5.2/",
+    }
+
+
 def test_run_resume_from_restores_artifacts_and_skips_prior_steps(tmp_path, monkeypatch):
     _write_demo_project(tmp_path, artifact=True)
     monkeypatch.chdir(tmp_path)

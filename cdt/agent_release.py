@@ -179,6 +179,7 @@ def release_status(pipeline: str | None = None, *, run_id: str | None = None) ->
         "inputs",
         "old_version",
         "new_version",
+        "release_results",
         "started_at",
         "finished_at",
         "updated_at",

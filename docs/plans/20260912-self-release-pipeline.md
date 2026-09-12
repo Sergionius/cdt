@@ -131,13 +131,13 @@ Built-in шаги регистрируются в `cdt/pipeline/builtins.py`, и
 - Modify: `tests/test_pipeline_status_file.py`
 - Modify: `tests/test_agent_first.py`
 
-- [ ] Реализовать `github.wait_release` с параметрами repository, workflow, package, version, timeout и poll interval; объявить `gh` обязательным external tool.
-- [ ] Через machine-readable `gh` output найти workflow run для точного release tag/commit, дождаться terminal conclusion и завершиться ошибкой с run URL/job summary при неуспехе.
-- [ ] После зелёного workflow проверить через `gh release view`, что release не draft/prerelease и содержит wheel, sdist и `SHA256SUMS`.
-- [ ] Проверить через PyPI JSON API наличие точной версии и wheel/sdist; применять ограниченные retries/backoff для задержки индексации и временных HTTP/network failures.
-- [ ] Зарегистрировать подтверждённые GitHub Release/PyPI URLs и package artifacts/results в context/status, чтобы итоговый agent-release summary не требовал чтения полного лога.
-- [ ] Не перезапускать workflow автоматически внутри built-in шага: возвращать структурированную классификацию timeout, transient GitHub/PyPI failure и terminal workflow failure для решения агентом.
-- [ ] Обновить metadata/schema и покрыть delayed workflow discovery, timeout, failed conclusion, malformed `gh` JSON, missing assets, delayed PyPI propagation и success path тестами.
+- [x] Реализовать `github.wait_release` с параметрами repository, workflow, package, version, timeout и poll interval; объявить `gh` обязательным external tool.
+- [x] Через machine-readable `gh` output найти workflow run для точного release tag/commit, дождаться terminal conclusion и завершиться ошибкой с run URL/job summary при неуспехе.
+- [x] После зелёного workflow проверить через `gh release view`, что release не draft/prerelease и содержит wheel, sdist и `SHA256SUMS`.
+- [x] Проверить через PyPI JSON API наличие точной версии и wheel/sdist; применять ограниченные retries/backoff для задержки индексации и временных HTTP/network failures.
+- [x] Зарегистрировать подтверждённые GitHub Release/PyPI URLs и package artifacts/results в context/status, чтобы итоговый agent-release summary не требовал чтения полного лога.
+- [x] Не перезапускать workflow автоматически внутри built-in шага: возвращать структурированную классификацию timeout, transient GitHub/PyPI failure и terminal workflow failure для решения агентом.
+- [x] Обновить metadata/schema и покрыть delayed workflow discovery, timeout, failed conclusion, malformed `gh` JSON, missing assets, delayed PyPI propagation и success path тестами.
 
 ### Task 4: Сделать GitHub Actions release workflow безопасно перезапускаемым
 

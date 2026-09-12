@@ -11,7 +11,8 @@ from typer.testing import CliRunner
 
 from cdt.agent_release import release_status, stop_release
 from cdt.cli import app
-from cdt.pipeline.registry import _clear_steps_for_tests
+from cdt.pipeline.builtins import register_builtin_steps
+from cdt.pipeline.registry import _clear_steps_for_tests, list_step_metadata
 from cdt.runs import create_run, list_runs, read_json, run_paths, write_exit_code
 from cdt.schema import bundled_schema_path, schema_payload
 
@@ -219,6 +220,62 @@ def test_schema_exposes_python_release_and_git_release_step_options():
     assert ruff_options["properties"] == {}
     pytest_options = options_by_name["python.pytest"]
     assert pytest_options["properties"] == {}
+
+
+def test_schema_exposes_github_wait_release_step_options():
+    register_builtin_steps()
+    payload = schema_payload()
+    step_schemas = [obj for obj in payload["$defs"]["step"]["oneOf"] if isinstance(obj, dict) and obj.get("properties")]
+    options_by_name = {next(iter(obj["properties"])): next(iter(obj["properties"].values())) for obj in step_schemas}
+
+    wait_options = options_by_name["github.wait_release"]
+    assert "required" not in wait_options
+    assert sorted(wait_options["properties"]) == [
+        "package",
+        "poll_interval",
+        "pyproject",
+        "remote",
+        "repository",
+        "tag_prefix",
+        "timeout",
+        "version",
+        "workflow",
+    ]
+    wait_metadata = next(metadata for metadata in list_step_metadata() if metadata.name == "github.wait_release")
+    assert wait_metadata.external_tools == ("gh",)
+    assert wait_metadata.risk == "safe"
+
+
+def test_release_summary_includes_release_results_without_reading_the_log(tmp_path, monkeypatch):
+    package = tmp_path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "demo.py").write_text(
+        "from cdt.sdk import step\n\n"
+        "@step('demo.confirm')\n"
+        "def confirm(ctx):\n"
+        "    ctx.register_release_results({\n"
+        "        'github_release_url': 'https://github.com/example/cdt/releases/tag/v0.5.2',\n"
+        "        'pypi_release_url': 'https://pypi.org/project/cdt-release/0.5.2/',\n"
+        "    })\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\nplugins:\n  - cdt_steps.demo\npipelines:\n  release:\n    steps:\n      - demo.confirm\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    result = runner.invoke(app, ["run", "release"])
+    payload = release_status("release")
+
+    assert result.exit_code == 0, result.output
+    assert payload["status"] == "success"
+    assert payload["release_results"] == {
+        "github_release_url": "https://github.com/example/cdt/releases/tag/v0.5.2",
+        "pypi_release_url": "https://pypi.org/project/cdt-release/0.5.2/",
+    }
 
 
 def test_detached_stop_refuses_to_signal_direct_run(tmp_path, monkeypatch):

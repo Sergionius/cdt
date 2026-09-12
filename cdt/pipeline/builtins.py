@@ -10,6 +10,7 @@ from ..steps.git import (
     ReleaseTagPushStep,
     RequireSyncedMainStep,
 )
+from ..steps.github import WaitReleaseStep
 from ..steps.hook import PythonScriptHookStep
 from ..steps.ios import IncrementIosBuildNumberStep, IosFlutterBuildIpaStep, IosXcodeBuildIpaStep
 from ..steps.notify import NotifyProdUserAgentPachcaStep, NotifySuccessStep
@@ -36,6 +37,7 @@ _BUILTINS: dict[str, type] = {
     "git.release_commit": ReleaseCommitStep,
     "git.release_tag_push": ReleaseTagPushStep,
     "git.require_synced_main": RequireSyncedMainStep,
+    "github.wait_release": WaitReleaseStep,
     "ios.bump_xcode_build_number": IncrementIosBuildNumberStep,
     "ios.flutter_build_ipa": IosFlutterBuildIpaStep,
     "ios.xcode_build_ipa": IosXcodeBuildIpaStep,
@@ -200,6 +202,22 @@ _BUILTIN_METADATA: dict[str, StepMetadata] = {
         category="git",
         risk="safe",
         external_tools=("git",),
+    ),
+    "github.wait_release": StepMetadata(
+        name="github.wait_release",
+        description=(
+            "Wait via machine-readable gh output for the GitHub Actions release workflow run of the exact "
+            "release tag, require a green terminal conclusion (otherwise fail with the run URL and failed job "
+            "summary), then verify the GitHub Release is not draft/prerelease and ships wheel, sdist and "
+            "SHA256SUMS assets, and confirm the exact version with wheel/sdist files on PyPI (bounded "
+            "retries for indexing delay and transient failures). Registers the confirmed GitHub Release/PyPI "
+            "URLs and results in context/status. Classifies failures as timeout, transient, workflow_failed "
+            "or release_incomplete for the agent; never reruns the workflow automatically."
+        ),
+        category="github",
+        risk="safe",
+        produces=(ResultProduction("release_confirmation"),),
+        external_tools=("gh",),
     ),
     "ios.bump_xcode_build_number": StepMetadata(
         name="ios.bump_xcode_build_number",

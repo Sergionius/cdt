@@ -42,6 +42,7 @@ class PipelineContext:
     finished_at: str | None = None
     rolled_back: bool = False
     rollback_closed: bool = False
+    release_results: dict[str, str] = field(default_factory=dict)
     _rollback_snapshots: dict[Path, bytes] = field(default_factory=dict, repr=False)
     _artifact_lock: Lock = field(default_factory=Lock, repr=False)
     _status_lock: Lock = field(default_factory=Lock, repr=False)
@@ -80,6 +81,14 @@ class PipelineContext:
             if name in self.artifacts:
                 raise typer.BadParameter(f"Duplicate pipeline artifact: {name}")
             self.artifacts[name] = artifact
+
+    def register_release_results(self, results: dict[str, str]) -> None:
+        """Record confirmed GitHub Release/PyPI URLs and results in the context and status file."""
+        for key, value in results.items():
+            normalized = str(value).strip()
+            if normalized:
+                self.release_results[key] = normalized
+        self.write_status("running")
 
     def register_rollback_file(self, path: Path) -> None:
         """Snapshot the exact current content of a release file for pre-commit rollback."""
@@ -203,6 +212,7 @@ class PipelineContext:
                 "inputs": dict(self.inputs),
                 "old_version": self.old_version,
                 "new_version": self.new_version,
+                "release_results": dict(self.release_results),
                 "rolled_back": self.rolled_back,
                 "started_at": self.started_at,
                 "finished_at": self.finished_at,

@@ -36,6 +36,7 @@
             "git.release_commit",
             "git.release_tag_push",
             "git.require_synced_main",
+            "github.wait_release",
             "hook.python_script",
             "ios.bump_xcode_build_number",
             "ios.flutter_build_ipa",
@@ -511,6 +512,60 @@
           },
           "required": [
             "git.require_synced_main"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "github.wait_release": {
+              "additionalProperties": false,
+              "properties": {
+                "package": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "poll_interval": {
+                  "type": "number"
+                },
+                "pyproject": {
+                  "type": "string"
+                },
+                "remote": {
+                  "type": "string"
+                },
+                "repository": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "tag_prefix": {
+                  "type": "string"
+                },
+                "timeout": {
+                  "type": "number"
+                },
+                "version": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "workflow": {
+                  "type": "string"
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "github.wait_release"
           ],
           "type": "object"
         },
@@ -1145,6 +1200,7 @@
             "git.release_commit",
             "git.release_tag_push",
             "git.require_synced_main",
+            "github.wait_release",
             "hook.python_script",
             "ios.bump_xcode_build_number",
             "ios.flutter_build_ipa",
@@ -1620,6 +1676,60 @@
           },
           "required": [
             "git.require_synced_main"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "github.wait_release": {
+              "additionalProperties": false,
+              "properties": {
+                "package": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "poll_interval": {
+                  "type": "number"
+                },
+                "pyproject": {
+                  "type": "string"
+                },
+                "remote": {
+                  "type": "string"
+                },
+                "repository": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "tag_prefix": {
+                  "type": "string"
+                },
+                "timeout": {
+                  "type": "number"
+                },
+                "version": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "workflow": {
+                  "type": "string"
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "github.wait_release"
           ],
           "type": "object"
         },
