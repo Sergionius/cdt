@@ -1,5 +1,3 @@
-import typer
-
 from ..pipeline import PipelineContext
 from ..platforms.android import (
     _android_aab_artifact,
@@ -7,6 +5,7 @@ from ..platforms.android import (
     _build_android_aab_command,
     _build_android_apk_command,
 )
+from ..runner import CommandExecutionError
 from ..sounds import _play_fail_sound
 
 
@@ -56,9 +55,15 @@ class AndroidBuildAabStep(_AndroidBuildBase):
     artifact_kind = "aab"
 
     def run(self, ctx: PipelineContext) -> None:
-        if ctx.runner.run(_build_android_aab_command(**self._options()), cwd=ctx.cwd) != 0:
+        command = _build_android_aab_command(**self._options())
+        exit_code = ctx.runner.run(command, cwd=ctx.cwd)
+        if exit_code != 0:
             _play_fail_sound(ctx.env, ctx.cwd)
-            raise typer.Exit(code=1)
+            raise CommandExecutionError(
+                "Android AAB build failed. Check the Flutter/Gradle output above for details.",
+                command=command,
+                exit_code=exit_code,
+            )
         ctx.register_artifact(self.artifact, _android_aab_artifact(ctx.cwd))
 
 
@@ -67,7 +72,13 @@ class AndroidBuildApkStep(_AndroidBuildBase):
     artifact_kind = "apk"
 
     def run(self, ctx: PipelineContext) -> None:
-        if ctx.runner.run(_build_android_apk_command(**self._options()), cwd=ctx.cwd) != 0:
+        command = _build_android_apk_command(**self._options())
+        exit_code = ctx.runner.run(command, cwd=ctx.cwd)
+        if exit_code != 0:
             _play_fail_sound(ctx.env, ctx.cwd)
-            raise typer.Exit(code=1)
+            raise CommandExecutionError(
+                "Android APK build failed. Check the Flutter/Gradle output above for details.",
+                command=command,
+                exit_code=exit_code,
+            )
         ctx.register_artifact(self.artifact, _android_apk_artifact(ctx.cwd))

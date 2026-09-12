@@ -45,11 +45,11 @@
 - Modify: `cdt/steps/android.py`
 - Modify: `tests/test_android.py`
 
-- [ ] В обоих build steps вычислять команду один раз, сохранять возвращённый код и вместо `typer.Exit(code=1)` поднимать `CommandExecutionError`, сохранив существующий fail sound.
-- [ ] Для AAB использовать причину `Android AAB build failed. Check the Flutter/Gradle output above for details.`, для APK — `Android APK build failed. Check the Flutter/Gradle output above for details.`
-- [ ] Не менять build options и регистрацию артефактов: выполнять регистрацию только после успешного завершения команды.
-- [ ] Добавить параметризованные unit-тесты обоих шагов с fake runner: точная команда и cwd, сохранение кода 7, один fail sound, отсутствие регистрации артефакта после ошибки.
-- [ ] Добавить успешные проверки обоих шагов с временными файлами ожидаемого формата: регистрация именованного артефакта и отсутствие fail sound.
+- [x] В обоих build steps вычислять команду один раз, сохранять возвращённый код и вместо `typer.Exit(code=1)` поднимать `CommandExecutionError`, сохранив существующий fail sound.
+- [x] Для AAB использовать причину `Android AAB build failed. Check the Flutter/Gradle output above for details.`, для APK — `Android APK build failed. Check the Flutter/Gradle output above for details.`
+- [x] Не менять build options и регистрацию артефактов: выполнять регистрацию только после успешного завершения команды.
+- [x] Добавить параметризованные unit-тесты обоих шагов с fake runner: точная команда и cwd, сохранение кода 7, один fail sound, отсутствие регистрации артефакта после ошибки.
+- [x] Добавить успешные проверки обоих шагов с временными файлами ожидаемого формата: регистрация именованного артефакта и отсутствие fail sound.
 
 ### Task 3: Зафиксировать диагностику Firebase через executor и CLI
 **Files:**
@@ -115,3 +115,6 @@ ruff check .
 - Decision: проверять сценарии только offline через существующие pytest conventions; Alternatives: воспроизведение загрузки в реальный Firebase; Reason: для исправления передачи ошибок credentials и внешние операции не нужны; Side effects: фактическая доступность Firebase не проверяется.
 - Decision (Task 1): запускать тесты через `.venv/bin/pytest`, так как `pytest` отсутствует в PATH данной среды; Alternatives: установка pytest глобально; Reason: проект уже содержит виртуальное окружение со всеми зависимостями; Side effects: none.
 - Decision (Task 1): в тестах дополнительно зафиксировать cwd вызова runner, единственность вызова и фрагменты команды (`appdistribution:distribute`, путь артефакта, `TASK-1`); Alternatives: ограничиться минимальными проверками из чекбоксов; Reason: требование «точное совпадение command с вызовом runner» и «единственный вызов runner» явно сформулировано в чекбоксах; Side effects: none.
+- Decision (Task 2): убрать ставший неиспользуемым `import typer` из `cdt/steps/android.py`; Alternatives: оставить импорт; Reason: после удаления `typer.Exit` модуль больше не использует typer, это единственное затронутое место; Side effects: none.
+- Decision (Task 2): в тестах сравнивать переданную команду с результатом существующих билдеров `_build_android_aab_command()`/`_build_android_apk_command()` вместо дублирования литерального списка аргументов; Alternatives: захардкодить полный ожидаемый command; Reason: чекбокс требует точную команду и cwd, билдеры покрыты собственными тестами и отражают неизменность build options; Side effects: none.
+- Decision (Task 2): в failure-тестах параметризовать только код 7, а в success-тестах проверять kind/label/path зарегистрированного артефакта через `ctx.artifact(name)`; Alternatives: параметризация нескольких кодов как в Task 1; Reason: чекбокс Task 2 явно требует сохранение кода 7 и регистрацию именованного артефакта; Side effects: none.
