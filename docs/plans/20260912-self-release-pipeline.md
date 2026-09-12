@@ -145,13 +145,13 @@ Built-in шаги регистрируются в `cdt/pipeline/builtins.py`, и
 - Modify: `.github/workflows/release.yml`
 - Modify: `tests/test_agent_first.py`
 
-- [ ] Разделить workflow на dependency-ordered jobs: validate/build, PyPI publish, GitHub Release и tag smoke.
-- [ ] В validate/build выполнить checkout точного tag, install dev dependencies, ruff, pytest, clean build и twine check, затем загрузить wheel/sdist как Actions artifact.
-- [ ] В PyPI job скачать проверенные artifacts и оставить Trusted Publishing/OIDC единственным способом публикации.
-- [ ] В GitHub Release job, зависящем от успешной PyPI publication, скачать те же artifacts, сгенерировать checksums и создать release с wheel/sdist/checksum.
-- [ ] В smoke job, зависящем от GitHub Release, сохранить установку из точного GitHub tag и проверку `cdt --version` на ожидаемую tag version.
-- [ ] Не объединять PyPI upload с последующими потенциально падающими операциями, чтобы rerun failed jobs не пытался повторно публиковать уже принятую версию.
-- [ ] Расширить структурные workflow-тесты зависимостями jobs, permissions, artifact handoff, trusted publishing и smoke ordering.
+- [x] Разделить workflow на dependency-ordered jobs: validate/build, PyPI publish, GitHub Release и tag smoke.
+- [x] В validate/build выполнить checkout точного tag, install dev dependencies, ruff, pytest, clean build и twine check, затем загрузить wheel/sdist как Actions artifact.
+- [x] В PyPI job скачать проверенные artifacts и оставить Trusted Publishing/OIDC единственным способом публикации.
+- [x] В GitHub Release job, зависящем от успешной PyPI publication, скачать те же artifacts, сгенерировать checksums и создать release с wheel/sdist/checksum.
+- [x] В smoke job, зависящем от GitHub Release, сохранить установку из точного GitHub tag и проверку `cdt --version` на ожидаемую tag version.
+- [x] Не объединять PyPI upload с последующими потенциально падающими операциями, чтобы rerun failed jobs не пытался повторно публиковать уже принятую версию.
+- [x] Расширить структурные workflow-тесты зависимостями jobs, permissions, artifact handoff, trusted publishing и smoke ordering.
 
 ### Task 5: Перевести репозиторий и agent workflow на собственный CDT pipeline
 

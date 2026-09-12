@@ -6,15 +6,18 @@ on:
       - 'v*'
 
 permissions:
-  contents: write
-  id-token: write
+  contents: read
 
 jobs:
-  release:
+  validate-build:
+    name: Validate and build distributions
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
+          # Exact tag that triggered the workflow
           ref: ${{ github.ref }}
 
       - uses: actions/setup-python@v5
@@ -38,8 +41,44 @@ jobs:
       - name: Twine check
         run: twine check dist/*
 
+      - name: Upload distribution artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*
+          if-no-files-found: error
+
+  pypi-publish:
+    name: Publish to PyPI
+    needs: validate-build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - name: Download distribution artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      # Trusted Publishing/OIDC is the only publishing method; this must stay
+      # the last step so rerunning a failed job never re-uploads an accepted
+      # version after another potentially failing operation.
       - name: Publish cdt-release to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: Create GitHub Release
+    needs: pypi-publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download distribution artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
 
       - name: Generate SHA-256 checksums
         run: |
@@ -57,11 +96,14 @@ jobs:
           body: |
             Release ${{ github.ref_name }}.
 
-            Built and checked by GitHub Actions. See CHANGELOG.md for details.
+            Built and checked by GitHub Actions. Published to PyPI by the pypi-publish job. See CHANGELOG.md for details.
 
-  github-tag-smoke:
-    needs: release
+  tag-smoke:
+    name: Smoke test installation from tag
+    needs: github-release
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/setup-python@v5
         with:
@@ -79,4 +121,10 @@ jobs:
             fi
             sleep 10
           done
-          /tmp/cdt-tag-smoke/bin/cdt --version
+          installed_version="$(/tmp/cdt-tag-smoke/bin/cdt --version)"
+          expected_version="${GITHUB_REF_NAME#v}"
+          if [ "$installed_version" != "cdt $expected_version" ]; then
+            echo "Unexpected version for ${{ github.ref_name }}: got '$installed_version', expected 'cdt $expected_version'" >&2
+            exit 1
+          fi
+          echo "Smoke test passed for ${{ github.ref_name }}: $installed_version"

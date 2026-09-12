@@ -17,6 +17,8 @@ from cdt.runs import create_run, list_runs, read_json, run_paths, write_exit_cod
 from cdt.schema import bundled_schema_path, schema_payload
 
 runner = CliRunner()
+ROOT = Path(__file__).resolve().parents[1]
+RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 
 
 def setup_function():
@@ -653,6 +655,98 @@ def test_resume_skips_finished_upload_and_reruns_only_testflight_completion(tmp_
     assert status["status"] == "success"
     assert status["completed_steps"] == ["0", "1", "2"]
     assert status["new_version"] == "1.2.3+5"
+
+
+def _release_workflow_config():
+    return yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+
+
+def test_release_workflow_splits_into_dependency_ordered_jobs():
+    jobs = _release_workflow_config()["jobs"]
+
+    assert list(jobs) == ["validate-build", "pypi-publish", "github-release", "tag-smoke"]
+    assert "needs" not in jobs["validate-build"]
+    assert jobs["pypi-publish"]["needs"] == "validate-build"
+    assert jobs["github-release"]["needs"] == "pypi-publish"
+    assert jobs["tag-smoke"]["needs"] == "github-release"
+
+
+def test_release_workflow_scopes_permissions_per_job():
+    config = _release_workflow_config()
+    jobs = config["jobs"]
+
+    assert config["permissions"] == {"contents": "read"}
+    assert jobs["validate-build"]["permissions"] == {"contents": "read"}
+    assert jobs["pypi-publish"]["permissions"] == {"id-token": "write"}
+    assert jobs["github-release"]["permissions"] == {"contents": "write"}
+    assert jobs["tag-smoke"]["permissions"] == {"contents": "read"}
+
+
+def test_release_workflow_validate_job_checks_exact_tag_and_uploads_distributions():
+    job = _release_workflow_config()["jobs"]["validate-build"]
+
+    checkout = next(step for step in job["steps"] if step.get("uses", "").startswith("actions/checkout"))
+    assert checkout["with"]["ref"] == "${{ github.ref }}"
+    runs = {step["name"]: step["run"] for step in job["steps"] if "run" in step}
+    assert runs["Install dev dependencies"] == "python -m pip install -e '.[dev]'"
+    assert runs["Ruff"] == "ruff check ."
+    assert runs["Tests"] == "pytest -q"
+    assert runs["Build"] == "rm -rf dist\npython -m build\n"
+    assert runs["Twine check"] == "twine check dist/*"
+    upload = next(step for step in job["steps"] if step.get("uses", "").startswith("actions/upload-artifact"))
+    assert upload["with"]["name"] == "dist"
+    assert upload["with"]["path"] == "dist/*"
+    assert upload["with"]["if-no-files-found"] == "error"
+
+
+def test_release_workflow_hands_off_artifacts_to_publish_and_release_jobs():
+    jobs = _release_workflow_config()["jobs"]
+
+    for job_name in ("pypi-publish", "github-release"):
+        downloads = [
+            step
+            for step in jobs[job_name]["steps"]
+            if step.get("uses", "").startswith("actions/download-artifact")
+        ]
+        assert len(downloads) == 1
+        assert downloads[0]["with"]["name"] == "dist"
+
+
+def test_release_workflow_publishes_to_pypi_with_trusted_publishing_as_last_step():
+    job = _release_workflow_config()["jobs"]["pypi-publish"]
+
+    assert job["permissions"] == {"id-token": "write"}
+    publish_steps = [
+        step for step in job["steps"] if step.get("uses", "").startswith("pypa/gh-action-pypi-publish")
+    ]
+    assert len(publish_steps) == 1
+    assert job["steps"][-1] is publish_steps[0]
+    assert not any("run" in step for step in job["steps"])
+
+
+def test_release_workflow_creates_github_release_with_checksums_after_pypi():
+    job = _release_workflow_config()["jobs"]["github-release"]
+
+    assert job["needs"] == "pypi-publish"
+    runs = {step["name"]: step["run"] for step in job["steps"] if "run" in step}
+    assert "sha256sum *.whl *.tar.gz > SHA256SUMS" in runs["Generate SHA-256 checksums"]
+    release_step = next(
+        step for step in job["steps"] if step.get("uses", "").startswith("softprops/action-gh-release")
+    )
+    assert "dist/*.whl" in release_step["with"]["files"]
+    assert "dist/*.tar.gz" in release_step["with"]["files"]
+    assert "dist/SHA256SUMS" in release_step["with"]["files"]
+
+
+def test_release_workflow_smoke_job_installs_exact_tag_and_checks_version():
+    job = _release_workflow_config()["jobs"]["tag-smoke"]
+
+    assert job["needs"] == "github-release"
+    script = job["steps"][-1]["run"]
+    assert "pip install 'git+https://github.com/Sergionius/cdt.git@${{ github.ref_name }}'" in script
+    assert "/tmp/cdt-tag-smoke/bin/cdt --version" in script
+    assert 'expected_version="${GITHUB_REF_NAME#v}"' in script
+    assert '[ "$installed_version" != "cdt $expected_version" ]' in script
 
 
 def _write_release_project(path: Path) -> None:
