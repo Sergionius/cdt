@@ -1,3 +1,4 @@
+import json
 import subprocess
 from pathlib import Path
 
@@ -5,6 +6,7 @@ import pytest
 import typer
 
 from cdt import config, runner
+from cdt.pipeline.runner import run_configured_pipeline
 
 
 class FakePopen:
@@ -143,3 +145,101 @@ def test_prepare_git_clean_main_reports_failures(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "_run", lambda command, cwd: next(responses))
     with pytest.raises(typer.BadParameter, match="Neither main nor master"):
         runner._prepare_git_clean_main(tmp_path)
+
+
+def _write_rollback_project(tmp_path: Path, *, guard_fails: bool) -> None:
+    package = tmp_path / "cdt_steps_rb"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "demo.py").write_text(
+        "\n".join(
+            [
+                "import typer",
+                "from cdt.sdk import step",
+                "",
+                "@step('demo.guard')",
+                "def guard(ctx):",
+                "    if (ctx.cwd / 'fail-marker').exists():",
+                "        raise typer.BadParameter('boom')",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "demo"\nversion = "0.5.1"\n', encoding="utf-8")
+    init_dir = tmp_path / "cdt"
+    init_dir.mkdir(exist_ok=True)
+    (init_dir / "__init__.py").write_text('__version__ = "0.5.1"\n', encoding="utf-8")
+    (tmp_path / "CHANGELOG.md").write_text(
+        "# Changelog\n\n## Unreleased\n\n- Real change.\n\n## v0.5.1 - 2026-09-01\n\n- Old.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "plugins:",
+                "  - cdt_steps_rb.demo",
+                "pipelines:",
+                "  release:",
+                "    inputs:",
+                "      version:",
+                "        required: true",
+                "    steps:",
+                '      - python.prepare_release: {version: "${inputs.version}"}',
+                "      - demo.guard",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    if guard_fails:
+        (tmp_path / "fail-marker").write_text("", encoding="utf-8")
+
+
+def test_run_configured_pipeline_rolls_back_release_files_before_commit(tmp_path, monkeypatch):
+    _write_rollback_project(tmp_path, guard_fails=True)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    status_file = tmp_path / "status.json"
+
+    with pytest.raises(typer.BadParameter, match="boom"):
+        run_configured_pipeline(
+            tmp_path,
+            {},
+            "release",
+            inputs={"version": "0.5.2"},
+            status_file=status_file,
+            record_run=False,
+        )
+
+    assert 'version = "0.5.1"' in (tmp_path / "pyproject.toml").read_text(encoding="utf-8")
+    assert '__version__ = "0.5.1"' in (tmp_path / "cdt" / "__init__.py").read_text(encoding="utf-8")
+    changelog = (tmp_path / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert "## Unreleased\n\n- Real change." in changelog
+    assert "## v0.5.2" not in changelog
+    payload = json.loads(status_file.read_text(encoding="utf-8"))
+    assert payload["status"] == "failed"
+    assert payload["rolled_back"] is True
+
+
+def test_run_configured_pipeline_keeps_release_files_after_success(tmp_path, monkeypatch):
+    _write_rollback_project(tmp_path, guard_fails=False)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    status_file = tmp_path / "status.json"
+
+    run_configured_pipeline(
+        tmp_path,
+        {},
+        "release",
+        inputs={"version": "0.5.2"},
+        status_file=status_file,
+        record_run=False,
+    )
+
+    assert 'version = "0.5.2"' in (tmp_path / "pyproject.toml").read_text(encoding="utf-8")
+    changelog = (tmp_path / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert "## v0.5.2 - " in changelog
+    payload = json.loads(status_file.read_text(encoding="utf-8"))
+    assert payload["status"] == "success"
+    assert payload["rolled_back"] is False
+    assert payload["new_version"] == "0.5.2"

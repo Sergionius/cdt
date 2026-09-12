@@ -33,12 +33,20 @@
             "flutter.pub_get",
             "git.commit_push",
             "git.prepare_clean_main",
+            "git.release_commit",
+            "git.release_tag_push",
+            "git.require_synced_main",
             "hook.python_script",
             "ios.bump_xcode_build_number",
             "ios.flutter_build_ipa",
             "ios.xcode_build_ipa",
             "notify.prod_user_agent",
             "notify.success",
+            "python.build_distribution",
+            "python.prepare_release",
+            "python.pytest",
+            "python.ruff_check",
+            "release.require_version_available",
             "tracker.comment",
             "web.build",
             "web.cache_bust",
@@ -416,6 +424,99 @@
         {
           "additionalProperties": false,
           "properties": {
+            "git.release_commit": {
+              "additionalProperties": false,
+              "properties": {
+                "files": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "message": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "files"
+              ],
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "git.release_commit"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "git.release_tag_push": {
+              "additionalProperties": false,
+              "properties": {
+                "branch": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "remote": {
+                  "type": "string"
+                },
+                "tag": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "git.release_tag_push"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "git.require_synced_main": {
+              "additionalProperties": false,
+              "properties": {
+                "branch": {
+                  "type": "string"
+                },
+                "remote": {
+                  "type": "string"
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "git.require_synced_main"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "hook.python_script": {
               "additionalProperties": false,
               "properties": {
@@ -618,6 +719,166 @@
           },
           "required": [
             "notify.success"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "python.build_distribution": {
+              "additionalProperties": false,
+              "properties": {
+                "dist_dir": {
+                  "type": "string"
+                },
+                "python": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "sdist_artifact": {
+                  "type": "string"
+                },
+                "wheel_artifact": {
+                  "type": "string"
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "python.build_distribution"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "python.prepare_release": {
+              "additionalProperties": false,
+              "properties": {
+                "changelog": {
+                  "type": "string"
+                },
+                "pyproject": {
+                  "type": "string"
+                },
+                "tag_reference_files": {
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "tag_reference_regex": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "version": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "version_file": {
+                  "type": "string"
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "python.prepare_release"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "python.pytest": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "python.pytest"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "python.ruff_check": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "python.ruff_check"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "release.require_version_available": {
+              "additionalProperties": false,
+              "properties": {
+                "changelog": {
+                  "type": "string"
+                },
+                "github_repo": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "pypi_package": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "pyproject": {
+                  "type": "string"
+                },
+                "remote": {
+                  "type": "string"
+                },
+                "tag_prefix": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "release.require_version_available"
           ],
           "type": "object"
         },
@@ -881,12 +1142,20 @@
             "flutter.pub_get",
             "git.commit_push",
             "git.prepare_clean_main",
+            "git.release_commit",
+            "git.release_tag_push",
+            "git.require_synced_main",
             "hook.python_script",
             "ios.bump_xcode_build_number",
             "ios.flutter_build_ipa",
             "ios.xcode_build_ipa",
             "notify.prod_user_agent",
             "notify.success",
+            "python.build_distribution",
+            "python.prepare_release",
+            "python.pytest",
+            "python.ruff_check",
+            "release.require_version_available",
             "tracker.comment",
             "web.build",
             "web.cache_bust",
@@ -1264,6 +1533,99 @@
         {
           "additionalProperties": false,
           "properties": {
+            "git.release_commit": {
+              "additionalProperties": false,
+              "properties": {
+                "files": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "message": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "files"
+              ],
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "git.release_commit"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "git.release_tag_push": {
+              "additionalProperties": false,
+              "properties": {
+                "branch": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "remote": {
+                  "type": "string"
+                },
+                "tag": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "git.release_tag_push"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "git.require_synced_main": {
+              "additionalProperties": false,
+              "properties": {
+                "branch": {
+                  "type": "string"
+                },
+                "remote": {
+                  "type": "string"
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "git.require_synced_main"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "hook.python_script": {
               "additionalProperties": false,
               "properties": {
@@ -1466,6 +1828,166 @@
           },
           "required": [
             "notify.success"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "python.build_distribution": {
+              "additionalProperties": false,
+              "properties": {
+                "dist_dir": {
+                  "type": "string"
+                },
+                "python": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "sdist_artifact": {
+                  "type": "string"
+                },
+                "wheel_artifact": {
+                  "type": "string"
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "python.build_distribution"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "python.prepare_release": {
+              "additionalProperties": false,
+              "properties": {
+                "changelog": {
+                  "type": "string"
+                },
+                "pyproject": {
+                  "type": "string"
+                },
+                "tag_reference_files": {
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "tag_reference_regex": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "version": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "version_file": {
+                  "type": "string"
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "python.prepare_release"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "python.pytest": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "python.pytest"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "python.ruff_check": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "python.ruff_check"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "release.require_version_available": {
+              "additionalProperties": false,
+              "properties": {
+                "changelog": {
+                  "type": "string"
+                },
+                "github_repo": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "pypi_package": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "pyproject": {
+                  "type": "string"
+                },
+                "remote": {
+                  "type": "string"
+                },
+                "tag_prefix": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "release.require_version_available"
           ],
           "type": "object"
         },

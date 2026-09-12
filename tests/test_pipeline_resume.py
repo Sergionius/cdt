@@ -6,6 +6,7 @@ from typer.testing import CliRunner
 
 from cdt.cli import app
 from cdt.pipeline.registry import _clear_steps_for_tests
+from cdt.runs import list_runs, read_json, run_paths
 
 runner = CliRunner()
 
@@ -378,3 +379,94 @@ def test_old_name_based_resume_status_is_rejected(tmp_path, monkeypatch):
 
     assert result.exit_code != 0
     assert "Resume status file uses step names from an older CDT version" in result.output
+
+
+def _write_release_project(tmp_path) -> None:
+    package = tmp_path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "resume.py").write_text(
+        "\n".join(
+            [
+                "import typer",
+                "from cdt.sdk import step",
+                "",
+                "@step('demo.guard')",
+                "def guard(ctx):",
+                "    if (ctx.cwd / 'fail-marker').exists():",
+                "        raise typer.BadParameter('boom')",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "demo"\nversion = "0.5.1"\n', encoding="utf-8")
+    init_dir = tmp_path / "cdt"
+    init_dir.mkdir(exist_ok=True)
+    (init_dir / "__init__.py").write_text('__version__ = "0.5.1"\n', encoding="utf-8")
+    (tmp_path / "CHANGELOG.md").write_text(
+        "# Changelog\n\n## Unreleased\n\n- Real change.\n\n## v0.5.1 - 2026-09-01\n\n- Old.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "plugins:",
+                "  - cdt_steps.resume",
+                "pipelines:",
+                "  release:",
+                "    inputs:",
+                "      version:",
+                "        required: true",
+                "    steps:",
+                '      - python.prepare_release: {version: "${inputs.version}"}',
+                "      - demo.guard",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_rolled_back_release_reruns_fresh_with_same_inputs(tmp_path, monkeypatch):
+    _write_release_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    (tmp_path / "fail-marker").write_text("", encoding="utf-8")
+
+    failed = runner.invoke(app, ["run", "release", "--input", "version=0.5.2"])
+    runs = list_runs(tmp_path)
+    failed_status = read_json(run_paths(tmp_path, runs[0]["run_id"]).status)
+
+    assert failed.exit_code != 0
+    assert failed_status["rolled_back"] is True
+    assert 'version = "0.5.1"' in (tmp_path / "pyproject.toml").read_text(encoding="utf-8")
+    assert "## v0.5.2" not in (tmp_path / "CHANGELOG.md").read_text(encoding="utf-8")
+
+    (tmp_path / "fail-marker").unlink()
+
+    rejected = runner.invoke(
+        app,
+        [
+            "run",
+            "release",
+            "--input",
+            "version=0.5.3",
+            "--resume-status-file",
+            str(run_paths(tmp_path, runs[0]["run_id"]).status),
+            "--status-file",
+            str(tmp_path / "out.json"),
+            "--skip-completed",
+        ],
+    )
+
+    assert rejected.exit_code != 0
+    normalized = " ".join(rejected.output.translate({ord(ch): " " for ch in "│╭─╮╰╯"}).split())
+    assert "Resume inputs do not match the original run" in normalized
+
+    fresh = runner.invoke(app, ["run", "release", "--input", "version=0.5.2"])
+
+    assert fresh.exit_code == 0, fresh.output
+    assert 'version = "0.5.2"' in (tmp_path / "pyproject.toml").read_text(encoding="utf-8")
+    assert "## v0.5.2 - " in (tmp_path / "CHANGELOG.md").read_text(encoding="utf-8")

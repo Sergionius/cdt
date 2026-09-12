@@ -8,6 +8,8 @@ class ArtifactKind(str, Enum):
     AAB = "aab"
     IPA = "ipa"
     WEB = "web"
+    WHEEL = "wheel"
+    SDIST = "sdist"
 
 
 @dataclass(frozen=True)

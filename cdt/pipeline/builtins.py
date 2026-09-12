@@ -3,10 +3,18 @@ from ..steps.appstore import CompleteTestFlightStep, UploadTestFlightIpaStep, Up
 from ..steps.artifact import CopyArtifactToDownloadsStep
 from ..steps.firebase import EnsureFirebaseCliStep, FirebaseDeployStep, FirebaseUploadAppDistributionStep
 from ..steps.flutter import FlutterPubGetStep, IncrementFlutterBuildNumberStep
-from ..steps.git import GitAddCommitPushStep, PrepareGitMainStep
+from ..steps.git import (
+    GitAddCommitPushStep,
+    PrepareGitMainStep,
+    ReleaseCommitStep,
+    ReleaseTagPushStep,
+    RequireSyncedMainStep,
+)
 from ..steps.hook import PythonScriptHookStep
 from ..steps.ios import IncrementIosBuildNumberStep, IosFlutterBuildIpaStep, IosXcodeBuildIpaStep
 from ..steps.notify import NotifyProdUserAgentPachcaStep, NotifySuccessStep
+from ..steps.python import BuildDistributionStep, PrepareReleaseStep, PytestStep, RuffCheckStep
+from ..steps.release import RequireVersionAvailableStep
 from ..steps.tracker import TrackerCommentStep
 from ..steps.web import ApplyWebCacheBustingStep, BuildFlutterWebStep, CopyWebBuildStep
 from .registry import ResultProduction, ResultRequirement, StepMetadata, list_steps, register_step
@@ -25,12 +33,20 @@ _BUILTINS: dict[str, type] = {
     "flutter.pub_get": FlutterPubGetStep,
     "git.commit_push": GitAddCommitPushStep,
     "git.prepare_clean_main": PrepareGitMainStep,
+    "git.release_commit": ReleaseCommitStep,
+    "git.release_tag_push": ReleaseTagPushStep,
+    "git.require_synced_main": RequireSyncedMainStep,
     "ios.bump_xcode_build_number": IncrementIosBuildNumberStep,
     "ios.flutter_build_ipa": IosFlutterBuildIpaStep,
     "ios.xcode_build_ipa": IosXcodeBuildIpaStep,
     "hook.python_script": PythonScriptHookStep,
     "notify.prod_user_agent": NotifyProdUserAgentPachcaStep,
     "notify.success": NotifySuccessStep,
+    "python.build_distribution": BuildDistributionStep,
+    "python.prepare_release": PrepareReleaseStep,
+    "python.pytest": PytestStep,
+    "python.ruff_check": RuffCheckStep,
+    "release.require_version_available": RequireVersionAvailableStep,
     "tracker.comment": TrackerCommentStep,
     "web.build": BuildFlutterWebStep,
     "web.cache_bust": ApplyWebCacheBustingStep,
@@ -154,6 +170,37 @@ _BUILTIN_METADATA: dict[str, StepMetadata] = {
         risk="safe",
         external_tools=("git",),
     ),
+    "git.release_commit": StepMetadata(
+        name="git.release_commit",
+        description=(
+            "Stage only the explicitly configured release files, refuse unrelated staged changes, create the "
+            "'Release vX.Y.Z' commit, verify its contents and close the pre-commit rollback boundary."
+        ),
+        category="git",
+        risk="release",
+        external_tools=("git",),
+    ),
+    "git.release_tag_push": StepMetadata(
+        name="git.release_tag_push",
+        description=(
+            "Create an annotated tag on the release commit, reject conflicting local/remote tags and atomically "
+            "push the main branch together with the tag. Resumable: an existing matching tag is reused instead "
+            "of being moved."
+        ),
+        category="git",
+        risk="push",
+        external_tools=("git",),
+    ),
+    "git.require_synced_main": StepMetadata(
+        name="git.require_synced_main",
+        description=(
+            "Fetch origin/main and tags, then require a clean tracked working tree, the configured main branch, "
+            "a configured remote and exact equality of local HEAD and origin/main."
+        ),
+        category="git",
+        risk="safe",
+        external_tools=("git",),
+    ),
     "ios.bump_xcode_build_number": StepMetadata(
         name="ios.bump_xcode_build_number",
         description="Increment the Xcode iOS build number.",
@@ -199,6 +246,56 @@ _BUILTIN_METADATA: dict[str, StepMetadata] = {
         category="notify",
         risk="safe",
         produces=(ResultProduction("notification"),),
+    ),
+    "python.build_distribution": StepMetadata(
+        name="python.build_distribution",
+        description=(
+            "Remove only the configured dist/ directory, build with the current Python (-m build), verify the "
+            "results with -m twine check and register the wheel and sdist as artifacts."
+        ),
+        category="python",
+        risk="build",
+        produces=(
+            ResultProduction("python_wheel", name_options=("wheel_artifact",)),
+            ResultProduction("python_sdist", name_options=("sdist_artifact",)),
+        ),
+    ),
+    "python.prepare_release": StepMetadata(
+        name="python.prepare_release",
+        description=(
+            "Prepare Python release files: bump the pyproject/version-file versions, fold the real Unreleased "
+            "changelog entries into a dated '## vX.Y.Z - YYYY-MM-DD' section, update tag-reference files and "
+            "snapshot every modified file for pre-commit rollback."
+        ),
+        category="python",
+        risk="artifact",
+        produces=(ResultProduction("version"),),
+    ),
+    "python.pytest": StepMetadata(
+        name="python.pytest",
+        description="Run the approved pytest command: pytest -q.",
+        category="python",
+        risk="safe",
+        external_tools=("pytest",),
+    ),
+    "python.ruff_check": StepMetadata(
+        name="python.ruff_check",
+        description="Run the approved lint command: ruff check .",
+        category="python",
+        risk="safe",
+        external_tools=("ruff",),
+    ),
+    "release.require_version_available": StepMetadata(
+        name="release.require_version_available",
+        description=(
+            "Preflight the explicit release version: it must be explicit semver, strictly newer than the package "
+            "version and absent from the changelog, local/remote git tags, GitHub Releases (via gh) and PyPI "
+            "(public JSON API with bounded retries)."
+        ),
+        category="release",
+        risk="safe",
+        produces=(ResultProduction("version"),),
+        external_tools=("git", "gh"),
     ),
     "tracker.comment": StepMetadata(
         name="tracker.comment",

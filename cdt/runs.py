@@ -85,6 +85,7 @@ def create_run(
             "inputs": redactor.redact_data(dict(inputs or {})),
             "old_version": None,
             "new_version": None,
+            "rolled_back": False,
             "started_at": manifest["started_at"],
             "finished_at": None,
             "updated_at": now(),

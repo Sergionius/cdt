@@ -106,17 +106,17 @@ Built-in шаги регистрируются в `cdt/pipeline/builtins.py`, и
 - Modify: `tests/test_pipeline_resume.py`
 - Modify: `tests/test_agent_first.py`
 
-- [ ] Добавить `git.require_synced_main`: выполнить fetch origin/main и tags, потребовать clean tracked working tree, текущую ветку `main`, настроенный origin и точное равенство локального `HEAD` и `origin/main`.
-- [ ] Добавить `release.require_version_available` с обязательной explicit semver: версия должна быть строго новее package version и отсутствовать в changelog, локальных/remote tags, GitHub Releases и PyPI; проверки GitHub выполнять через `gh`, PyPI — через публичный JSON API с bounded retries/backoff.
-- [ ] Добавить `python.ruff_check` и `python.pytest`, запускающие утверждённые команды `ruff check .` и `pytest -q` через `CommandRunner` с сохранением исходной команды/exit code в ошибках.
-- [ ] Добавить `python.prepare_release` со структурированными путями к `pyproject.toml`, Python version file, changelog и списку tag-reference files; валидировать ровно одно ожидаемое version occurrence в каждом файле до записи.
-- [ ] Реализовать changelog-переход: потребовать непустой реальный `Unreleased`, создать `## vX.Y.Z - YYYY-MM-DD`, перенести записи без `TODO` и восстановить `Unreleased` с `- Nothing yet.`.
-- [ ] Сохранять точные snapshots изменяемых release-файлов в run context/run directory и регистрировать rollback до release commit; при любой последующей ошибке до commit восстанавливать только эти файлы и отражать `rolled_back` в status.
-- [ ] Добавить `python.build_distribution`: удалить только настроенный `dist/`, выполнить текущим Python `-m build`, затем `-m twine check` для полученных wheel/sdist, проверить наличие обоих типов файлов и зарегистрировать их как artifacts.
-- [ ] Добавить `git.release_commit`: stage только явно настроенные release-файлы, убедиться в отсутствии других staged изменений, создать commit `Release vX.Y.Z`, проверить его содержимое и после успеха закрыть rollback boundary.
-- [ ] Добавить resumable/idempotent `git.release_tag_push`: создать annotated tag на release commit, отклонить конфликтующий локальный/remote tag и отправить `main` вместе с tag через `git push --atomic`.
-- [ ] Зарегистрировать шаги с точными metadata category/risk/tools/artifact requirements и обновить generated/bundled schema.
-- [ ] Покрыть команды, semver conflicts, changelog edge cases, exact staging, rollback, artifact discovery, atomic push, remote conflicts, idempotent resume и failure diagnostics тестами без реального git push или сетевых запросов.
+- [x] Добавить `git.require_synced_main`: выполнить fetch origin/main и tags, потребовать clean tracked working tree, текущую ветку `main`, настроенный origin и точное равенство локального `HEAD` и `origin/main`.
+- [x] Добавить `release.require_version_available` с обязательной explicit semver: версия должна быть строго новее package version и отсутствовать в changelog, локальных/remote tags, GitHub Releases и PyPI; проверки GitHub выполнять через `gh`, PyPI — через публичный JSON API с bounded retries/backoff.
+- [x] Добавить `python.ruff_check` и `python.pytest`, запускающие утверждённые команды `ruff check .` и `pytest -q` через `CommandRunner` с сохранением исходной команды/exit code в ошибках.
+- [x] Добавить `python.prepare_release` со структурированными путями к `pyproject.toml`, Python version file, changelog и списку tag-reference files; валидировать ровно одно ожидаемое version occurrence в каждом файле до записи.
+- [x] Реализовать changelog-переход: потребовать непустой реальный `Unreleased`, создать `## vX.Y.Z - YYYY-MM-DD`, перенести записи без `TODO` и восстановить `Unreleased` с `- Nothing yet.`.
+- [x] Сохранять точные snapshots изменяемых release-файлов в run context/run directory и регистрировать rollback до release commit; при любой последующей ошибке до commit восстанавливать только эти файлы и отражать `rolled_back` в status.
+- [x] Добавить `python.build_distribution`: удалить только настроенный `dist/`, выполнить текущим Python `-m build`, затем `-m twine check` для полученных wheel/sdist, проверить наличие обоих типов файлов и зарегистрировать их как artifacts.
+- [x] Добавить `git.release_commit`: stage только явно настроенные release-файлы, убедиться в отсутствии других staged изменений, создать commit `Release vX.Y.Z`, проверить его содержимое и после успеха закрыть rollback boundary.
+- [x] Добавить resumable/idempotent `git.release_tag_push`: создать annotated tag на release commit, отклонить конфликтующий локальный/remote tag и отправить `main` вместе с tag через `git push --atomic`.
+- [x] Зарегистрировать шаги с точными metadata category/risk/tools/artifact requirements и обновить generated/bundled schema.
+- [x] Покрыть команды, semver conflicts, changelog edge cases, exact staging, rollback, artifact discovery, atomic push, remote conflicts, idempotent resume и failure diagnostics тестами без реального git push или сетевых запросов.
 
 ### Task 3: Добавить ожидание GitHub Actions, GitHub Release и PyPI
 

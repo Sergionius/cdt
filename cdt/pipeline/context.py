@@ -1,3 +1,4 @@
+import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -26,6 +27,7 @@ class PipelineContext:
     inputs: dict[str, str] = field(default_factory=dict)
     status_file: Path | None = None
     mirror_status_file: Path | None = None
+    run_dir: Path | None = None
     run_id: str | None = None
     current_step: str | None = None
     completed_steps: list[str] = field(default_factory=list)
@@ -38,6 +40,9 @@ class PipelineContext:
     resume_from: str | None = None
     started_at: str | None = None
     finished_at: str | None = None
+    rolled_back: bool = False
+    rollback_closed: bool = False
+    _rollback_snapshots: dict[Path, bytes] = field(default_factory=dict, repr=False)
     _artifact_lock: Lock = field(default_factory=Lock, repr=False)
     _status_lock: Lock = field(default_factory=Lock, repr=False)
     _redactor: SecretRedactor = field(init=False, repr=False)
@@ -75,6 +80,51 @@ class PipelineContext:
             if name in self.artifacts:
                 raise typer.BadParameter(f"Duplicate pipeline artifact: {name}")
             self.artifacts[name] = artifact
+
+    def register_rollback_file(self, path: Path) -> None:
+        """Snapshot the exact current content of a release file for pre-commit rollback."""
+        if self.rollback_closed:
+            raise typer.BadParameter(
+                f"Cannot snapshot {path}: the release rollback boundary is closed after the release commit"
+            )
+        resolved = path.expanduser().resolve()
+        if not resolved.is_file():
+            raise typer.BadParameter(f"Cannot snapshot missing release file: {path}")
+        if resolved not in self._rollback_snapshots:
+            self._rollback_snapshots[resolved] = resolved.read_bytes()
+            self._persist_snapshot(resolved)
+
+    def close_rollback_boundary(self) -> None:
+        """Close the pre-commit rollback boundary after the release commit succeeded."""
+        self.rollback_closed = True
+
+    @property
+    def rollback_pending(self) -> bool:
+        """True while release files are modified and the release commit has not succeeded yet."""
+        return bool(self._rollback_snapshots) and not self.rollback_closed
+
+    def perform_rollback(self) -> list[Path]:
+        """Restore only the snapshotted release files; returns the restored paths."""
+        restored: list[Path] = []
+        for path, data in self._rollback_snapshots.items():
+            path.write_bytes(data)
+            restored.append(path)
+        self._rollback_snapshots.clear()
+        self.rolled_back = bool(restored)
+        return restored
+
+    def _persist_snapshot(self, path: Path) -> None:
+        if self.run_dir is None:
+            return
+        snapshots_dir = self.run_dir / "snapshots"
+        try:
+            snapshots_dir.mkdir(parents=True, exist_ok=True)
+            target = snapshots_dir / _snapshot_name(path)
+            if not target.exists():
+                target.write_bytes(self._rollback_snapshots[path])
+        except OSError:
+            # Snapshot persistence is best-effort; the in-memory copy stays authoritative.
+            pass
 
     def artifact(self, name: str) -> BuildArtifact:
         try:
@@ -153,6 +203,7 @@ class PipelineContext:
                 "inputs": dict(self.inputs),
                 "old_version": self.old_version,
                 "new_version": self.new_version,
+                "rolled_back": self.rolled_back,
                 "started_at": self.started_at,
                 "finished_at": self.finished_at,
                 "updated_at": _now(),
@@ -173,3 +224,8 @@ class PipelineContext:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _snapshot_name(path: Path) -> str:
+    digest = hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:12]
+    return f"{digest}-{path.name}"

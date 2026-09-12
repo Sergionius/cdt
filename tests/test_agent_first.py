@@ -176,6 +176,51 @@ def test_schema_exposes_split_testflight_step_options():
     assert sorted(complete_options["properties"]) == ["changelog"]
 
 
+def test_schema_exposes_python_release_and_git_release_step_options():
+    payload = schema_payload()
+    step_schemas = [obj for obj in payload["$defs"]["step"]["oneOf"] if isinstance(obj, dict) and obj.get("properties")]
+    options_by_name = {next(iter(obj["properties"])): next(iter(obj["properties"].values())) for obj in step_schemas}
+
+    prepare_options = options_by_name["python.prepare_release"]
+    assert sorted(prepare_options["properties"]) == [
+        "changelog",
+        "pyproject",
+        "tag_reference_files",
+        "tag_reference_regex",
+        "version",
+        "version_file",
+    ]
+
+    build_options = options_by_name["python.build_distribution"]
+    assert sorted(build_options["properties"]) == ["dist_dir", "python", "sdist_artifact", "wheel_artifact"]
+
+    commit_options = options_by_name["git.release_commit"]
+    assert commit_options["required"] == ["files"]
+    assert sorted(commit_options["properties"]) == ["files", "message"]
+
+    tag_push_options = options_by_name["git.release_tag_push"]
+    assert sorted(tag_push_options["properties"]) == ["branch", "message", "remote", "tag"]
+
+    sync_options = options_by_name["git.require_synced_main"]
+    assert sorted(sync_options["properties"]) == ["branch", "remote"]
+
+    available_options = options_by_name["release.require_version_available"]
+    assert sorted(available_options["properties"]) == [
+        "changelog",
+        "github_repo",
+        "pypi_package",
+        "pyproject",
+        "remote",
+        "tag_prefix",
+        "version",
+    ]
+
+    ruff_options = options_by_name["python.ruff_check"]
+    assert ruff_options["properties"] == {}
+    pytest_options = options_by_name["python.pytest"]
+    assert pytest_options["properties"] == {}
+
+
 def test_detached_stop_refuses_to_signal_direct_run(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     paths = create_run(tmp_path, "test", detached=False)

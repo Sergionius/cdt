@@ -20,6 +20,7 @@ from cdt.runner import CommandExecutionError, CommandRunner
 from cdt.runs import list_runs, run_paths
 from cdt.steps.android import AndroidBuildAabStep, AndroidBuildApkStep
 from cdt.steps.firebase import FirebaseUploadAppDistributionStep
+from cdt.steps.python import PytestStep, RuffCheckStep
 
 
 class FailingStep:
@@ -717,3 +718,30 @@ def test_android_build_failures_keep_name_cause_command_and_exit_code(
     assert f"Command: {shlex.join(command_builder())}" in lines
     assert "Exit code: 7" in lines
     assert runner.commands == [command_builder()]
+
+
+@pytest.mark.parametrize(
+    ("step", "step_name", "cause", "command"),
+    [
+        (
+            RuffCheckStep(),
+            "python.ruff_check",
+            "Ruff check failed; fix the lint errors before releasing",
+            "ruff check .",
+        ),
+        (PytestStep(), "python.pytest", "pytest failed; fix the failing tests before releasing", "pytest -q"),
+    ],
+)
+def test_python_toolchain_failures_keep_name_cause_command_and_exit_code(tmp_path, step, step_name, cause, command):
+    runner = _FixedExitFakeRunner(3)
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=runner)
+
+    with pytest.raises(PipelineExecutionError) as exc_info:
+        PipelineExecutor().run([step], ctx)
+
+    message = str(exc_info.value)
+    lines = message.splitlines()
+    assert lines[0] == f"Pipeline failed at step {step_name}."
+    assert lines[1] == cause
+    assert f"Command: {command}" in lines
+    assert "Exit code: 3" in lines

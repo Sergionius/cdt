@@ -84,6 +84,7 @@ def run_configured_pipeline(
         inputs=inputs,
         status_file=primary_status,
         mirror_status_file=mirror_status,
+        run_dir=run_paths.root if run_paths is not None else None,
         run_id=run_paths.run_id if run_paths is not None else run_id,
         skip_completed=skip_completed,
     )
@@ -97,6 +98,7 @@ def run_configured_pipeline(
                 write_exit_code(run_paths.exit, 1)
             if recorder is not None:
                 recorder.record_line(_terminal_failure_summary(exc))
+            _rollback_release_files(ctx)
             raise
         else:
             if run_paths is not None:
@@ -105,6 +107,18 @@ def run_configured_pipeline(
         if recorder is not None:
             recorder.close()
     return run_paths.run_id if run_paths is not None else None
+
+
+def _rollback_release_files(ctx: PipelineContext) -> None:
+    """Restore snapshotted release files when a run fails before the release commit."""
+    if not ctx.rollback_pending:
+        return
+    restored = ctx.perform_rollback()
+    typer.echo(
+        f"==> Rolled back {len(restored)} release file(s) to their pre-release state before the release commit",
+        err=True,
+    )
+    ctx.write_status("failed")
 
 
 def _terminal_failure_summary(exc: BaseException) -> str:
