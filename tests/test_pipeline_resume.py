@@ -1,4 +1,5 @@
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -9,6 +10,12 @@ from cdt.pipeline.registry import _clear_steps_for_tests
 from cdt.runs import list_runs, read_json, run_paths
 
 runner = CliRunner()
+ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+def _compact_visible_text(output: str) -> str:
+    visible = ANSI_RE.sub("", output).translate({ord(ch): None for ch in "│╭─╮╰╯"})
+    return re.sub(r"\s+", "", visible)
 
 
 def setup_function():
@@ -337,9 +344,9 @@ def test_resume_rejects_continuation_with_different_version(tmp_path, monkeypatc
     )
 
     assert result.exit_code != 0
-    normalized = " ".join(result.output.translate({ord(ch): " " for ch in "│╭─╮╰╯"}).split())
-    assert "Resume inputs do not match the original run" in normalized
-    assert "A release cannot be continued with different inputs" in normalized
+    normalized = _compact_visible_text(result.output)
+    assert "Resumeinputsdonotmatchtheoriginalrun" in normalized
+    assert "Areleasecannotbecontinuedwithdifferentinputs" in normalized
     assert not (tmp_path / "ran.txt").exists()
 
 
@@ -462,8 +469,8 @@ def test_rolled_back_release_reruns_fresh_with_same_inputs(tmp_path, monkeypatch
     )
 
     assert rejected.exit_code != 0
-    normalized = " ".join(rejected.output.translate({ord(ch): " " for ch in "│╭─╮╰╯"}).split())
-    assert "Resume inputs do not match the original run" in normalized
+    normalized = _compact_visible_text(rejected.output)
+    assert "Resumeinputsdonotmatchtheoriginalrun" in normalized
 
     fresh = runner.invoke(app, ["run", "release", "--input", "version=0.5.2"])
 

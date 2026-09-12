@@ -1,4 +1,5 @@
 import json
+import re
 import sys
 
 from typer.testing import CliRunner
@@ -8,6 +9,12 @@ from cdt.pipeline import preflight
 from cdt.pipeline.registry import _clear_steps_for_tests
 
 runner = CliRunner()
+ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+def _compact_visible_text(output: str) -> str:
+    visible = ANSI_RE.sub("", output).translate({ord(ch): None for ch in "│╭─╮╰╯"})
+    return re.sub(r"\s+", "", visible)
 
 
 def setup_function():
@@ -762,8 +769,8 @@ def test_run_rejects_malformed_input_entries(tmp_path, monkeypatch):
     )
 
     assert missing_equals.exit_code != 0
-    assert "Use --input KEY=VALUE" in missing_equals.output
+    assert "Use--inputKEY=VALUE" in _compact_visible_text(missing_equals.output)
     assert empty_key.exit_code != 0
-    assert "key must not be empty" in empty_key.output
+    assert "keymustnotbeempty" in _compact_visible_text(empty_key.output)
     assert duplicate.exit_code != 0
-    assert "Duplicate --input key: version" in duplicate.output
+    assert "Duplicate--inputkey:version" in _compact_visible_text(duplicate.output)
