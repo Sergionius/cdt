@@ -1,5 +1,6 @@
 import json
 import re
+import shlex
 import sys
 import threading
 from pathlib import Path
@@ -8,13 +9,17 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
+from cdt.artifacts import ArtifactKind, BuildArtifact
 from cdt.cli import app
-from cdt.pipeline import ParallelStepGroup, PipelineContext, PipelineExecutor
+from cdt.pipeline import ParallelStepGroup, PipelineContext, PipelineExecutor, SequentialStepGroup
 from cdt.pipeline.config import ConfiguredStep, load_pipeline_config
 from cdt.pipeline.executor import PipelineExecutionError
 from cdt.pipeline.registry import _clear_steps_for_tests, register_step
+from cdt.platforms.android import _build_android_aab_command, _build_android_apk_command
 from cdt.runner import CommandExecutionError, CommandRunner
 from cdt.runs import list_runs, run_paths
+from cdt.steps.android import AndroidBuildAabStep, AndroidBuildApkStep
+from cdt.steps.firebase import FirebaseUploadAppDistributionStep
 
 
 class FailingStep:
@@ -99,6 +104,42 @@ class _OkFakeRunner:
         return 0
 
 
+class _FixedExitFakeRunner:
+    """Fake command runner that records every command and always returns the same exit code."""
+
+    def __init__(self, exit_code: int):
+        self.exit_code = exit_code
+        self.commands: list[list[str]] = []
+
+    def run(self, command: list[str], *, cwd: Path) -> int:
+        self.commands.append(list(command))
+        return self.exit_code
+
+
+class _FirebaseSyncFakeRunner:
+    """Fake command runner: the Firebase upload fails first, the sibling waits for that failure."""
+
+    def __init__(self, firebase_exit_code: int = 7):
+        self.firebase_exit_code = firebase_exit_code
+        self.firebase_failed = threading.Event()
+        self.commands: list[list[str]] = []
+        self.finished_sibling_commands: list[list[str]] = []
+        self._lock = threading.Lock()
+
+    def run(self, command: list[str], *, cwd: Path) -> int:
+        with self._lock:
+            self.commands.append(list(command))
+        if command[:2] == ["firebase", "appdistribution:distribute"]:
+            self.firebase_failed.set()
+            return self.firebase_exit_code
+        if command[:3] == ["flutter", "build", "apk"]:
+            assert self.firebase_failed.wait(timeout=10), "sibling finished before the Firebase failure"
+            with self._lock:
+                self.finished_sibling_commands.append(list(command))
+            return 0
+        return 0
+
+
 def setup_function():
     _clear_steps_for_tests()
     sys.modules.pop("cdt_steps.demo", None)
@@ -176,6 +217,61 @@ def _write_secret_cli_project(tmp_path: Path) -> None:
         )
         + "\n",
         encoding="utf-8",
+    )
+
+
+def _write_firebase_cli_project(tmp_path: Path) -> None:
+    aab = tmp_path / "build" / "app" / "outputs" / "bundle" / "release" / "app.aab"
+    aab.parent.mkdir(parents=True)
+    aab.write_text("aab", encoding="utf-8")
+    apk = tmp_path / "build" / "app" / "outputs" / "flutter-apk" / "app-release.apk"
+    apk.parent.mkdir(parents=True)
+    apk.write_text("apk", encoding="utf-8")
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                "FIREBASE_APP_ID_ANDROID=1:1234567890:android:abcdef0123456789",
+                "FIREBASE_TOKEN=firebase-token-secret-value",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  androidapp:",
+                "    steps:",
+                "      - android.build_aab:",
+                "          artifact: android_aab",
+                "      - parallel:",
+                "          steps:",
+                "            - firebase.upload_app_distribution:",
+                "                artifact: android_aab",
+                "            - android.build_apk:",
+                "                artifact: android_apk",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _firebase_executor_context(tmp_path: Path, runner, status_file: Path | None = None) -> PipelineContext:
+    aab = tmp_path / "build" / "app" / "outputs" / "bundle" / "release" / "app.aab"
+    aab.parent.mkdir(parents=True, exist_ok=True)
+    aab.write_text("aab", encoding="utf-8")
+    return PipelineContext(
+        cwd=tmp_path,
+        env={
+            "FIREBASE_APP_ID_ANDROID": "1:1234567890:android:abcdef0123456789",
+            "FIREBASE_TOKEN": "firebase-token-secret-value",
+        },
+        runner=runner,
+        artifacts={"android_aab": BuildArtifact(ArtifactKind.AAB, aab, "Android AAB")},
+        status_file=status_file,
     )
 
 
@@ -416,6 +512,67 @@ def test_cli_parallel_ios_failure_renders_readable_summary(tmp_path, monkeypatch
     assert "Exit code: 74" in log
 
 
+def test_cli_parallel_firebase_failure_renders_readable_summary(tmp_path, monkeypatch):
+    _write_firebase_cli_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("FIREBASE_APP_ID_ANDROID", raising=False)
+    monkeypatch.delenv("FIREBASE_TOKEN", raising=False)
+    monkeypatch.delenv("FIREBASE_GROUPS", raising=False)
+    sounds: list[str] = []
+    monkeypatch.setattr("cdt.steps.firebase._play_fail_sound", lambda env, cwd: sounds.append("fail"))
+    monkeypatch.setattr("cdt.steps.android._play_fail_sound", lambda env, cwd: sounds.append("fail"))
+    fake_runner = _FirebaseSyncFakeRunner(firebase_exit_code=7)
+    monkeypatch.setattr("cdt.pipeline.runner.CommandRunner", lambda: fake_runner)
+
+    result = cli_runner.invoke(app, ["run", "androidapp"])
+
+    assert result.exit_code == 1
+    output = result.output
+    assert "Pipeline failed at step 1/0 (firebase.upload_app_distribution)." in output
+    assert (
+        "Firebase App Distribution upload failed. Check the Firebase CLI output above for details; "
+        "inspect the saved run with cdt logs <run-id>."
+    ) in output
+    assert "Command: firebase appdistribution:distribute" in output
+    aab_path = tmp_path / "build" / "app" / "outputs" / "bundle" / "release" / "app.aab"
+    assert str(aab_path) in output
+    assert "--token ***" in output
+    assert "Exit code: 7" in output
+    assert "Other parallel steps were allowed to finish." in output
+    assert "Usage:" not in output
+    assert "Invalid value" not in output
+    assert "Parallel group failed after all steps finished" not in output
+    assert "unknown" not in output
+    assert "firebase-token-secret-value" not in output
+    assert fake_runner.finished_sibling_commands != []
+    assert sounds == ["fail"]
+
+    runs = list_runs(tmp_path)
+    assert len(runs) == 1
+    assert runs[0]["status"] == "failed"
+    paths = run_paths(tmp_path, runs[0]["run_id"])
+    payload = json.loads(paths.status.read_text(encoding="utf-8"))
+    assert payload["status"] == "failed"
+    assert payload["failed_step"] == "1/0"
+    assert payload["parallel_completed"] == ["1/1"]
+    assert payload["completed_steps"] == ["0", "1/1"]
+    assert [artifact["name"] for artifact in payload["artifacts"]] == ["android_aab", "android_apk"]
+    assert paths.exit.read_text(encoding="utf-8") == "1\n"
+
+    status_json = paths.status.read_text(encoding="utf-8")
+    log = paths.log.read_text(encoding="utf-8")
+    for view in (output, status_json, log):
+        assert "Pipeline failed at step 1/0 (firebase.upload_app_distribution)." in view
+        assert (
+            "Firebase App Distribution upload failed. Check the Firebase CLI output above for details; "
+            "inspect the saved run with cdt logs <run-id>."
+        ) in view
+        assert str(aab_path) in view
+        assert "--token ***" in view
+        assert "Exit code: 7" in view
+        assert "firebase-token-secret-value" not in view
+
+
 def test_cli_run_without_config_keeps_validation_ux(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
@@ -478,3 +635,85 @@ def test_cli_ios_failure_redacts_secret_from_terminal_status_and_log(tmp_path, m
     assert "provider-secret-value" not in log
     assert "--dart-define=API_TOKEN=***" in log
     assert "provider rejected ***" in log
+
+
+def test_executor_wraps_sequential_firebase_failure_without_parallel_notice(tmp_path):
+    ctx = _firebase_executor_context(tmp_path, _FixedExitFakeRunner(7))
+
+    with pytest.raises(PipelineExecutionError) as exc_info:
+        PipelineExecutor().run([FirebaseUploadAppDistributionStep(artifact="android_aab")], ctx)
+
+    message = str(exc_info.value)
+    lines = message.splitlines()
+    assert lines[0] == "Pipeline failed at step firebase.upload_app_distribution."
+    assert lines[1] == (
+        "Firebase App Distribution upload failed. Check the Firebase CLI output above for details; "
+        "inspect the saved run with cdt logs <run-id>."
+    )
+    assert lines[2].startswith("Command: firebase appdistribution:distribute ")
+    assert str(tmp_path / "build" / "app" / "outputs" / "bundle" / "release" / "app.aab") in lines[2]
+    assert "--token ***" in lines[2]
+    assert "Exit code: 7" in lines
+    assert "Other parallel steps were allowed to finish." not in message
+    assert "firebase-token-secret-value" not in message
+    assert exc_info.value.failed_step_id == "firebase.upload_app_distribution"
+
+
+def test_parallel_sequence_failure_points_at_nested_firebase_upload(tmp_path):
+    status_file = tmp_path / "status.json"
+    ctx = _firebase_executor_context(tmp_path, _FixedExitFakeRunner(7), status_file=status_file)
+    upload = FirebaseUploadAppDistributionStep(artifact="android_aab")
+    upload.step_id = "0/0/0"
+    healthy = OkStep()
+    healthy.step_id = "0/1"
+
+    with pytest.raises(PipelineExecutionError) as exc_info:
+        PipelineExecutor().run(
+            [ParallelStepGroup([SequentialStepGroup([upload], step_id="0/0"), healthy], step_id="0")],
+            ctx,
+        )
+
+    message = str(exc_info.value)
+    assert message.splitlines()[0] == "Pipeline failed at step 0/0/0 (firebase.upload_app_distribution)."
+    assert "Exit code: 7" in message
+    assert exc_info.value.failed_step_id == "0/0/0"
+    payload = json.loads(status_file.read_text(encoding="utf-8"))
+    assert payload["status"] == "failed"
+    assert payload["failed_step"] == "0/0/0"
+    assert payload["failed_step"] not in {"0", "0/0"}
+    assert payload["parallel_completed"] == ["0/1"]
+
+
+@pytest.mark.parametrize(
+    ("build_step", "step_name", "cause", "command_builder"),
+    [
+        (
+            AndroidBuildAabStep(),
+            "android.build_aab",
+            "Android AAB build failed. Check the Flutter/Gradle output above for details.",
+            _build_android_aab_command,
+        ),
+        (
+            AndroidBuildApkStep(),
+            "android.build_apk",
+            "Android APK build failed. Check the Flutter/Gradle output above for details.",
+            _build_android_apk_command,
+        ),
+    ],
+)
+def test_android_build_failures_keep_name_cause_command_and_exit_code(
+    tmp_path, build_step, step_name, cause, command_builder
+):
+    runner = _FixedExitFakeRunner(7)
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=runner)
+
+    with pytest.raises(PipelineExecutionError) as exc_info:
+        PipelineExecutor().run([build_step], ctx)
+
+    message = str(exc_info.value)
+    lines = message.splitlines()
+    assert lines[0] == f"Pipeline failed at step {step_name}."
+    assert lines[1] == cause
+    assert f"Command: {shlex.join(command_builder())}" in lines
+    assert "Exit code: 7" in lines
+    assert runner.commands == [command_builder()]

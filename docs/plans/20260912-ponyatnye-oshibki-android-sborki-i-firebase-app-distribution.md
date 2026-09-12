@@ -55,15 +55,15 @@
 **Files:**
 - Modify: `tests/test_pipeline_error_ux.py`
 
-- [ ] По существующему iOS-прецеденту добавить временный YAML-проект с `android.build_aab`, затем параллельной группой: `firebase.upload_app_distribution` и успешный sibling. Использовать фиктивные app ID, token, артефакты и runner без внешних процессов.
-- [ ] Синхронизировать fake runner через `threading.Event`: Firebase возвращает 7, sibling завершается после сигнала ошибки. Проверить, что sibling действительно разрешено закончить.
-- [ ] В CLI-тесте проверить leaf ID и имя Firebase-шагa, понятную причину, фактическую команду с путём артефакта и `--token ***`, `Exit code: 7`, уведомление о завершении siblings и итоговый CLI exit code 1.
-- [ ] Проверить отсутствие `Usage:`, `Invalid value`, старого сообщения `Parallel group failed after all steps finished` и `unknown`.
-- [ ] Проверить созданный run record: `status=failed`, корректный `failed_step`, завершённый sibling, сохранённый ранее собранный Android-артефакт, `exit-code` равен `1`, одинаковые существенные диагностические данные в terminal, `status.json` и `output.log`. Секрет не должен присутствовать ни в одном из этих представлений.
-- [ ] Добавить executor-тест того же реального Firebase step без parallel group: ошибка оборачивается в `PipelineExecutionError`, сохраняет command/exit code и не получает параллельное уведомление.
-- [ ] Добавить случай Firebase upload внутри последовательной ветки parallel group: итоговый `failed_step` указывает на вложенный upload, а не на sequence или parallel.
-- [ ] Добавить параметризованную executor-проверку реальных Android AAB/APK steps: ошибки содержат правильное имя, причину, команду и исходный код завершения.
-- [ ] Оставить действующими проверки validation UX и iOS-сценариев; не менять общий формат executor ради платформенных сообщений.
+- [x] По существующему iOS-прецеденту добавить временный YAML-проект с `android.build_aab`, затем параллельной группой: `firebase.upload_app_distribution` и успешный sibling. Использовать фиктивные app ID, token, артефакты и runner без внешних процессов.
+- [x] Синхронизировать fake runner через `threading.Event`: Firebase возвращает 7, sibling завершается после сигнала ошибки. Проверить, что sibling действительно разрешено закончить.
+- [x] В CLI-тесте проверить leaf ID и имя Firebase-шагa, понятную причину, фактическую команду с путём артефакта и `--token ***`, `Exit code: 7`, уведомление о завершении siblings и итоговый CLI exit code 1.
+- [x] Проверить отсутствие `Usage:`, `Invalid value`, старого сообщения `Parallel group failed after all steps finished` и `unknown`.
+- [x] Проверить созданный run record: `status=failed`, корректный `failed_step`, завершённый sibling, сохранённый ранее собранный Android-артефакт, `exit-code` равен `1`, одинаковые существенные диагностические данные в terminal, `status.json` и `output.log`. Секрет не должен присутствовать ни в одном из этих представлений.
+- [x] Добавить executor-тест того же реального Firebase step без parallel group: ошибка оборачивается в `PipelineExecutionError`, сохраняет command/exit code и не получает параллельное уведомление.
+- [x] Добавить случай Firebase upload внутри последовательной ветки parallel group: итоговый `failed_step` указывает на вложенный upload, а не на sequence или parallel.
+- [x] Добавить параметризованную executor-проверку реальных Android AAB/APK steps: ошибки содержат правильное имя, причину, команду и исходный код завершения.
+- [x] Оставить действующими проверки validation UX и iOS-сценариев; не менять общий формат executor ради платформенных сообщений.
 
 ### Task 4: Документировать границы диагностики
 **Files:**
@@ -118,3 +118,7 @@ ruff check .
 - Decision (Task 2): убрать ставший неиспользуемым `import typer` из `cdt/steps/android.py`; Alternatives: оставить импорт; Reason: после удаления `typer.Exit` модуль больше не использует typer, это единственное затронутое место; Side effects: none.
 - Decision (Task 2): в тестах сравнивать переданную команду с результатом существующих билдеров `_build_android_aab_command()`/`_build_android_apk_command()` вместо дублирования литерального списка аргументов; Alternatives: захардкодить полный ожидаемый command; Reason: чекбокс требует точную команду и cwd, билдеры покрыты собственными тестами и отражают неизменность build options; Side effects: none.
 - Decision (Task 2): в failure-тестах параметризовать только код 7, а в success-тестах проверять kind/label/path зарегистрированного артефакта через `ctx.artifact(name)`; Alternatives: параметризация нескольких кодов как в Task 1; Reason: чекбокс Task 2 явно требует сохранение кода 7 и регистрацию именованного артефакта; Side effects: none.
+- Decision (Task 3): в качестве успешного sibling в parallel group использовать реальный `android.build_apk`; Alternatives: кастомный demo-шаг или шаг без runner; Reason: сохраняет iOS-прецедент с одними builtin-шагами и дополнительно проверяет, что параллельная ветка реально выполняет команду и регистрирует артефакт; Side effects: в статусе сохраняются оба артефакта (android_aab и android_apk).
+- Decision (Task 3): fake runner различает команды по префиксам (`firebase appdistribution:distribute` возвращает 7, `flutter build apk` ждёт `threading.Event`, остальные возвращают 0); Alternatives: синхронизация по счётчику вызовов; Reason: последовательный `android.build_aab` идёт до отказа Firebase, поэтому ожидание ошибки должно применяться только к sibling внутри parallel group; Side effects: none.
+- Decision (Task 3): в CLI-тесте удалить `FIREBASE_APP_ID_ANDROID`/`FIREBASE_TOKEN`/`FIREBASE_GROUPS` из `os.environ` через `monkeypatch.delenv`; Alternatives: полагаться только на `.env`; Reason: `_load_project_env` отдаёт приоритет переменным окружения, и значения из среды разработчика могли бы подменить фикстуру; Side effects: none.
+- Decision (Task 3): в executor-тестах создавать шаги напрямую и присваивать `step_id` атрибутом, как в существующих тестах файла; Alternatives: регистрация фабрик в registry и использование `ConfiguredStep`; Reason: соответствует локальным convention и не требует дополнительной настройки registry; Side effects: none.
