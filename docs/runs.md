@@ -79,6 +79,23 @@ Artifacts produced: android_aab
 
 The first line attributes the failure to the leaf step that actually failed: its position inside the parallel group plus its stable step ID (`0/0 (ios.flutter_build_ipa)`); sequential failures use the plain step name. The cause line describes what failed. `Command:` and `Exit code:` show the actual generated command and its exit code when CDT knows them, and are omitted when they are unavailable. The parallel sentence appears only for failures inside a parallel group: sibling steps were still allowed to finish, and `Artifacts produced:` lists what they completed (`none` when nothing was produced).
 
+A Firebase App Distribution upload failure is reported the same way. The command is shown with the token value replaced by `***`, and the Firebase CLI's own exit code is preserved:
+
+```text
+Pipeline failed at step 1/0 (firebase.upload_app_distribution).
+Firebase App Distribution upload failed. Check the Firebase CLI output above for details; inspect the saved run with cdt logs <run-id>.
+Command: firebase appdistribution:distribute /path/to/project/build/app/outputs/bundle/release/app.aab --app 1:1234567890:android:0a1b2c3d4e5f6a7b --groups qa-team --release-notes https://tracker.yandex.ru/TASK-123 --token ***
+Exit code: 7
+Other parallel steps were allowed to finish.
+Artifacts produced: android_apk
+```
+
+This summary deliberately distinguishes the two failure points of an Android/Firebase pipeline: `android.build_aab` and `android.build_apk` report `Android AAB build failed.` / `Android APK build failed.` with the Flutter/Gradle command, while `firebase.upload_app_distribution` reports the upload step with the full `firebase appdistribution:distribute` command. When the failing step is the upload, the AAB build itself succeeded, so do not start by rebuilding the artifact.
+
+A Firebase CLI message such as `Failed to make request` on its own does not establish the root cause: it is equally consistent with a network problem, invalid or expired token credentials, missing tester permissions, or an unusable artifact. CDT reports the command and exit code as-is and does not guess the cause. Read the Firebase CLI output streamed above the summary, or inspect the saved record afterwards with `cdt logs <run-id> --tail 80`, and check the obvious external preconditions (network reachability, `FIREBASE_TOKEN` validity, App Distribution access for the app ID) before changing code.
+
+Note that `Artifacts produced:` covers only what the failing step or group itself produced (for example, a parallel sibling's `android_apk`). It does not mean earlier steps built nothing: a sequential `android.build_aab` that finished before the failed upload still registered its `android_aab`, and the artifact remains on disk. The full list of all artifacts collected during the run is stored in `status.json` and shown by `cdt status <run-id>`, so check it before rebuilding or re-running.
+
 The displayed exit code is the return code of the Flutter command itself, not an embedded Xcode diagnostic. Xcode may report its own error codes (such as 74) inside the build log; CDT neither substitutes nor guesses them and reports Flutter's return value as-is, so use the build output to find the actual Xcode failure.
 
 The summary identifies the failing step; it does not diagnose the underlying tool failure. Read the streamed Flutter/Xcode build output above the summary in the terminal, or inspect the saved record afterwards with `cdt logs <run-id>` — the same redacted summary is persisted in `output.log` and in the `status.json` error field.
@@ -104,6 +121,8 @@ export CDT_REDACT_KEYS=CUSTOM_SESSION,INTERNAL_AUTH
 ```
 
 Redaction is defense in depth and cannot classify every provider diagnostic. Continue treating run logs as sensitive project data.
+
+This limitation also bounds failure diagnostics for uploads such as Firebase App Distribution. During a direct `cdt run`, raw Firebase CLI subprocess output is streamed to the interactive terminal but is not necessarily captured into `output.log`; only the redacted terminal summary and CDT-owned lines are saved. CDT therefore preserves the upload command and exit code but does not automatically extract an HTTP status or network-cause explanation from the CLI's output — inspect the streamed Firebase output in the terminal when the failure happens. Do not work around this by enabling third-party debug modes such as `firebase --debug` in the pipeline: their verbose output can include additional credential material or request details that CDT's redactor cannot guarantee to classify.
 
 Run records may still contain project paths, artifact names, task IDs, and other operational metadata. Continue treating `.cdt/runs/` as sensitive project data.
 

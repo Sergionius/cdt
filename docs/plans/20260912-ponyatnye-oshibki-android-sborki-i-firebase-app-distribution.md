@@ -70,11 +70,11 @@
 - Modify: `docs/runs.md`
 - Modify: `CHANGELOG.md`
 
-- [ ] Расширить раздел `Failed-build output` примером Firebase upload failure с фиктивными идентификаторами, замаскированным токеном и сохранённым кодом Firebase CLI.
-- [ ] Объяснить различие между ошибкой Android build и последующей загрузки. Указать, что `Failed to make request` само по себе не устанавливает первопричину; подробности следует искать в Firebase output и через `cdt logs <run-id> --tail 80`.
-- [ ] Сохранить описанное ограничение direct verbose execution: raw subprocess output не обязательно попадает в run log. Не обещать автоматическое извлечение HTTP/network-причины или безопасность сторонних debug logs.
-- [ ] Уточнить, что `Artifacts produced: none` относится к текущему шагу/группе, а не означает отсутствие ранее собранного AAB; полный список артефактов хранится в status.
-- [ ] Заменить `Nothing yet` в `Unreleased` краткой записью о сохранении команд и кодов завершения Android/Firebase, без заявления об исправлении доступности Firebase.
+- [x] Расширить раздел `Failed-build output` примером Firebase upload failure с фиктивными идентификаторами, замаскированным токеном и сохранённым кодом Firebase CLI.
+- [x] Объяснить различие между ошибкой Android build и последующей загрузки. Указать, что `Failed to make request` само по себе не устанавливает первопричину; подробности следует искать в Firebase output и через `cdt logs <run-id> --tail 80`.
+- [x] Сохранить описанное ограничение direct verbose execution: raw subprocess output не обязательно попадает в run log. Не обещать автоматическое извлечение HTTP/network-причины или безопасность сторонних debug logs.
+- [x] Уточнить, что `Artifacts produced: none` относится к текущему шагу/группе, а не означает отсутствие ранее собранного AAB; полный список артефактов хранится в status.
+- [x] Заменить `Nothing yet` в `Unreleased` краткой записью о сохранении команд и кодов завершения Android/Firebase, без заявления об исправлении доступности Firebase.
 
 ## Validation
 
@@ -122,3 +122,7 @@ ruff check .
 - Decision (Task 3): fake runner различает команды по префиксам (`firebase appdistribution:distribute` возвращает 7, `flutter build apk` ждёт `threading.Event`, остальные возвращают 0); Alternatives: синхронизация по счётчику вызовов; Reason: последовательный `android.build_aab` идёт до отказа Firebase, поэтому ожидание ошибки должно применяться только к sibling внутри parallel group; Side effects: none.
 - Decision (Task 3): в CLI-тесте удалить `FIREBASE_APP_ID_ANDROID`/`FIREBASE_TOKEN`/`FIREBASE_GROUPS` из `os.environ` через `monkeypatch.delenv`; Alternatives: полагаться только на `.env`; Reason: `_load_project_env` отдаёт приоритет переменным окружения, и значения из среды разработчика могли бы подменить фикстуру; Side effects: none.
 - Decision (Task 3): в executor-тестах создавать шаги напрямую и присваивать `step_id` атрибутом, как в существующих тестах файла; Alternatives: регистрация фабрик в registry и использование `ConfiguredStep`; Reason: соответствует локальным convention и не требует дополнительной настройки registry; Side effects: none.
+- Decision (Task 4): пример Firebase failure в `docs/runs.md` использует фиктивные идентификаторы (app ID `1:1234567890:android:0a1b2c3d4e5f6a7b`, путь `/path/to/project/...`, exit code 7, sibling-артефакт `android_apk`) и формат, дословно совпадающий с выводом executor и тестов Task 1–3; Alternatives: перенос реальных идентификаторов из запроса; Reason: реальные app ID, пути и токены не должны попадать в публичную документацию; Side effects: none.
+- Decision (Task 4): абзацы о различии сборки и загрузки, `Failed to make request` и `Artifacts produced` добавлены смежными абзацами внутри `Failed-build output`, а ограничение direct verbose execution — в `Logs and secret redaction`, где это ограничение уже описано; Alternatives: новые отдельные секции или дублирование ограничения; Reason: сохраняет структуру документа и единственное место описания ограничения логирования; Side effects: none.
+- Decision (Task 4): ограничение дополнено явным предупреждением не включать `firebase --debug` в пайплайн из-за возможной утечки credential-материала, которую redactor не гарантирует классифицировать; Alternatives: промолчать о debug-режиме; Reason: чекбокс требует не обещать безопасность сторонних debug logs, а это самый вероятный обходной путь пользователя; Side effects: none.
+- Decision (Task 4): документация-only задача провалидирована сверкой цитат, команды `cdt logs <run-id> --tail 80` и формата summary с `cdt/pipeline/executor.py`, `cdt/steps/firebase.py`, `cdt/steps/android.py`, `cdt/cli.py` и тестами Task 1–3 вместо запуска pytest; Alternatives: полный тестовый прогон из Validation; Reason: инструкции воркера запрещают compile/test/build для documentation-only задач; Side effects: none.
