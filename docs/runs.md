@@ -47,7 +47,7 @@ cdt agent-release status --run <run-id> --wait --json
 
 ## Manifest
 
-`manifest.json` records schema version, run ID, pipeline, task IDs, CDT version, project path, Git revision, start time, command, and whether execution was detached. It never stores environment variable values.
+`manifest.json` records schema version, run ID, pipeline, task IDs, CDT version, project path, Git revision, start time, command (including `--input KEY=VALUE` pipeline inputs), and whether execution was detached. It never stores environment variable values. Pipeline inputs are also written to `status.json` after defense-in-depth redaction; they are non-secret operational values by contract, never credentials.
 
 ## Status lifecycle
 
@@ -143,6 +143,15 @@ cdt run test \
 ```
 
 Before resuming, inspect `git status --short`, verify that recorded artifacts still exist, and check whether version files changed during the failed run.
+
+Resume requires the same `--input` values as the original run; CDT rejects continuing a run with different inputs, so a release cannot be resumed with a different version:
+
+```bash
+cdt run release \
+  --input version=X.Y.Z \
+  --resume-status-file .cdt/runs/<run-id>/status.json \
+  --skip-completed
+```
 
 For TestFlight pipelines, resume skips completed build and upload steps and starts at `appstore.complete_testflight` with the version context restored from the status file, so the IPA is not re-uploaded and the build number is unchanged:
 

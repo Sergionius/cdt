@@ -88,6 +88,29 @@ For an older CDT without `agent-release`, run `cdt run <pipeline>` with an expli
 4. Report failed step, error, changed version files, artifacts produced, and one recommended next action.
 5. Retry only after approval, except for a pure harness permission failure when elevated execution was already authorized.
 
+## CDT self-release pipeline
+
+When the user asks to release CDT itself, use the repository's production `release` pipeline from the root `cdt.yaml`.
+
+- Propose the next version yourself (for example, from `CHANGELOG.md` and `pyproject.toml`), but always pass it explicitly: `cdt run release --input version=X.Y.Z --confirm release`. Never let a pipeline guess or auto-select a version.
+- Run the preflight first (`cdt pipeline list`, `cdt pipeline inspect release`, `cdt pipeline preflight release`, then `cdt run release --input version=X.Y.Z --dry-run`) and only after that ask for the exact confirmation of the full command including the version input.
+- Wait for the terminal release result. A pushed tag or commit is not a successful release: the release counts as done only when the run status is `success`, meaning `github.wait_release` confirmed the green GitHub Actions workflow, the GitHub Release with wheel/sdist/`SHA256SUMS`, and the published PyPI version.
+- Required tools: `git`, `gh` (GitHub authentication comes from the active `gh auth` session), `ruff`, `pytest`, `python -m build`, `twine`; the version preflight queries the public PyPI JSON API.
+
+### Repair loop before publication
+
+If the pipeline fails before the release commit (lint, tests, build, file preparation), release files are rolled back automatically. To repair code:
+
+1. Verify the rollback: `git status --short` must be clean on synced `main`.
+2. Create a separate `fix/<short-name>` branch from fresh `main`, apply the minimal fix, push, and open a PR.
+3. Wait for CI on the PR to be green, then merge it and delete the branch (`gh pr merge <PR> --merge --delete-branch`).
+4. Return to synced `main` (`git checkout main && git pull`).
+5. Request a new exact production confirmation for the release command — the previous confirmation does not survive a code change.
+
+Limit identical automatic repair attempts to three. After the third failed identical attempt, stop and report `blocked` with the failure summary instead of trying again.
+
+Never move an existing tag and never reuse a version already published on PyPI; if the version is taken, propose the next one and start over with a new confirmation.
+
 ## Final summary
 
 ```yaml

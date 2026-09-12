@@ -86,3 +86,12 @@ Hard requirements:
 - use the isolated `.cdt/runs/<run-id>/output.log` created by detached execution;
 - never run production-like pipelines without exact human confirmation;
 - provide a concise structured summary after the run.
+
+For the repository's own release pipeline (`cdt run release --input version=X.Y.Z --confirm release`):
+
+- propose the next version, but pass it explicitly with `--input version=X.Y.Z`;
+- request the exact production confirmation only after the preflight and dry-run;
+- wait for the terminal result; a pushed tag alone is not a released version — success requires the green GitHub Actions workflow, the GitHub Release assets, and the published PyPI version;
+- repair code failures before publication through a separate `fix/<short-name>` branch, minimal fix, green-CI PR merge with branch deletion, return to synced `main`, and a new exact confirmation;
+- limit identical automatic repair attempts to three, then report `blocked`;
+- never move an existing tag or reuse a version already published on PyPI.

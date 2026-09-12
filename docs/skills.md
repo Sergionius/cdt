@@ -10,7 +10,7 @@ Path:
 skills/cdt-release/SKILL.md
 ```
 
-Use this skill for agent-assisted CDT releases. It tells the agent to validate and inspect pipelines before execution, require exact confirmation for production, use isolated run IDs for long work, wait on compact status JSON, and summarize results without pasting complete build logs.
+Use this skill for agent-assisted CDT releases, including CDT's own releases through the repository's production `release` pipeline (`cdt run release --input version=X.Y.Z --confirm release`). It tells the agent to validate and inspect pipelines before execution, require exact confirmation for production after the preflight, pass the release version explicitly, use isolated run IDs for long work, wait on compact status JSON until the terminal result (push alone is not a released version), and summarize results without pasting complete build logs.
 
 Related repository guidance:
 

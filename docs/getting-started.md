@@ -114,3 +114,23 @@ For YAML language servers, add this header to `cdt.yaml`:
 cdt self-update --check
 cdt self-update --manager pipx
 ```
+
+## Releasing CDT itself
+
+The CDT repository dogfoods its own tooling: `cdt.yaml` in the repository root declares a production `release` pipeline that takes an explicit `--input version=X.Y.Z`, verifies a synced `main` and an unused version, runs lint and tests, prepares release files, builds distributions, pushes the release commit and tag atomically, and waits for GitHub Actions, the GitHub Release, and PyPI.
+
+From a fresh checkout, use the repository virtualenv bootstrap before CDT is installed globally:
+
+```bash
+.venv/bin/cdt pipeline validate --strict
+.venv/bin/cdt pipeline inspect release
+.venv/bin/cdt run release --input version=X.Y.Z --dry-run
+```
+
+The real release needs the exact production command:
+
+```bash
+.venv/bin/cdt run release --input version=X.Y.Z --confirm release
+```
+
+Required tools: `git`, `gh` (with an active `gh auth` session), `ruff`, `pytest`, `python -m build`, and `twine`. See the [Releasing section in the README](../README.md#releasing) for the full flow.

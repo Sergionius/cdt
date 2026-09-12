@@ -1,0 +1,53 @@
+# yaml-language-server: $schema=cdt/cdt.schema.json
+version: 1
+
+# CDT releases itself with this dogfooding pipeline. The version must be
+# passed explicitly; there is no automatic version selection:
+#
+#   cdt run release --input version=X.Y.Z --dry-run    # plan only
+#   cdt run release --input version=X.Y.Z --confirm release
+#
+pipelines:
+  release:
+    risk: production
+    inputs:
+      version:
+        required: true
+        pattern: '^\d+\.\d+\.\d+(?:[.-][A-Za-z0-9]+)?$'
+    steps:
+      - git.require_synced_main:
+          remote: origin
+          branch: main
+      - release.require_version_available:
+          version: ${inputs.version}
+          pyproject: pyproject.toml
+          changelog: CHANGELOG.md
+          github_repo: Sergionius/cdt
+          pypi_package: cdt-release
+      - python.ruff_check
+      - python.pytest
+      - python.prepare_release:
+          version: ${inputs.version}
+          pyproject: pyproject.toml
+          version_file: cdt/__init__.py
+          changelog: CHANGELOG.md
+          tag_reference_files:
+            - README.md
+            - docs/getting-started.md
+          tag_reference_regex: '(git\+https://github\.com/Sergionius/cdt\.git@)v\d+\.\d+\.\d+(?:[.-][A-Za-z0-9]+)?'
+      - python.build_distribution
+      - git.release_commit:
+          files:
+            - pyproject.toml
+            - cdt/__init__.py
+            - CHANGELOG.md
+            - README.md
+            - docs/getting-started.md
+      - git.release_tag_push:
+          remote: origin
+          branch: main
+      - github.wait_release:
+          repository: Sergionius/cdt
+          workflow: release.yml
+          package: cdt-release
+          version: ${inputs.version}

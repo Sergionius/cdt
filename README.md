@@ -137,7 +137,40 @@ See [`CHANGELOG.md`](CHANGELOG.md) for release notes.
 
 ## Releasing
 
-After updating versions and the changelog, push a `v*` tag (for example `v0.4.0`). GitHub Actions runs lint, tests, build, and `twine check`, publishes `cdt-release` to PyPI through trusted publishing, creates a GitHub Release, and attaches the wheel and source archive from `dist/`. Use `python scripts/release.py <version>` to prepare the release commit and annotated tag locally. Use `python scripts/release.py <version> --push` only after explicit confirmation to rebase, push the commit, and push the tag.
+CDT releases itself with the production `release` pipeline declared in this repository's `cdt.yaml`. The version is always passed explicitly; there is no automatic version selection. The pipeline verifies a clean, synced `main` and an unused version (changelog, git tags, GitHub Releases, PyPI), runs `ruff check .` and `pytest -q`, prepares `pyproject.toml`, `cdt/__init__.py`, `CHANGELOG.md`, and the GitHub tag-install examples in `README.md`/`docs/getting-started.md`, builds and twine-checks the distributions, creates the release commit and annotated tag, pushes branch and tag with one atomic `git push`, and then waits for the green GitHub Actions run, the published GitHub Release assets, and the PyPI version before reporting success.
+
+Inspect the pipeline before releasing:
+
+```bash
+cdt pipeline list
+cdt pipeline inspect release
+cdt pipeline preflight release
+cdt run release --input version=X.Y.Z --dry-run
+```
+
+Planning and dry-run commands never execute steps or create run records. The real release requires the exact production confirmation:
+
+```bash
+cdt run release --input version=X.Y.Z --confirm release
+```
+
+A single push is not a finished release: the pipeline finishes successfully only after `github.wait_release` confirms the workflow, the GitHub Release, and PyPI.
+
+### Required tools
+
+The release pipeline requires `git`, `gh` (GitHub authentication through an active `gh auth` session), `ruff`, `pytest`, `python -m build`, and `twine`; the version preflight also queries the public PyPI JSON API. `cdt pipeline preflight release` reports which tools are missing.
+
+### Bootstrap from a fresh checkout
+
+Before CDT is installed globally, run the same commands through the repository virtualenv:
+
+```bash
+.venv/bin/cdt pipeline validate --strict
+.venv/bin/cdt run release --input version=X.Y.Z --dry-run
+.venv/bin/cdt run release --input version=X.Y.Z --confirm release
+```
+
+See [CDT pipelines](docs/pipelines.md) for pipeline inputs and [Run records](docs/runs.md) for status, resume, and detached execution.
 
 ## Agent-friendly automation
 

@@ -33,6 +33,8 @@ The skill requires agents to:
 - read a short log tail only on failure;
 - return one concise structured summary.
 
+For CDT's own releases the same skill drives the repository's production `release` pipeline: the agent proposes the next version but passes it explicitly (`cdt run release --input version=X.Y.Z --confirm release`), collects the exact confirmation after the preflight and dry-run, and waits for the terminal result — a pushed tag alone is not a release until the GitHub Actions workflow, GitHub Release assets, and PyPI publication are confirmed. Code failures before publication are repaired through a separate `fix/<short-name>` branch, a green-CI PR merge, and a new exact confirmation; identical automatic repair attempts are limited to three before reporting `blocked`.
+
 ## Stable preflight contract
 
 ```bash

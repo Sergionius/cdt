@@ -34,6 +34,49 @@ Top-level fields are `version`, optional `plugins`, and `pipelines`. Each pipeli
 
 A production pipeline requires exact confirmation. Humans are prompted interactively; automation can use `cdt run prod --confirm prod`. Do not classify production only by pipeline name.
 
+## Pipeline inputs
+
+A pipeline can declare non-secret inputs that must be passed explicitly on the command line:
+
+```yaml
+pipelines:
+  release:
+    risk: production
+    inputs:
+      version:
+        required: true
+        pattern: '^\d+\.\d+\.\d+(?:[.-][A-Za-z0-9]+)?$'
+    steps:
+      - release.require_version_available:
+          version: ${inputs.version}
+```
+
+Rules:
+
+- `required: true` fails the run when the input is missing; the optional `pattern` is a regex that the value must fully match.
+- Pass inputs as repeatable `--input KEY=VALUE` options on `cdt run` and `cdt agent-release start`. Unknown, duplicate, malformed (`no '='`), missing required, or pattern-violating inputs are rejected before any step runs.
+- Step options interpolate inputs with `${inputs.<name>}`; referencing an undeclared input fails with a clear error.
+- Inputs are non-secret by contract: never pass credentials as inputs. They are stored redacted in the run manifest and status and shown by `cdt pipeline inspect` / `cdt pipeline plan` as declarations only (never runtime values).
+- Resume requires the same inputs as the original run; a release cannot be continued with a different version.
+
+Pipelines without `inputs` keep the previous behavior; no migration is needed.
+
+## CDT self-release pipeline
+
+The CDT repository uses its own `cdt.yaml` production pipeline named `release` for its own releases. The version is always explicit:
+
+```bash
+cdt pipeline list
+cdt pipeline inspect release
+cdt pipeline preflight release
+cdt run release --input version=X.Y.Z --dry-run
+cdt run release --input version=X.Y.Z --confirm release
+```
+
+The dry run plans the pipeline without executing steps or creating run records. The real run executes, in order: `git.require_synced_main`, `release.require_version_available`, `python.ruff_check`, `python.pytest`, `python.prepare_release`, `python.build_distribution`, `git.release_commit`, `git.release_tag_push` (atomic branch+tag push), and `github.wait_release`. The pipeline succeeds only after the GitHub Actions workflow is green, the GitHub Release ships wheel/sdist/`SHA256SUMS`, and the exact version is available on PyPI with wheel/sdist files.
+
+Required tools for the self-release: `git`, `gh` (authenticated via an active `gh auth` session), `ruff`, `pytest`, `python -m build`, and `twine`; the preflight also queries the public PyPI JSON API. From a fresh checkout without a global install, the same commands work through the repository virtualenv bootstrap, for example `.venv/bin/cdt run release --input version=X.Y.Z --dry-run`.
+
 ## Planning and dry runs
 
 Use `cdt pipeline plan <pipeline>` to show the static step tree, parallel groups, options, and risk classification without executing any step. Use `--json` for agent- and CI-friendly output.

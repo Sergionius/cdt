@@ -170,15 +170,15 @@ Built-in шаги регистрируются в `cdt/pipeline/builtins.py`, и
 - Modify: `AGENTS.md`
 - Modify: `CHANGELOG.md`
 
-- [ ] Добавить корневой `cdt.yaml` с production pipeline `release`, required semver input `version` и последовательностью sync/version preflight, ruff, pytest, prepare, build, commit, atomic tag push и release wait.
-- [ ] Настроить release-файлы явно: `pyproject.toml`, `cdt/__init__.py`, `CHANGELOG.md`, `README.md`, `docs/getting-started.md`; исключить широкое `git add .`.
-- [ ] Удалить legacy helper и заменить его тесты проверками, что repository release pipeline существует, валиден, production-marked, использует explicit input и содержит безопасный порядок шагов.
-- [ ] Переписать release documentation на `cdt pipeline list/inspect/preflight`, dry-run и точную production-команду; отдельно документировать bootstrap через `.venv/bin/cdt`.
-- [ ] Документировать обязательные инструменты `git`, `gh`, `ruff`, `pytest`, `build`, `twine`, а также публичную PyPI-проверку и GitHub authentication через активную сессию `gh auth`.
-- [ ] Обновить skill/rules: агент определяет предлагаемую следующую версию, но передаёт её явно; после preflight получает точное confirmation; ждёт terminal release result и не считает один push успешным релизом.
-- [ ] Описать repair-loop: при кодовой ошибке до публикации rollback, отдельная `fix/<short-name>` ветка от свежего main, минимальное исправление, PR, ожидание CI, автоматический merge/delete branch, возврат к синхронному main и новое production-подтверждение.
-- [ ] Ограничить одинаковые автоматические попытки исправления тремя; после этого агент сообщает blocked. Запретить движение существующего tag и повторное использование опубликованной PyPI-версии.
-- [ ] Обновить changelog записью о declarative inputs, Python release built-ins и dogfooding pipeline.
+- [x] Добавить корневой `cdt.yaml` с production pipeline `release`, required semver input `version` и последовательностью sync/version preflight, ruff, pytest, prepare, build, commit, atomic tag push и release wait.
+- [x] Настроить release-файлы явно: `pyproject.toml`, `cdt/__init__.py`, `CHANGELOG.md`, `README.md`, `docs/getting-started.md`; исключить широкое `git add .`.
+- [x] Удалить legacy helper и заменить его тесты проверками, что repository release pipeline существует, валиден, production-marked, использует explicit input и содержит безопасный порядок шагов.
+- [x] Переписать release documentation на `cdt pipeline list/inspect/preflight`, dry-run и точную production-команду; отдельно документировать bootstrap через `.venv/bin/cdt`.
+- [x] Документировать обязательные инструменты `git`, `gh`, `ruff`, `pytest`, `build`, `twine`, а также публичную PyPI-проверку и GitHub authentication через активную сессию `gh auth`.
+- [x] Обновить skill/rules: агент определяет предлагаемую следующую версию, но передаёт её явно; после preflight получает точное confirmation; ждёт terminal release result и не считает один push успешным релизом.
+- [x] Описать repair-loop: при кодовой ошибке до публикации rollback, отдельная `fix/<short-name>` ветка от свежего main, минимальное исправление, PR, ожидание CI, автоматический merge/delete branch, возврат к синхронному main и новое production-подтверждение.
+- [x] Ограничить одинаковые автоматические попытки исправления тремя; после этого агент сообщает blocked. Запретить движение существующего tag и повторное использование опубликованной PyPI-версии.
+- [x] Обновить changelog записью о declarative inputs, Python release built-ins и dogfooding pipeline.
 
 ## Validation
 

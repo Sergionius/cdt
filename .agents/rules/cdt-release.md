@@ -39,3 +39,18 @@ Ambiguous replies such as `ok`, `да`, `go`, or `continue` are not enough for p
 - Use `--dry-run` only for planning. Pass `--confirm <pipeline>` only after exact production approval.
 - Do not immediately retry after `pubspec.yaml` or version files changed.
 - Do not assume a pipeline covers Android/iOS from its name alone; inspect it.
+
+## CDT self-release
+
+For the repository's own `release` pipeline:
+
+- Propose the next version, but always pass it explicitly with `--input version=X.Y.Z`; the pipeline rejects implicit or missing versions.
+- Collect the exact confirmation only after the preflight (`cdt pipeline list`, `cdt pipeline inspect release`, `cdt pipeline preflight release`, `--dry-run`) and include the full command with the version input in the confirmation.
+- Wait for the terminal run result. A pushed commit or tag alone is not a successful release: success requires `github.wait_release` to confirm the green GitHub Actions workflow, the GitHub Release with wheel/sdist/`SHA256SUMS`, and the published PyPI version.
+
+### Release repair loop
+
+- If the pipeline fails before the release commit, release files are rolled back automatically; verify a clean `git status --short` before repairing.
+- Repair code only through a separate `fix/<short-name>` branch from fresh `main`, a minimal fix, a PR, green CI, then merge with branch deletion (`gh pr merge <PR> --merge --delete-branch`), return to synced `main`, and request a new exact production confirmation. The old confirmation does not survive a code change.
+- Limit identical automatic repair attempts to three. After the third failed identical attempt, report `blocked` with the failure summary instead of retrying.
+- Never move an existing git tag and never re-release a version already published on PyPI; propose the next unused version and start a new confirmation instead.
