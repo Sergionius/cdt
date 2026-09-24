@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Nothing yet.
+
+## v0.5.4 - 2026-09-24
+
 - Added opt-in per-user experimental Orca terminal status for direct manual `cdt run` executions, with `cdt settings enable|disable experimental.orca-status`. Uses Orca's undocumented OSC 9999 protocol; no effect on detached/agent runs or saved logs.
 
 ## v0.5.3 - 2026-09-12
