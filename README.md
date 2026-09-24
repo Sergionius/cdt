@@ -87,6 +87,16 @@ Static planning commands (`cdt pipeline plan <pipeline>` and `cdt run <pipeline>
 
 Every real run is recorded under `.cdt/runs/<run-id>/` with an atomic status file, manifest, exit code, and log location. Human operators can continue to use `cdt run test` directly. `cdt status` and `cdt logs` resolve the newest run automatically, while `--pipeline` selects the newest run for one pipeline. Direct and detached runs save a redacted `output.log` (direct runs tee CDT diagnostics while streaming to the terminal; detached runs record the redacted combined output), and persisted status errors redact known environment secrets and common credential forms before they are written; `cdt logs` applies the same protection again when reading older records. See [Run records](docs/runs.md) for lifecycle, redaction limitations, concurrency, retention, and recovery.
 
+Experimental Orca sidebar status (opt-in once per user, across all CDT projects):
+
+```bash
+cdt settings enable experimental.orca-status
+cdt settings show
+cdt settings disable experimental.orca-status  # turn it off again
+```
+
+When enabled, a direct `cdt run <pipeline>` in an ordinary Orca terminal reports `working` and `done` through Orca's **undocumented OSC 9999 terminal protocol**. The integration is best-effort and may break with Orca updates. It does not run on dry-runs, in detached workers, inside Pi, or with redirected output; it never changes pipeline success/failure. Settings live in `~/.config/cdt/settings.json` (or `$XDG_CONFIG_HOME/cdt/settings.json`), not in `cdt.yaml`. These escape sequences bypass CDT's saved run logs.
+
 Resume status migration note: current CDT status files store stable step ids (`0`, `1`, `1/0`, `1/0/1`) instead of step names. Older name-based status files are rejected because duplicate names such as anonymous `parallel` groups are ambiguous. Recreate the status file by rerunning without `--skip-completed`, or use `cdt pipeline inspect <pipeline>` / `cdt pipeline plan <pipeline>` to map completed work to step ids manually.
 
 `cdt self-update` updates the installed CLI to the latest GitHub release. It supports `--manager pipx`, `--manager pip`, and `--manager uv`; editable/local installs should be updated manually. Use `cdt self-update --check` to check without changing files, `--json` for machine-readable output, and `--dry-run` to see the release tag and update command without running it. The command requires outbound HTTPS access to `api.github.com`.

@@ -8,6 +8,7 @@ from .agent_release import format_yamlish, parse_duration, release_status, start
 from .config import _load_project_env, _set_ui_mode
 from .doctor import run_doctor
 from .init_project import initialize_project
+from .orca_status import report as report_orca_status
 from .pipeline.builtins import register_builtin_steps
 from .pipeline.config import (
     load_pipeline_config,
@@ -25,10 +26,12 @@ from .redaction import SecretRedactor
 from .runs import list_runs, resolve_run
 from .schema import bundled_schema_path
 from .self_update import SelfUpdateError, run_self_update
+from .user_settings import ORCA_STATUS, orca_status_enabled, set_orca_status
 
 app = typer.Typer(no_args_is_help=True)
 pipeline_app = typer.Typer(no_args_is_help=True)
 agent_release_app = typer.Typer(no_args_is_help=True)
+settings_app = typer.Typer(no_args_is_help=True)
 
 _DEFAULT_REPO_URL = "https://github.com/Sergionius/cdt"
 
@@ -92,6 +95,34 @@ def self_update(
             typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     raise typer.Exit(code=exit_code)
+
+
+@settings_app.command(name="enable")
+def settings_enable(name: str = typer.Argument(..., help="Experimental setting to enable")):
+    """Enable a per-user experimental feature."""
+    _set_experimental_setting(name, True)
+
+
+@settings_app.command(name="disable")
+def settings_disable(name: str = typer.Argument(..., help="Experimental setting to disable")):
+    """Disable a per-user experimental feature."""
+    _set_experimental_setting(name, False)
+
+
+@settings_app.command(name="show")
+def settings_show():
+    """Show per-user experimental settings."""
+    typer.echo(f"{ORCA_STATUS}: {'enabled' if orca_status_enabled() else 'disabled'}")
+
+
+def _set_experimental_setting(name: str, enabled: bool) -> None:
+    if name != ORCA_STATUS:
+        raise typer.BadParameter(f"Unknown setting: {name}. Available: {ORCA_STATUS}")
+    try:
+        path = set_orca_status(enabled)
+    except (OSError, ValueError) as exc:
+        raise typer.BadParameter(f"Cannot save CDT settings: {exc}") from exc
+    typer.echo(f"{name}: {'enabled' if enabled else 'disabled'} ({path})")
 
 
 @app.command(name="doctor")
@@ -226,6 +257,10 @@ def run_pipeline(
     _confirm_pipeline_risk(config, name, confirm)
     env = _load_project_env(cwd)
     _set_ui_mode(env)
+    direct_run = run_id is None
+    if direct_run:
+        report_orca_status("working", name)
+    succeeded = False
     try:
         completed_run_id = run_configured_pipeline(
             cwd,
@@ -240,9 +275,13 @@ def run_pipeline(
             run_id=run_id,
             detached=run_id is not None,
         )
+        succeeded = True
     except PipelineExecutionError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
+    finally:
+        if direct_run:
+            report_orca_status("done", name, failed=not succeeded)
     if completed_run_id is not None and run_id is None:
         typer.echo(f"Run: {completed_run_id}")
 
@@ -495,6 +534,7 @@ def agent_release_stop(
     _echo_json(payload) if json_output else typer.echo(format_yamlish(payload))
 
 
+app.add_typer(settings_app, name="settings")
 app.add_typer(pipeline_app, name="pipeline")
 app.add_typer(agent_release_app, name="agent-release")
 
