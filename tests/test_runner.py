@@ -36,16 +36,34 @@ def test_tail_text_returns_empty_string_on_read_error(tmp_path):
 def test_run_verbose_uses_popen_without_temp_log(tmp_path, monkeypatch, capsys):
     calls = []
 
-    def fake_popen(command, cwd):
-        calls.append((command, cwd))
+    def fake_popen(command, cwd, **kwargs):
+        calls.append((command, cwd, kwargs))
         return FakePopen(command, cwd=cwd, returncode=7)
 
     monkeypatch.setattr(config, "UI_MODE", "verbose")
     monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
 
     assert runner._run(["echo", "hello world"], cwd=tmp_path) == 7
-    assert calls == [(["echo", "hello world"], tmp_path)]
+    assert calls == [(["echo", "hello world"], tmp_path, {})]
     assert "$ echo 'hello world'" in capsys.readouterr().out
+
+
+def test_run_passes_additional_environment_without_mutating_parent(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_popen(command, cwd, env):
+        calls.append(env)
+        return FakePopen(command, cwd=cwd)
+
+    monkeypatch.setenv("PARENT_VALUE", "parent")
+    original_credentials = __import__("os").environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    monkeypatch.setattr(config, "UI_MODE", "verbose")
+    monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
+
+    assert runner._run(["cmd"], cwd=tmp_path, env={"GOOGLE_APPLICATION_CREDENTIALS": "/key.json"}) == 0
+    assert calls[0]["PARENT_VALUE"] == "parent"
+    assert calls[0]["GOOGLE_APPLICATION_CREDENTIALS"] == "/key.json"
+    assert __import__("os").environ.get("GOOGLE_APPLICATION_CREDENTIALS") == original_credentials
 
 
 def test_spawn_verbose_returns_process_without_log(tmp_path, monkeypatch):

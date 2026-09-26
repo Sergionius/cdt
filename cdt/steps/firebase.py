@@ -34,7 +34,14 @@ class FirebaseUploadAppDistributionStep:
         aab = ctx.artifact(self.artifact)
         ids = ctx.ids if self.release_notes_from_ids else []
         command = _build_firebase_app_distribution_command(aab.path, ctx.env, ids)
-        exit_code = ctx.runner.run(command, cwd=ctx.cwd)
+        token = ctx.env.get("FIREBASE_TOKEN", "").strip()
+        credentials = ctx.env.get("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+        if not token and credentials:
+            exit_code = ctx.runner.run(
+                command, cwd=ctx.cwd, env={"GOOGLE_APPLICATION_CREDENTIALS": credentials}
+            )
+        else:
+            exit_code = ctx.runner.run(command, cwd=ctx.cwd)
         if exit_code != 0:
             _play_fail_sound(ctx.env, ctx.cwd)
             raise CommandExecutionError(

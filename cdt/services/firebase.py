@@ -21,15 +21,18 @@ def _ensure_firebase_cli_available() -> None:
 def _build_firebase_app_distribution_command(aab_path: Path, env: dict[str, str], ids: list[str]) -> list[str]:
     app_id = env.get("FIREBASE_APP_ID_ANDROID", "").strip()
     token = env.get("FIREBASE_TOKEN", "").strip()
+    credentials = env.get("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
     groups = env.get("FIREBASE_GROUPS", "main").strip() or "main"
 
     if not app_id:
         raise typer.BadParameter("Missing FIREBASE_APP_ID_ANDROID in project .env")
-    if not token:
-        raise typer.BadParameter("Missing FIREBASE_TOKEN in project .env")
+    if not token and not credentials:
+        raise typer.BadParameter(
+            "Missing Firebase authentication: set FIREBASE_TOKEN or GOOGLE_APPLICATION_CREDENTIALS"
+        )
 
     notes = _build_tracker_release_notes(ids)
-    return [
+    command = [
         "firebase",
         "appdistribution:distribute",
         str(aab_path),
@@ -39,9 +42,10 @@ def _build_firebase_app_distribution_command(aab_path: Path, env: dict[str, str]
         groups,
         "--release-notes",
         notes,
-        "--token",
-        token,
     ]
+    if token:
+        command.extend(["--token", token])
+    return command
 
 
 def _build_android_apptester_command(aab_path: Path, env: dict[str, str], ids: list[str]) -> list[str]:
