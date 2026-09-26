@@ -50,9 +50,9 @@ CDT читает проектный `.env` и затем накладывает 
 - Modify: `README.md`
 - Modify: `CHANGELOG.md`
 
-- [ ] Добавить в английский `README.md` раздел о Firebase App Distribution: нужная IAM-роль, общий service account для нескольких проектов с выдачей прав в каждом, хранение JSON-ключа вне репозитория, пример `GOOGLE_APPLICATION_CREDENTIALS` для `.env` и окружения терминала.
-- [ ] Явно объяснить приоритет окружения над `.env`, приоритет `FIREBASE_TOKEN` над service account, необходимость убрать токен при переходе и проверку через `cdt pipeline preflight <pipeline>`.
-- [ ] Кратко отметить новую поддержку в `CHANGELOG.md` без утверждения, что выполнялась реальная загрузка.
+- [x] Добавить в английский `README.md` раздел о Firebase App Distribution: нужная IAM-роль, общий service account для нескольких проектов с выдачей прав в каждом, хранение JSON-ключа вне репозитория, пример `GOOGLE_APPLICATION_CREDENTIALS` для `.env` и окружения терминала.
+- [x] Явно объяснить приоритет окружения над `.env`, приоритет `FIREBASE_TOKEN` над service account, необходимость убрать токен при переходе и проверку через `cdt pipeline preflight <pipeline>`.
+- [x] Кратко отметить новую поддержку в `CHANGELOG.md` без утверждения, что выполнялась реальная загрузка.
 
 ## Validation
 - `pytest tests/test_services_firebase.py tests/test_steps_firebase.py tests/test_runner.py tests/test_pipeline_plan.py tests/test_commands.py`
