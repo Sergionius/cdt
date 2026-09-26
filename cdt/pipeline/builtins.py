@@ -142,7 +142,7 @@ _BUILTIN_METADATA: dict[str, StepMetadata] = {
         ),
         produces=(ResultProduction("upload_result"),),
         external_tools=("firebase",),
-        requires_env=("FIREBASE_APP_ID_ANDROID", "FIREBASE_TOKEN"),
+        requires_env=("FIREBASE_APP_ID_ANDROID",),
     ),
     "flutter.increment_build_number": StepMetadata(
         name="flutter.increment_build_number",

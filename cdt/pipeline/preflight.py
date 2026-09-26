@@ -13,12 +13,15 @@ def preflight_payload(config: PipelineConfig, name: str, env: dict[str, str]) ->
     pipeline = config.pipelines.get(name)
     tools: set[str] = set()
     env_keys: set[str] = set()
+    firebase_auth_required = False
     if pipeline is not None and not errors:
         for step in _iter_steps(pipeline.steps):
             metadata = get_step_metadata(step.name)
             tools.update(metadata.external_tools)
             if step.name != "notify.prod_user_agent" or env.get("NOTIFY_PROVIDER", "").strip().lower() == "pachca":
                 env_keys.update(metadata.requires_env)
+            if step.name == "firebase.upload_app_distribution":
+                firebase_auth_required = True
 
     tool_checks = [
         {"name": tool, "available": shutil.which(tool) is not None}
@@ -28,6 +31,16 @@ def preflight_payload(config: PipelineConfig, name: str, env: dict[str, str]) ->
         {"name": key, "present": bool(env.get(key, "").strip())}
         for key in sorted(env_keys)
     ]
+    if firebase_auth_required:
+        env_checks.append(
+            {
+                "name": "FIREBASE_TOKEN or GOOGLE_APPLICATION_CREDENTIALS",
+                "present": bool(
+                    env.get("FIREBASE_TOKEN", "").strip()
+                    or env.get("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+                ),
+            }
+        )
     missing_tools = [check["name"] for check in tool_checks if not check["available"]]
     missing_env = [check["name"] for check in env_checks if not check["present"]]
     status = "ok" if not errors and not missing_tools and not missing_env else "error"
