@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Nothing yet.
+
+## v0.5.5 - 2026-09-26
+
 - Added service-account authentication support for Firebase App Distribution uploads through `GOOGLE_APPLICATION_CREDENTIALS`, while retaining `FIREBASE_TOKEN` authentication.
 
 ## v0.5.4 - 2026-09-24
