@@ -34,8 +34,10 @@ class CommandExecutionError(Exception):
 
 
 class CommandRunner:
-    def run(self, command: list[str], *, cwd: Path) -> int:
-        return _run(command, cwd=cwd)
+    def run(self, command: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> int:
+        if env is None:
+            return _run(command, cwd=cwd)
+        return _run(command, cwd=cwd, env=env)
 
     def spawn(self, command: list[str], *, cwd: Path) -> SpawnedProcess:
         proc, log_path = _spawn(command, cwd=cwd)
@@ -53,11 +55,13 @@ def _tail_text(path: Path, lines: int = 60) -> str:
         return ""
 
 
-def _run(command: list[str], *, cwd: Path) -> int:
+def _run(command: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> int:
     cmd_preview = " ".join(shlex.quote(x) for x in command)
+    child_env = os.environ | env if env is not None else None
     if config.UI_MODE == "verbose":
         typer.echo(f"$ {cmd_preview} (cwd={cwd})")
-        proc = subprocess.Popen(command, cwd=cwd)
+        popen_kwargs = {"env": child_env} if child_env is not None else {}
+        proc = subprocess.Popen(command, cwd=cwd, **popen_kwargs)
         return proc.wait()
 
     if config.UI_MODE != "pretty":
@@ -72,6 +76,7 @@ def _run(command: list[str], *, cwd: Path) -> int:
             stdin=subprocess.DEVNULL,
             stdout=f,
             stderr=subprocess.STDOUT,
+            **({"env": child_env} if child_env is not None else {}),
         )
         code = proc.wait()
 

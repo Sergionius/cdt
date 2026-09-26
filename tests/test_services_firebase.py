@@ -38,12 +38,19 @@ def test_ensure_firebase_cli_available_accepts_zero_exit(monkeypatch):
     firebase._ensure_firebase_cli_available()
 
 
-def test_build_firebase_command_requires_app_id_and_token():
+def test_build_firebase_command_requires_app_id_and_authentication():
     with pytest.raises(typer.BadParameter, match="Missing FIREBASE_APP_ID_ANDROID"):
         firebase._build_firebase_app_distribution_command(Path("app.aab"), {}, [])
 
-    with pytest.raises(typer.BadParameter, match="Missing FIREBASE_TOKEN"):
+    with pytest.raises(typer.BadParameter, match="FIREBASE_TOKEN or GOOGLE_APPLICATION_CREDENTIALS"):
         firebase._build_firebase_app_distribution_command(Path("app.aab"), {"FIREBASE_APP_ID_ANDROID": "app"}, [])
+
+    command = firebase._build_firebase_app_distribution_command(
+        Path("app.aab"),
+        {"FIREBASE_APP_ID_ANDROID": "app", "GOOGLE_APPLICATION_CREDENTIALS": "/key.json"},
+        [],
+    )
+    assert "--token" not in command
 
 
 def test_build_firebase_command_uses_groups_and_tracker_notes():
@@ -66,6 +73,20 @@ def test_build_firebase_command_uses_groups_and_tracker_notes():
         "--token",
         "token",
     ]
+
+
+def test_build_firebase_command_token_takes_precedence_over_service_account():
+    command = firebase._build_firebase_app_distribution_command(
+        Path("app.aab"),
+        {
+            "FIREBASE_APP_ID_ANDROID": "app-id",
+            "FIREBASE_TOKEN": "token",
+            "GOOGLE_APPLICATION_CREDENTIALS": "/key.json",
+        },
+        [],
+    )
+
+    assert command[-2:] == ["--token", "token"]
 
 
 def test_build_firebase_command_defaults_empty_groups_to_main():

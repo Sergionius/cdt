@@ -624,6 +624,8 @@ def test_pipeline_validate_strict_text_prints_warning_once(tmp_path, monkeypatch
 
 def test_pipeline_preflight_checks_selected_pipeline_tools_and_env(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("FIREBASE_TOKEN", raising=False)
+    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
     monkeypatch.setattr(preflight.shutil, "which", lambda tool: None)
     (tmp_path / "cdt.yaml").write_text(
         "\n".join(
@@ -645,7 +647,52 @@ def test_pipeline_preflight_checks_selected_pipeline_tools_and_env(tmp_path, mon
 
     assert result.exit_code == 1
     assert payload["missing_tools"] == ["firebase"]
-    assert payload["missing_env"] == ["FIREBASE_APP_ID_ANDROID", "FIREBASE_TOKEN"]
+    assert payload["missing_env"] == ["FIREBASE_APP_ID_ANDROID", "FIREBASE_TOKEN or GOOGLE_APPLICATION_CREDENTIALS"]
+
+
+def test_firebase_preflight_accepts_either_auth_source_and_environment_wins(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(preflight.shutil, "which", lambda tool: "/usr/bin/firebase")
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  demo:",
+                "    steps:",
+                "      - firebase.upload_app_distribution:",
+                "          artifact: android_aab",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    dotenv = tmp_path / ".env"
+    dotenv.write_text("FIREBASE_APP_ID_ANDROID=app-id\n", encoding="utf-8")
+
+    cases = [
+        ("FIREBASE_TOKEN=token\n", {}, True, []),
+        ("GOOGLE_APPLICATION_CREDENTIALS=/dotenv/key.json\n", {}, True, []),
+        ("", {"GOOGLE_APPLICATION_CREDENTIALS": "/shell/key.json"}, True, []),
+        ("", {}, False, ["FIREBASE_TOKEN or GOOGLE_APPLICATION_CREDENTIALS"]),
+        (
+            "GOOGLE_APPLICATION_CREDENTIALS=/dotenv/key.json\n",
+            {"GOOGLE_APPLICATION_CREDENTIALS": "/shell/key.json"},
+            True,
+            [],
+        ),
+    ]
+    for contents, overrides, expected_ok, expected_missing in cases:
+        dotenv.write_text("FIREBASE_APP_ID_ANDROID=app-id\n" + contents, encoding="utf-8")
+        for key in ("FIREBASE_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS"):
+            monkeypatch.delenv(key, raising=False)
+        for key, value in overrides.items():
+            monkeypatch.setenv(key, value)
+        result = runner.invoke(app, ["pipeline", "preflight", "demo", "--json"])
+        payload = json.loads(result.output)
+        assert (payload["status"] == "ok") is expected_ok
+        assert payload["missing_env"] == expected_missing
+        assert next(check for check in payload["env"] if check["name"] == "FIREBASE_APP_ID_ANDROID")["present"]
 
 
 def test_prod_user_agent_preflight_requires_pachca_env_only_for_pachca(tmp_path, monkeypatch):

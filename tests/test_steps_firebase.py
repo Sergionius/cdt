@@ -13,8 +13,8 @@ class RecordingRunner:
         self.exit_code = exit_code
         self.calls = []
 
-    def run(self, command, *, cwd):
-        self.calls.append((command, cwd))
+    def run(self, command, *, cwd, env=None):
+        self.calls.append((command, cwd, env))
         return self.exit_code
 
 
@@ -36,7 +36,7 @@ def test_firebase_deploy_uses_context_runner(tmp_path):
 
     FirebaseDeployStep().run(ctx)
 
-    assert runner.calls == [(["firebase", "deploy"], tmp_path)]
+    assert runner.calls == [(["firebase", "deploy"], tmp_path, None)]
 
 
 def test_firebase_upload_uses_named_artifact_and_task_notes(tmp_path, monkeypatch, capsys):
@@ -48,8 +48,9 @@ def test_firebase_upload_uses_named_artifact_and_task_notes(tmp_path, monkeypatc
     FirebaseUploadAppDistributionStep(artifact="android", release_notes_from_ids=True).run(ctx)
 
     assert len(runner.calls) == 1
-    command, cwd = runner.calls[0]
+    command, cwd, child_env = runner.calls[0]
     assert cwd == tmp_path
+    assert child_env is None
     assert str(tmp_path / "app.aab") in command
     assert "TASK-1" in " ".join(command)
     assert played == []
@@ -75,10 +76,23 @@ def test_firebase_upload_failure_raises_command_error(tmp_path, monkeypatch, exi
     assert str(error) == cause
     assert error.exit_code == exit_code
     assert len(runner.calls) == 1
-    command, cwd = runner.calls[0]
+    command, cwd, child_env = runner.calls[0]
+    assert child_env is None
     assert error.command == command
     assert cwd == tmp_path
     assert "appdistribution:distribute" in command
     assert str(tmp_path / "app.aab") in command
     assert "TASK-1" in " ".join(command)
     assert played == [tmp_path]
+
+
+def test_firebase_upload_passes_service_account_from_context_to_child(tmp_path):
+    runner = RecordingRunner()
+    ctx = _context(tmp_path, runner)
+    ctx.env.pop("FIREBASE_TOKEN")
+    ctx.env["GOOGLE_APPLICATION_CREDENTIALS"] = "/context/key.json"
+
+    FirebaseUploadAppDistributionStep(artifact="android").run(ctx)
+
+    assert runner.calls[0][2] == {"GOOGLE_APPLICATION_CREDENTIALS": "/context/key.json"}
+    assert "--token" not in runner.calls[0][0]

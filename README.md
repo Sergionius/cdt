@@ -211,6 +211,24 @@ Build steps use `profile` for CDT presets (`profile: prod` adds `--dart-define=E
 
 `appstore.upload_testflight` keeps the full upload cycle in one step and remains supported. New pipelines should prefer the resumable pair `appstore.upload_testflight_ipa` (iTMSTransporter upload only) followed by `appstore.complete_testflight` (find the uploaded build, wait for processing, set the changelog), so a failed completion can resume without re-uploading the IPA. See [Pipelines](docs/pipelines.md) for details.
 
+## Firebase App Distribution
+
+`firebase.upload_app_distribution` supports either the existing `FIREBASE_TOKEN` or a Google service account JSON key. For service-account uploads, grant the account the **Firebase App Distribution Admin** IAM role (`roles/firebaseappdistro.admin`) on each Firebase project it must access. One service account can be shared across multiple Firebase projects; grant it the role separately in every project.
+
+Create and manage the service account and key in Google Cloud Console. Keep the JSON key outside the repository and do not commit it. Set `GOOGLE_APPLICATION_CREDENTIALS` to its path, either in the project's `.env` file:
+
+```dotenv
+GOOGLE_APPLICATION_CREDENTIALS=/secure/path/firebase-service-account.json
+```
+
+or in the terminal environment:
+
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS=/secure/path/firebase-service-account.json
+```
+
+Terminal environment variables override values from `.env`. For Firebase uploads, a non-empty `FIREBASE_TOKEN` takes precedence over the service account. To switch an existing project to service-account authentication, remove `FIREBASE_TOKEN` from both `.env` and the terminal environment, then verify configuration with `cdt pipeline preflight <pipeline>`.
+
 ## Python hooks
 
 ```yaml
