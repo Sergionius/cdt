@@ -637,3 +637,138 @@ def test_build_testflight_transporter_command_uses_key_directory(tmp_path, monke
         "-apiKeyPath",
         str(key.parent),
     ]
+
+
+def test_asc_request_default_mode_keeps_retrying_mutating_5xx(monkeypatch):
+    """Existing TestFlight behaviour: mutating calls are retried after 5xx by default."""
+    calls = []
+    sleeps = []
+    _urlopen_with_outcomes(
+        monkeypatch, [_http_error(503, b"unavailable"), FakeHTTPResponse(b'{"ok": 1}')], calls
+    )
+    monkeypatch.setattr(appstore.time, "sleep", sleeps.append)
+
+    result = appstore._asc_request("POST", "/v1/example", _stub_client(monkeypatch), {"a": 1})
+
+    assert result == {"ok": 1}
+    assert len(calls) == 2
+    assert len(sleeps) == 1
+
+
+def test_asc_request_strict_mode_raises_ambiguous_on_mutating_5xx(monkeypatch):
+    calls = []
+    sleeps = []
+    _urlopen_with_outcomes(
+        monkeypatch, [_http_error(503, b"unavailable"), FakeHTTPResponse(b'{"ok": 1}')], calls
+    )
+    monkeypatch.setattr(appstore.time, "sleep", sleeps.append)
+    client = _stub_client(monkeypatch)
+
+    with pytest.raises(appstore.AscAmbiguousResultError) as excinfo:
+        appstore._asc_request("POST", "/v1/reviewSubmissions", client, {"a": 1}, retry_ambiguous=False)
+
+    assert isinstance(excinfo.value, typer.BadParameter)  # stays a friendly step-level error
+    assert len(calls) == 1  # no blind retry of a possibly-applied mutation
+    assert sleeps == []
+    assert excinfo.value.code == 503
+    assert excinfo.value.method == "POST"
+    assert excinfo.value.path == "/v1/reviewSubmissions"
+    assert excinfo.value.category == "http_503"
+    assert excinfo.value.detail == "unavailable"
+
+
+def test_asc_request_strict_mode_raises_ambiguous_on_mutating_transport_error(monkeypatch):
+    calls = []
+    sleeps = []
+    _urlopen_with_outcomes(monkeypatch, [TimeoutError("timed out"), FakeHTTPResponse(b"{}")], calls)
+    monkeypatch.setattr(appstore.time, "sleep", sleeps.append)
+
+    with pytest.raises(appstore.AscAmbiguousResultError) as excinfo:
+        appstore._asc_request("PATCH", "/v1/example/1", _stub_client(monkeypatch), {}, retry_ambiguous=False)
+
+    assert len(calls) == 1
+    assert sleeps == []
+    assert excinfo.value.code is None
+    assert excinfo.value.category == "timeout"
+    assert "timed out" in excinfo.value.detail
+
+
+def test_asc_request_strict_mode_still_retries_mutating_429(monkeypatch):
+    """429 explicitly rejects the request, so retrying a mutation stays safe."""
+    calls = []
+    sleeps = []
+    _urlopen_with_outcomes(
+        monkeypatch, [_http_error(429, b"slow down"), FakeHTTPResponse(b'{"ok": 1}')], calls
+    )
+    monkeypatch.setattr(appstore.time, "sleep", sleeps.append)
+
+    result = appstore._asc_request("POST", "/v1/example", _stub_client(monkeypatch), {}, retry_ambiguous=False)
+
+    assert result == {"ok": 1}
+    assert len(calls) == 2
+    assert len(sleeps) == 1
+
+
+def test_asc_request_strict_mode_still_retries_get_5xx(monkeypatch):
+    """Read-only GET requests remain retriable in strict mode."""
+    calls = []
+    _urlopen_with_outcomes(
+        monkeypatch, [_http_error(503, b"unavailable"), FakeHTTPResponse(b'{"ok": 1}')], calls
+    )
+    monkeypatch.setattr(appstore.time, "sleep", lambda seconds: None)
+
+    result = appstore._asc_request("GET", "/v1/example", _stub_client(monkeypatch), retry_ambiguous=False)
+
+    assert result == {"ok": 1}
+    assert len(calls) == 2
+
+
+def test_asc_request_strict_mode_does_not_401_retry_loop_mutations(monkeypatch):
+    """401 still forces the single JWT refresh before the ambiguity guard."""
+    outcomes = [_http_error(401, b"unauthorized"), FakeHTTPResponse(b'{"ok": 1}')]
+    calls = []
+
+    def fake_urlopen(req, timeout):
+        calls.append(req.headers["Authorization"])
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(appstore.urllib.request, "urlopen", fake_urlopen)
+    client = _stub_client(monkeypatch)
+
+    result = appstore._asc_request("POST", "/v1/example", client, {}, retry_ambiguous=False)
+
+    assert result == {"ok": 1}
+    assert calls == ["Bearer token0", "Bearer token1"]
+
+
+def test_asc_http_error_carries_structured_fields(monkeypatch):
+    calls = []
+    _urlopen_with_outcomes(monkeypatch, [_http_error(404, b"not found")], calls)
+
+    with pytest.raises(appstore.AscHttpError) as excinfo:
+        appstore._asc_request("DELETE", "/v1/example/1", _stub_client(monkeypatch))
+
+    assert isinstance(excinfo.value, typer.BadParameter)
+    assert excinfo.value.code == 404
+    assert excinfo.value.method == "DELETE"
+    assert excinfo.value.path == "/v1/example/1"
+    assert excinfo.value.body == "not found"
+    assert len(calls) == 1
+
+
+def test_asc_request_errors_never_leak_token(monkeypatch, capsys):
+    _urlopen_with_outcomes(
+        monkeypatch, [_http_error(503, b"down"), _http_error(503, b"down"), _http_error(503, b"down")], []
+    )
+    monkeypatch.setattr(appstore.time, "sleep", lambda seconds: None)
+
+    with pytest.raises((appstore.AscAmbiguousResultError, typer.BadParameter)):
+        appstore._asc_request("POST", "/v1/example", _stub_client(monkeypatch), {}, retry_ambiguous=False)
+
+    captured = capsys.readouterr()
+    output = captured.out + captured.err
+    assert "token0" not in output
+    assert "Bearer" not in output
