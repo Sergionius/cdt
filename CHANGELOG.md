@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-- Nothing yet.
+- Added `google_play.upload_aab`: uploads one AAB and creates one release on an explicitly chosen Google Play track with `release_status` `draft`, `inProgress` (staged rollout with `user_fraction`) or `completed`, plus localized `release_notes` and `release_name`. Authenticates with Application Default Credentials (`GOOGLE_APPLICATION_CREDENTIALS` or the ambient CI identity) and is configured in Google Cloud/Play Console, separately from Firebase.
+- Made Google Play publication production-safe: any Google Play step requires pipeline `risk: production` (recursively, including inside `sequence`/`parallel`) and the exact CLI confirmation; the edit commit always uses `changesInReviewBehavior=ERROR_IF_IN_REVIEW`, never cancels an in-progress review, and final messages distinguish a saved draft, changes accepted for review, and actual approval/availability. Managed publishing and the final manual Publish remain Play Console actions that CDT neither automates nor infers.
+- Added durable Google Play publication checkpoints under `.cdt/google-play/operations/` with per-package checkout locks, safe resume, conflict refusal for unfinished releases and in-progress reviews, and explicit "result unknown" errors instead of blind retries; documented ADC/API/permission setup, the internal/draft/production/staged pipeline shapes, and recovery limits.
 
 ## v0.5.5 - 2026-09-26
 

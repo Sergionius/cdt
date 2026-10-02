@@ -155,6 +155,7 @@ Important built-ins include:
 - `appstore.upload_testflight`
 - `appstore.upload_testflight_ipa`
 - `appstore.complete_testflight`
+- `google_play.upload_aab`
 - `artifact.copy_to_downloads`
 - `hook.python_script`
 - `notify.prod_user_agent`
@@ -212,6 +213,145 @@ Transient failures are retried up to 4 attempts per request with bounded exponen
 - The JWT is cached and refreshed automatically before its 20 minute expiry, so long waits do not fail because of token age.
 - `ASC_WAIT_TIMEOUT_SEC` (integer, default `30`) sets the overall completion wait for the build to appear and finish processing in TestFlight. It bounds the whole wait, and request retry delays are clamped to the same deadline so retries cannot extend it.
 - Progress is written to the run log as `==> ASC transient failure, attempt N/4 (category); retrying in Xs` lines. When the retry budget is exhausted, the error names the attempt count and the last failure category. No credentials or authorization headers are included in these messages.
+
+## Google Play upload (AAB)
+
+`google_play.upload_aab` uploads one named AAB artifact and creates one release on one explicitly chosen Google Play track through the Google Play Android Publisher API. It is unrelated to Firebase App Distribution and does not read Firebase credentials.
+
+One-time setup happens in Google Cloud Console and Play Console, not in Firebase:
+
+- Link the app to a Google Cloud project and enable the **Google Play Android Developer API** for that project.
+- Grant the publishing identity Play Console permissions for the target app under **Users and permissions** (for example, release-to-testing or release-to-production rights). These are Play Console app permissions, not Firebase IAM roles.
+- The application and the target track must already exist; CDT does not create applications or tracks and does not perform the initial app setup (store listing, Play App Signing) in Play Console.
+
+Authentication uses Application Default Credentials. Set `GOOGLE_APPLICATION_CREDENTIALS` to a service-account JSON key (relative paths resolve from the project root) or rely on the ambient CI identity; `FIREBASE_TOKEN` is not used by this step. `cdt pipeline preflight <pipeline>` checks the configured ADC file read-only; an unset `GOOGLE_APPLICATION_CREDENTIALS` is not an error because ADC may come from the CI environment, and existing credentials never prove Play Console permissions.
+
+Options:
+
+| Option | Required | Description |
+|---|---|---|
+| `artifact` | yes | Name of an `android_aab` artifact registered by an earlier step. |
+| `package_name` | yes | Explicit Android package name, for example `com.example.app`. |
+| `track` | yes | Explicit existing track: `internal`, `alpha`, `beta`, `production`, or a custom closed-testing track. No default is applied. |
+| `release_status` | yes | `draft`, `inProgress` or `completed`. No default is applied. |
+| `release_notes` | no | Mapping from language codes to non-empty localized texts, for example `{en-US: "Bug fixes"}`. |
+| `release_name` | no | Human-readable release name. |
+| `user_fraction` | no | Staged rollout share. Required with `0 < user_fraction < 1` for `inProgress`; forbidden for `draft` and `completed`. Numeric strings from `${inputs.*}` are validated after interpolation; booleans, NaN, infinity and non-numeric values are rejected. |
+
+### Google Play production pipelines
+
+Every Google Play step requires `risk: production` — including steps nested inside `sequence` or `parallel` — and every real run needs the exact CLI confirmation (`cdt run <pipeline> --confirm <pipeline>`). The four common shapes (build steps shown for context):
+
+Internal testing track:
+
+```yaml
+  play-internal:
+    risk: production
+    steps:
+      - android.build_aab: {profile: prod, artifact: android_aab}
+      - google_play.upload_aab:
+          artifact: android_aab
+          package_name: com.example.app
+          track: internal
+          release_status: completed
+          release_notes: {en-US: "Internal testing build"}
+```
+
+Draft release (saved only, never sent for review):
+
+```yaml
+  play-draft:
+    risk: production
+    steps:
+      - android.build_aab: {profile: prod, artifact: android_aab}
+      - google_play.upload_aab:
+          artifact: android_aab
+          package_name: com.example.app
+          track: beta
+          release_status: draft
+          release_notes: {en-US: "Nightly candidate"}
+```
+
+Full production rollout:
+
+```yaml
+  play-production:
+    risk: production
+    steps:
+      - android.build_aab: {profile: prod, artifact: android_aab}
+      - google_play.upload_aab:
+          artifact: android_aab
+          package_name: com.example.app
+          track: production
+          release_status: completed
+          release_notes:
+            en-US: "Stable release"
+```
+
+Staged production rollout with an explicit fraction input:
+
+```yaml
+  play-production-staged:
+    risk: production
+    inputs:
+      fraction:
+        required: true
+        pattern: '^0\.\d+$'
+    steps:
+      - android.build_aab: {profile: prod, artifact: android_aab}
+      - google_play.upload_aab:
+          artifact: android_aab
+          package_name: com.example.app
+          track: production
+          release_status: inProgress
+          user_fraction: ${inputs.fraction}
+          release_notes:
+            en-US: "Gradual rollout"
+```
+
+Run them with the exact pipeline name as confirmation:
+
+```bash
+cdt run play-internal --confirm play-internal
+cdt run play-draft --confirm play-draft
+cdt run play-production --confirm play-production
+cdt run play-production-staged --input fraction=0.05 --confirm play-production-staged
+```
+
+Planning, dry runs, `cdt pipeline plan`, `cdt pipeline inspect`, and schema generation never touch credentials, the network, or checkpoints.
+
+### What a Google Play release status means
+
+- `draft`: the release is saved in Play Console only. It was not sent for review, nothing is published, and no user can install the build. CDT explicitly reports that a draft was created and nothing else happened.
+- `inProgress` / `completed`: CDT commits the edit with `changesInReviewBehavior=ERROR_IF_IN_REVIEW`, which sends the changes through Google's standard review and publication flow. Google accepting the changes is **not** review approval, and approval is **not** actual availability to users; CDT verifies neither and says so in its final message. Committing never cancels a review that is already in progress — Google rejects such a commit and CDT stops.
+- Staged rollout (`inProgress` with `user_fraction`) creates the new release next to the previous completed release, which stays available as the base release while Google gradually assigns users to the new version.
+
+### Managed publishing and the manual Publish
+
+Managed publishing is switched on and off manually in Play Console. Where managed publishing applies to the changes, the final **Publish** after Google's approval is also pressed manually in Play Console. CDT automates neither action and does not infer the mode from indirect signs: the final message of a non-draft release explains both possibilities (Google continues the release rollout automatically, or a manual Publish is still required) instead of claiming which mode is enabled. A successful commit therefore never means the app is released to users.
+
+### When the Google Play step stops instead of publishing
+
+CDT refuses to guess and stops without replacing existing state when:
+
+- the target track already contains a draft release, an `inProgress` or `halted` release, a staged rollout with a fraction other than 1.0, or more than one release — an unfinished release is never replaced, rollouts are never continued or completed, and builds are never promoted between tracks;
+- the same package already has an unfinished publication operation with different parameters (checkpoint conflict);
+- another publication for the same package is currently running in this checkout;
+- Google rejects the commit because the app is under review — CDT surfaces the error as-is and never retries with flags that would skip sending the changes for review;
+- Google reports any other error whose resolution lives in Play Console (missing permissions, app state, program policies) — CDT reports a safe reason and stops; it does not switch send modes or work around Console requirements automatically.
+
+### Google Play checkpoints, resume and unknown outcomes
+
+Every publication writes a versioned checkpoint under `.cdt/google-play/operations/<operation-id>.json`; the operation ID derives from the canonical publication parameters plus the AAB SHA-256, so identical parameters map to the same checkpoint. Checkpoints store only non-secret values (package, track, release parameters, hashes, edit metadata, version code, phase, confirmed result) and are written atomically before every external mutation — nothing is sent to Google if the checkpoint could not be saved.
+
+- Resume (`cdt run <pipeline> --resume-status-file .cdt/runs/<run-id>/status.json --skip-completed`) skips confirmed steps and continues an unfinished operation from its recorded phase without repeating confirmed mutations. An already-confirmed identical operation returns its stored result without a single API call.
+- A plain rerun without resume cannot bypass an unfinished operation either: identical parameters resume the same checkpoint, and changed parameters stop with an explicit conflict error.
+- If an upload or commit response is lost, the step verifies the remote state with read-only requests and, when the outcome still cannot be established, fails with an explicit "publication result is unknown" error naming the checkpoint and instructing you to verify Bundle Explorer and the track pages in Play Console before doing anything else.
+- Deleting a checkpoint is **not** a safe way to repeat a publication: it only erases CDT's memory of changes that may already have been applied remotely. The safe path is verifying Play Console and resolving any half-applied state there.
+
+The lock file `.cdt/google-play/locks/<package>.lock` serializes publications of one package within this checkout only. It does not coordinate other machines, other checkouts, CI runners, or manual Play Console work: if the remote state changed elsewhere, CDT stops on the mismatch instead of overwriting it.
+
+See [Run records → Google Play publication checkpoints](runs.md#google-play-publication-checkpoints) for how checkpoints interact with run status and resume.
 
 ## Python hook
 

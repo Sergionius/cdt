@@ -162,3 +162,18 @@ cdt run prod \
 ```
 
 See [Resuming a failed TestFlight upload](pipelines.md#resuming-a-failed-testflight-upload) in the pipeline documentation for the full description.
+
+### Google Play publication checkpoints
+
+`google_play.upload_aab` keeps durable operation state under `.cdt/google-play/operations/<operation-id>.json`, separate from `status.json`. Checkpoints store only non-secret publication data — package, track, release parameters, AAB hash, edit metadata, version code, phase, and the confirmed result once known — and are written atomically before every external mutation.
+
+During resume and plain reruns:
+
+- completed steps are skipped as usual, and an already-confirmed Google Play operation returns its stored result without repeating any upload or commit;
+- an unfinished operation resumes from its recorded phase with the restored artifact, never repeating confirmed mutations blindly;
+- a plain rerun without `--resume-status-file`/`--skip-completed` cannot bypass an unfinished operation either: the checkpoint ID derives from the publication parameters and the AAB SHA-256, so identical parameters resume the same operation, and changed parameters stop with an explicit conflict error;
+- if the result cannot be established after a lost response, the run fails with an explicit "publication result is unknown" error naming the checkpoint and asking you to verify the release in Play Console (Bundle Explorer and the track pages) before doing anything else.
+
+Deleting a checkpoint is **not** a safe way to repeat a publication: it erases CDT's knowledge of changes that may already have been applied remotely. Verify the app in Play Console and resolve any half-applied state there instead.
+
+The per-package lock `.cdt/google-play/locks/<package>.lock` serializes publications within this checkout only. It does not coordinate other machines, CI runners, or manual Play Console edits; conflicting external changes make the run stop instead of being overwritten.
