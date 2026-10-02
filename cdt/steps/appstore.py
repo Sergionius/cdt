@@ -3,10 +3,39 @@ from collections.abc import Callable
 import typer
 
 from ..pipeline import PipelineContext
+from ..services import appstore_state
 from ..services.appstore import _complete_testflight_after_upload, _upload_testflight, _upload_testflight_ipa
+from ..services.appstore_state import AppStoreStateError
 from ..sounds import _play_fail_sound
 
 ChangelogProvider = str | Callable[[PipelineContext], str]
+
+
+def _record_uploaded_build(ctx: PipelineContext) -> None:
+    """Persist the identification of the build a full TestFlight cycle just made ready.
+
+    Only the full ``appstore.upload_testflight`` and the
+    ``appstore.complete_testflight`` steps call this — the upload-only step
+    must not declare the build ready. A failed save is an explicit step error:
+    the result must not be presented as recorded when it is not. Without
+    ``IOS_BUNDLE_ID`` the app (and therefore the record key) is unknown, which
+    cannot happen after a real upload or completion; the step then only warns
+    that no record was written.
+    """
+    bundle_id = ctx.env.get("IOS_BUNDLE_ID", "").strip()
+    if not bundle_id:
+        typer.echo(
+            "==> WARNING: IOS_BUNDLE_ID is not set; the completed build was not recorded",
+            err=True,
+        )
+        return
+    try:
+        record = appstore_state.save_upload_record(ctx.cwd, bundle_id, ctx.new_version or "")
+    except AppStoreStateError as exc:
+        typer.echo(f"Failed to record the completed TestFlight build: {exc}", err=True)
+        _play_fail_sound(ctx.env, ctx.cwd)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"==> Recorded uploaded build {record.marketing_version}+{record.build_number} for {bundle_id}")
 
 
 class UploadTestFlightIpaStep:
@@ -40,6 +69,7 @@ class CompleteTestFlightStep:
             typer.echo("TestFlight completion failed", err=True)
             _play_fail_sound(ctx.env, ctx.cwd)
             raise typer.Exit(code=1)
+        _record_uploaded_build(ctx)
 
 
 class UploadTestFlightStep:
@@ -60,3 +90,4 @@ class UploadTestFlightStep:
             typer.echo("TestFlight upload failed", err=True)
             _play_fail_sound(ctx.env, ctx.cwd)
             raise typer.Exit(code=1)
+        _record_uploaded_build(ctx)
