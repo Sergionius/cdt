@@ -7,6 +7,7 @@ is replaced by recording fakes.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import socket
@@ -610,6 +611,27 @@ def test_sanitize_reason_truncates_long_text():
 def test_sanitize_reason_handles_empty_input():
     assert google_play._sanitize_reason("") == "unknown error"
     assert google_play._sanitize_reason("   ") == "unknown error"
+
+
+# -- AAB hashing ------------------------------------------------------------------
+
+
+def test_compute_file_sha256_matches_known_vector(tmp_path):
+    path = tmp_path / "blob.bin"
+    path.write_bytes(b"abc")
+    assert google_play.compute_file_sha256(path) == hashlib.sha256(b"abc").hexdigest()
+
+
+def test_compute_file_sha256_streams_files_larger_than_one_chunk(tmp_path):
+    payload = (b"cdt-aab-payload-" * 100_000)[: google_play.UPLOAD_CHUNK_BYTES + 1]
+    path = tmp_path / "big.aab"
+    path.write_bytes(payload)
+    assert google_play.compute_file_sha256(path) == hashlib.sha256(payload).hexdigest()
+
+
+def test_compute_file_sha256_missing_file_raises_oserror(tmp_path):
+    with pytest.raises(OSError):
+        google_play.compute_file_sha256(tmp_path / "missing.aab")
 
 
 # -- resumable AAB upload ---------------------------------------------------------

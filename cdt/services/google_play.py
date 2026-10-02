@@ -24,6 +24,7 @@ Security and safety properties:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import socket
@@ -180,6 +181,18 @@ def _execute_upload(request: Any, stage: str, http: Any) -> dict[str, Any]:
         raise GooglePlayError(stage, f"authentication failed ({type(exc).__name__})") from exc
     except (httplib2.HttpLib2Error, OSError) as exc:
         raise _wrap_transport_failure(stage, exc) from exc
+
+
+def compute_file_sha256(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
+    """Compute the SHA-256 of a file by streaming it in chunks.
+
+    Like the resumable upload, this never reads the whole AAB into memory.
+    """
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(chunk_size), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def resolve_adc_path(env: dict[str, str], cwd: Path) -> Path | None:
