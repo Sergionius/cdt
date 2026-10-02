@@ -508,6 +508,27 @@ def _play_step_yaml(indent: str = "      ") -> str:
     )
 
 
+def _submit_review_pipeline(risk: str, steps_block: str) -> str:
+    return (
+        "version: 1\n"
+        "pipelines:\n"
+        "  submit:\n"
+        f"    risk: {risk}\n"
+        "    steps:\n"
+        f"{steps_block}"
+    )
+
+
+def _submit_review_step_yaml(indent: str = "      ") -> str:
+    return (
+        f"{indent}- appstore.submit_review:\n"
+        f"{indent}    whats_new:\n"
+        f"{indent}      ru: Исправления и улучшения\n"
+        f"{indent}    release_mode: manual\n"
+        f"{indent}    phased_release: true\n"
+    )
+
+
 @pytest.mark.parametrize(
     "steps_block,expected_path",
     [
@@ -578,3 +599,82 @@ def test_non_google_play_steps_do_not_require_production_risk(tmp_path):
     config = load_pipeline_config(tmp_path)
 
     assert validate_pipeline(config, "demo") == []
+
+
+@pytest.mark.parametrize(
+    "steps_block,expected_path",
+    [
+        (_submit_review_step_yaml(), "pipelines.submit.steps[0]"),
+        (
+            "      - sequence:\n" + "          steps:\n" + _submit_review_step_yaml(indent="            "),
+            "pipelines.submit.steps[0].sequence.steps[0]",
+        ),
+        (
+            "      - parallel:\n" + "          steps:\n" + _submit_review_step_yaml(indent="            "),
+            "pipelines.submit.steps[0].parallel.steps[0]",
+        ),
+        (
+            "      - parallel:\n"
+            + "          steps:\n"
+            + "            - sequence:\n"
+            + "                steps:\n"
+            + _submit_review_step_yaml(indent="                  "),
+            "pipelines.submit.steps[0].parallel.steps[0].sequence.steps[0]",
+        ),
+    ],
+)
+def test_submit_review_step_requires_production_risk_recursively(tmp_path, steps_block, expected_path):
+    (tmp_path / "cdt.yaml").write_text(_submit_review_pipeline("standard", steps_block), encoding="utf-8")
+    register_builtin_steps()
+    config = load_pipeline_config(tmp_path)
+
+    errors = validate_pipeline(config, "submit")
+
+    assert errors == [
+        {
+            "code": "production_risk_required",
+            "message": (
+                "Step appstore.submit_review submits an app for App Store review and requires pipeline risk: "
+                "production (declared risk: 'standard')."
+            ),
+            "path": expected_path,
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "steps_block",
+    [
+        _submit_review_step_yaml(),
+        "      - sequence:\n" + "          steps:\n" + _submit_review_step_yaml(indent="            "),
+        "      - parallel:\n" + "          steps:\n" + _submit_review_step_yaml(indent="            "),
+    ],
+)
+def test_submit_review_step_passes_validation_under_production_risk(tmp_path, steps_block):
+    (tmp_path / "cdt.yaml").write_text(_submit_review_pipeline("production", steps_block), encoding="utf-8")
+    register_builtin_steps()
+    config = load_pipeline_config(tmp_path)
+
+    assert validate_pipeline(config, "submit") == []
+
+
+def test_testflight_steps_still_pass_validation_without_production_risk(tmp_path):
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  test:",
+                "    steps:",
+                "      - appstore.upload_testflight_ipa",
+                "      - appstore.complete_testflight:",
+                "          changelog: dev build",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    register_builtin_steps()
+    config = load_pipeline_config(tmp_path)
+
+    assert validate_pipeline(config, "test") == []

@@ -63,6 +63,7 @@ def test_builtin_metadata_registration():
     appstore = get_step_metadata("appstore.upload_testflight")
     upload_only = get_step_metadata("appstore.upload_testflight_ipa")
     completion = get_step_metadata("appstore.complete_testflight")
+    submit_review = get_step_metadata("appstore.submit_review")
     ios_ipa = get_step_metadata("ios.flutter_build_ipa")
     android_aab = get_step_metadata("android.build_aab")
     android_apk = get_step_metadata("android.build_apk")
@@ -84,6 +85,14 @@ def test_builtin_metadata_registration():
     assert completion.produces == ()
     assert completion.external_tools == ()
     assert completion.requires_env == ("ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_PRIVATE_KEY_PATH", "IOS_BUNDLE_ID")
+    # The review submission step needs no artifact and no build tooling: the app
+    # comes from IOS_BUNDLE_ID and the build from the recorded completion.
+    assert submit_review.category == "appstore"
+    assert submit_review.risk == "upload"
+    assert submit_review.requires == ()
+    assert submit_review.produces == (ResultProduction("review_submission"),)
+    assert submit_review.external_tools == ()
+    assert submit_review.requires_env == ("ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_PRIVATE_KEY_PATH", "IOS_BUNDLE_ID")
     assert ios_ipa.produces == (ResultProduction("ios_ipa", name_options=("artifact",)),)
     assert android_aab.produces == (ResultProduction("android_aab", name_options=("artifact",)),)
     assert android_apk.produces == (ResultProduction("android_apk", name_options=("artifact",)),)

@@ -1,5 +1,10 @@
 from ..steps.android import AndroidBuildAabStep, AndroidBuildApkStep
-from ..steps.appstore import CompleteTestFlightStep, UploadTestFlightIpaStep, UploadTestFlightStep
+from ..steps.appstore import (
+    CompleteTestFlightStep,
+    SubmitReviewStep,
+    UploadTestFlightIpaStep,
+    UploadTestFlightStep,
+)
 from ..steps.artifact import CopyArtifactToDownloadsStep
 from ..steps.firebase import EnsureFirebaseCliStep, FirebaseDeployStep, FirebaseUploadAppDistributionStep
 from ..steps.flutter import FlutterPubGetStep, IncrementFlutterBuildNumberStep
@@ -25,6 +30,7 @@ _BUILTINS: dict[str, type] = {
     "android.build_aab": AndroidBuildAabStep,
     "android.build_apk": AndroidBuildApkStep,
     "appstore.complete_testflight": CompleteTestFlightStep,
+    "appstore.submit_review": SubmitReviewStep,
     "appstore.upload_testflight": UploadTestFlightStep,
     "appstore.upload_testflight_ipa": UploadTestFlightIpaStep,
     "artifact.copy_to_downloads": CopyArtifactToDownloadsStep,
@@ -106,6 +112,20 @@ _BUILTIN_METADATA: dict[str, StepMetadata] = {
         ),
         category="appstore",
         risk="upload",
+        requires_env=("ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_PRIVATE_KEY_PATH", "IOS_BUNDLE_ID"),
+    ),
+    "appstore.submit_review": StepMetadata(
+        name="appstore.submit_review",
+        description=(
+            "Submit the completed TestFlight build for App Store review: create or reuse the App Store version, "
+            "bind the exact verified build, fill localized 'What's new', set the release mode and phased release "
+            "and send the reviewSubmissions request with durable checkpoints and safe recovery. Requires "
+            "pipeline risk: production and the exact CLI confirmation; success means the submission was sent, "
+            "not that Apple approved the version or that users can download it."
+        ),
+        category="appstore",
+        risk="upload",
+        produces=(ResultProduction("review_submission"),),
         requires_env=("ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_PRIVATE_KEY_PATH", "IOS_BUNDLE_ID"),
     ),
     "artifact.copy_to_downloads": StepMetadata(

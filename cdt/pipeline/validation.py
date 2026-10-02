@@ -38,14 +38,27 @@ def validate_pipeline(config: PipelineConfig, name: str | None = None) -> list[d
 
 
 def _google_play_risk_error(step_name: str, pipeline_risk: str, path: str) -> dict[str, str]:
+    return _production_risk_error(step_name, pipeline_risk, path, "publishes to Google Play")
+
+
+def _production_risk_error(step_name: str, pipeline_risk: str, path: str, reason: str) -> dict[str, str]:
     return {
         "code": "production_risk_required",
         "message": (
-            f"Step {step_name} publishes to Google Play and requires pipeline risk: production "
+            f"Step {step_name} {reason} and requires pipeline risk: production "
             f"(declared risk: {pipeline_risk!r})."
         ),
         "path": path,
     }
+
+
+def _appstore_review_risk_error(step_name: str, pipeline_risk: str, path: str) -> dict[str, str]:
+    return _production_risk_error(step_name, pipeline_risk, path, "submits an app for App Store review")
+
+
+# Submitting a version for App Store review is a production action on its own;
+# plain TestFlight upload/completion steps stay usable under any declared risk.
+_APPSTORE_REVIEW_STEPS = frozenset({"appstore.submit_review"})
 
 
 def declared_inputs_payload(pipeline: PipelineSpec | None) -> dict[str, dict[str, Any]]:
@@ -129,10 +142,16 @@ def _validate_step(step: StepSpec, path: str, pipeline_risk: str) -> list[dict[s
     except Exception as exc:
         return [{"code": "unknown_step", "message": str(exc), "path": path}]
     errors: list[dict[str, str]] = []
+    metadata = get_step_metadata(step.name)
     # Any Google Play step demands a production pipeline, recursively through
     # sequence/parallel groups; a dynamic track cannot bypass this protection.
-    if get_step_metadata(step.name).category == "google_play" and pipeline_risk != "production":
-        errors.append(_google_play_risk_error(step.name, pipeline_risk, path))
+    # The same protection covers App Store review submission, while TestFlight
+    # upload/completion steps are intentionally not affected.
+    if pipeline_risk != "production":
+        if metadata.category == "google_play":
+            errors.append(_google_play_risk_error(step.name, pipeline_risk, path))
+        if step.name in _APPSTORE_REVIEW_STEPS:
+            errors.append(_appstore_review_risk_error(step.name, pipeline_risk, path))
     errors.extend(_validate_step_options(step, factory, path))
     return errors
 

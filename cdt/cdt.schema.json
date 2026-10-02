@@ -23,6 +23,7 @@
             "android.build_aab",
             "android.build_apk",
             "appstore.complete_testflight",
+            "appstore.submit_review",
             "appstore.upload_testflight",
             "appstore.upload_testflight_ipa",
             "artifact.copy_to_downloads",
@@ -201,6 +202,41 @@
           },
           "required": [
             "appstore.complete_testflight"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "appstore.submit_review": {
+              "additionalProperties": false,
+              "properties": {
+                "phased_release": {
+                  "type": "boolean"
+                },
+                "release_mode": {
+                  "type": "string"
+                },
+                "whats_new": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              },
+              "required": [
+                "whats_new",
+                "release_mode",
+                "phased_release"
+              ],
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "appstore.submit_review"
           ],
           "type": "object"
         },
@@ -1243,6 +1279,7 @@
             "android.build_aab",
             "android.build_apk",
             "appstore.complete_testflight",
+            "appstore.submit_review",
             "appstore.upload_testflight",
             "appstore.upload_testflight_ipa",
             "artifact.copy_to_downloads",
@@ -1421,6 +1458,41 @@
           },
           "required": [
             "appstore.complete_testflight"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "appstore.submit_review": {
+              "additionalProperties": false,
+              "properties": {
+                "phased_release": {
+                  "type": "boolean"
+                },
+                "release_mode": {
+                  "type": "string"
+                },
+                "whats_new": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              },
+              "required": [
+                "whats_new",
+                "release_mode",
+                "phased_release"
+              ],
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "appstore.submit_review"
           ],
           "type": "object"
         },

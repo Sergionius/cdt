@@ -11,6 +11,7 @@ from typing import Any
 import yaml
 from typer.testing import CliRunner
 
+import cdt.services.appstore as appstore_service
 import cdt.steps.google_play as google_play_step
 from cdt.agent_release import release_status, stop_release
 from cdt.cli import app
@@ -18,7 +19,9 @@ from cdt.pipeline.builtins import register_builtin_steps
 from cdt.pipeline.registry import _clear_steps_for_tests, list_step_metadata
 from cdt.runs import create_run, list_runs, read_json, run_paths, write_exit_code
 from cdt.schema import bundled_schema_path, schema_payload
+from cdt.services.appstore_state import save_upload_record
 from cdt.services.google_play_state import PublishOutcome
+from tests.test_services_appstore_state import FakeAsc, _stub_client
 
 runner = CliRunner()
 ROOT = Path(__file__).resolve().parents[1]
@@ -291,6 +294,150 @@ def test_detached_play_start_with_exact_confirmation_runs_the_step_offline_of_cr
     assert not (tmp_path / ".cdt" / "google-play" / "operations").exists()
 
 
+# -- appstore.submit_review: exact confirmation and offline planning -------------
+
+
+def _write_submit_project(path: Path) -> None:
+    (path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  submit:",
+                "    risk: production",
+                "    inputs:",
+                "      whats_new:",
+                "        required: true",
+                "    steps:",
+                "      - appstore.submit_review:",
+                "          whats_new:",
+                "            ru: \"${inputs.whats_new}\"",
+                "          release_mode: manual",
+                "          phased_release: true",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (path / ".env").write_text("IOS_BUNDLE_ID=com.example.app\n", encoding="utf-8")
+
+
+def test_submit_run_without_or_wrong_confirmation_never_contacts_apple(tmp_path, monkeypatch):
+    _write_submit_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    def fail(method, path, client, payload=None, retry_ambiguous=True):
+        raise AssertionError("Apple must not be contacted before the exact confirmation")
+
+    monkeypatch.setattr(appstore_service, "_asc_request", fail)
+
+    missing = runner.invoke(app, ["run", "submit", "--input", "whats_new=Исправления"])
+    wrong = runner.invoke(app, ["run", "submit", "--input", "whats_new=Исправления", "--confirm", "wrong"])
+
+    # Without --confirm the interactive prompt is offered and never satisfied;
+    # with a wrong value the exact-confirmation requirement fails the run.
+    assert missing.exit_code != 0
+    assert "Enter the pipeline name to continue" in missing.output
+    assert wrong.exit_code != 0
+    assert "requires --confirm submit" in wrong.output
+    assert not (tmp_path / ".cdt" / "appstore").exists()
+    assert not (tmp_path / ".cdt" / "runs").exists()
+
+
+def test_submit_run_with_exact_confirmation_submits_with_interpolated_whats_new(tmp_path, monkeypatch):
+    _write_submit_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    # A previous full TestFlight completion recorded the build for this app;
+    # the standalone submit pipeline must use it without rebuilding or uploading.
+    save_upload_record(tmp_path, "com.example.app", "1.2.3+5")
+    FakeAsc(monkeypatch)
+    _stub_client(monkeypatch)
+
+    result = runner.invoke(
+        app,
+        ["run", "submit", "--input", "whats_new=Исправления и улучшения", "--confirm", "submit"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Submitted for App Store review" in result.output
+    assert "does NOT mean approval or user availability" in result.output
+    runs = list_runs(tmp_path)
+    assert len(runs) == 1
+    status = read_json(run_paths(tmp_path, runs[0]["run_id"]).status)
+    assert status["status"] == "success"
+    release_results = dict(status["release_results"])
+    submission_id = release_results.pop("appstore_review_submission_id")
+    assert submission_id
+    assert release_results == {
+        "appstore_review_bundle_id": "com.example.app",
+        "appstore_review_marketing_version": "1.2.3",
+        "appstore_review_build_number": "5",
+        "appstore_review_submission_state": "WAITING_FOR_REVIEW",
+        "appstore_review_release_mode": "manual",
+        "appstore_review_phased_release": "true",
+    }
+    # The localized text was interpolated from the pipeline input into the intent.
+    checkpoints = list((tmp_path / ".cdt" / "appstore" / "operations").glob("*.json"))
+    assert len(checkpoints) == 1
+    checkpoint = json.loads(checkpoints[0].read_text(encoding="utf-8"))
+    assert checkpoint["whats_new"] == {"ru": "Исправления и улучшения"}
+    assert checkpoint["submission_id"] == submission_id
+    assert checkpoint["phase"] == "confirmed"
+
+
+def test_detached_submit_start_without_exact_confirmation_requests_it_before_any_run(tmp_path, monkeypatch):
+    _write_submit_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    def fail(method, path, client, payload=None, retry_ambiguous=True):
+        raise AssertionError("Apple must not be contacted before the exact confirmation")
+
+    monkeypatch.setattr(appstore_service, "_asc_request", fail)
+
+    missing = runner.invoke(app, ["agent-release", "start", "submit", "--input", "whats_new=Исправления", "--json"])
+    wrong = runner.invoke(
+        app,
+        ["agent-release", "start", "submit", "--input", "whats_new=Исправления", "--confirm", "wrong", "--json"],
+    )
+
+    for rejected in (missing, wrong):
+        payload = json.loads(rejected.output)
+        assert rejected.exit_code == 2
+        assert payload["status"] == "confirmation_required"
+        assert payload["required_confirmation"] == "submit"
+    assert not (tmp_path / ".cdt" / "runs").exists()
+    assert not (tmp_path / ".cdt" / "appstore").exists()
+
+
+def test_detached_submit_start_with_exact_confirmation_runs_offline_of_apple(tmp_path, monkeypatch):
+    _write_submit_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    save_upload_record(tmp_path, "com.example.app", "1.2.3+5")
+
+    started = runner.invoke(
+        app,
+        ["agent-release", "start", "submit", "--input", "whats_new=Исправления", "--confirm", "submit", "--json"],
+    )
+
+    payload = json.loads(started.output)
+    assert started.exit_code == 0, started.output
+    run_id = payload["run_id"]
+    paths = run_paths(tmp_path, run_id)
+    deadline = time.time() + 60
+    while not paths.exit.exists() and time.time() < deadline:
+        time.sleep(0.1)
+    assert paths.exit.exists(), "detached submit worker did not finish"
+
+    status = read_json(paths.status)
+    # The worker runs without ASC credentials, so the submission fails at the
+    # credential boundary: reaching it proves the step was allowed to run while
+    # Apple stays unreachable without real credentials.
+    assert status["status"] == "failed"
+    assert "Missing ASC credentials" in status["error"]
+    # The submission never got far enough to save a review checkpoint.
+    assert not (tmp_path / ".cdt" / "appstore" / "operations").exists()
+
+
 def test_background_start_reports_config_errors_as_json(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
@@ -456,6 +603,24 @@ def test_schema_exposes_google_play_upload_aab_required_options():
     ]
     serialized = json.dumps(payload)
     assert "google_play.upload_aab" in serialized
+    assert payload == json.loads(bundled_schema_path().read_text(encoding="utf-8"))
+
+
+def test_schema_exposes_appstore_submit_review_required_options():
+    payload = schema_payload()
+    step_schemas = [obj for obj in payload["$defs"]["step"]["oneOf"] if isinstance(obj, dict) and obj.get("properties")]
+    options_by_name = {next(iter(obj["properties"])): next(iter(obj["properties"].values())) for obj in step_schemas}
+
+    submit_options = options_by_name["appstore.submit_review"]
+    assert submit_options["required"] == ["whats_new", "release_mode", "phased_release"]
+    assert sorted(submit_options["properties"]) == ["phased_release", "release_mode", "whats_new"]
+    assert submit_options["properties"]["phased_release"]["type"] == "boolean"
+    assert submit_options["properties"]["whats_new"] == {
+        "type": "object",
+        "additionalProperties": {"type": "string"},
+    }
+    serialized = json.dumps(payload)
+    assert "appstore.submit_review" in serialized
     assert payload == json.loads(bundled_schema_path().read_text(encoding="utf-8"))
 
 
