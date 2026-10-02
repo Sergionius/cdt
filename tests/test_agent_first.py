@@ -248,6 +248,27 @@ def test_schema_exposes_github_wait_release_step_options():
     assert wait_metadata.risk == "safe"
 
 
+def test_schema_exposes_google_play_upload_aab_required_options():
+    payload = schema_payload()
+    step_schemas = [obj for obj in payload["$defs"]["step"]["oneOf"] if isinstance(obj, dict) and obj.get("properties")]
+    options_by_name = {next(iter(obj["properties"])): next(iter(obj["properties"].values())) for obj in step_schemas}
+
+    upload_options = options_by_name["google_play.upload_aab"]
+    assert upload_options["required"] == ["artifact", "package_name", "track", "release_status"]
+    assert sorted(upload_options["properties"]) == [
+        "artifact",
+        "package_name",
+        "release_name",
+        "release_notes",
+        "release_status",
+        "track",
+        "user_fraction",
+    ]
+    serialized = json.dumps(payload)
+    assert "google_play.upload_aab" in serialized
+    assert payload == json.loads(bundled_schema_path().read_text(encoding="utf-8"))
+
+
 def test_release_summary_includes_release_results_without_reading_the_log(tmp_path, monkeypatch):
     package = tmp_path / "cdt_steps"
     package.mkdir()

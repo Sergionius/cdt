@@ -37,6 +37,7 @@
             "git.release_tag_push",
             "git.require_synced_main",
             "github.wait_release",
+            "google_play.upload_aab",
             "hook.python_script",
             "ios.bump_xcode_build_number",
             "ios.flutter_build_ipa",
@@ -566,6 +567,61 @@
           },
           "required": [
             "github.wait_release"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "google_play.upload_aab": {
+              "additionalProperties": false,
+              "properties": {
+                "artifact": {
+                  "type": "string"
+                },
+                "package_name": {
+                  "type": "string"
+                },
+                "release_name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "release_notes": {
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "release_status": {
+                  "type": "string"
+                },
+                "track": {
+                  "type": "string"
+                },
+                "user_fraction": {
+                  "type": [
+                    "number",
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "artifact",
+                "package_name",
+                "track",
+                "release_status"
+              ],
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "google_play.upload_aab"
           ],
           "type": "object"
         },
@@ -1201,6 +1257,7 @@
             "git.release_tag_push",
             "git.require_synced_main",
             "github.wait_release",
+            "google_play.upload_aab",
             "hook.python_script",
             "ios.bump_xcode_build_number",
             "ios.flutter_build_ipa",
@@ -1730,6 +1787,61 @@
           },
           "required": [
             "github.wait_release"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "google_play.upload_aab": {
+              "additionalProperties": false,
+              "properties": {
+                "artifact": {
+                  "type": "string"
+                },
+                "package_name": {
+                  "type": "string"
+                },
+                "release_name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "release_notes": {
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "release_status": {
+                  "type": "string"
+                },
+                "track": {
+                  "type": "string"
+                },
+                "user_fraction": {
+                  "type": [
+                    "number",
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "artifact",
+                "package_name",
+                "track",
+                "release_status"
+              ],
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "google_play.upload_aab"
           ],
           "type": "object"
         },

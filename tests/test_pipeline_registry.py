@@ -94,6 +94,15 @@ def test_builtin_metadata_registration():
     assert prod_user_agent.risk == "upload"
     assert prod_user_agent.requires_env == ("PACHCA_USER_AGENT_WEBHOOK_URL", "UA_APP_NAME")
 
+    google_play = get_step_metadata("google_play.upload_aab")
+    assert google_play.category == "google_play"
+    assert google_play.risk == "upload"
+    assert google_play.requires == (ResultRequirement(("android_aab",), name_options=("artifact",)),)
+    assert google_play.produces == (ResultProduction("upload_result"),)
+    # ADC is optional in preflight; it is never declared as a required variable.
+    assert google_play.requires_env == ()
+    assert google_play.external_tools == ()
+
 
 def test_step_metadata_to_dict_is_structured():
     metadata = StepMetadata(

@@ -485,3 +485,96 @@ def test_build_step_env_option_is_rejected_with_profile_hint(tmp_path):
             "path": "pipelines.demo.steps[2].env",
         },
     ]
+
+
+def _google_play_pipeline(risk: str, steps_block: str) -> str:
+    return (
+        "version: 1\n"
+        "pipelines:\n"
+        "  play:\n"
+        f"    risk: {risk}\n"
+        "    steps:\n"
+        f"{steps_block}"
+    )
+
+
+def _play_step_yaml(indent: str = "      ") -> str:
+    return (
+        f"{indent}- google_play.upload_aab:\n"
+        f"{indent}    artifact: aab\n"
+        f"{indent}    package_name: com.example.app\n"
+        f"{indent}    track: internal\n"
+        f"{indent}    release_status: draft\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "steps_block,expected_path",
+    [
+        (_play_step_yaml(), "pipelines.play.steps[0]"),
+        (
+            "      - sequence:\n" + "          steps:\n" + _play_step_yaml(indent="            "),
+            "pipelines.play.steps[0].sequence.steps[0]",
+        ),
+        (
+            "      - parallel:\n" + "          steps:\n" + _play_step_yaml(indent="            "),
+            "pipelines.play.steps[0].parallel.steps[0]",
+        ),
+        (
+            "      - parallel:\n"
+            + "          steps:\n"
+            + "            - sequence:\n"
+            + "                steps:\n"
+            + _play_step_yaml(indent="                  "),
+            "pipelines.play.steps[0].parallel.steps[0].sequence.steps[0]",
+        ),
+    ],
+)
+@pytest.mark.parametrize("track", ["internal", "${inputs.track}"])
+def test_google_play_step_requires_production_risk_recursively(tmp_path, steps_block, expected_path, track):
+    (tmp_path / "cdt.yaml").write_text(
+        _google_play_pipeline("standard", steps_block.replace("track: internal", f"track: {track}")),
+        encoding="utf-8",
+    )
+    register_builtin_steps()
+    config = load_pipeline_config(tmp_path)
+
+    errors = validate_pipeline(config, "play")
+
+    assert errors == [
+        {
+            "code": "production_risk_required",
+            "message": (
+                "Step google_play.upload_aab publishes to Google Play and requires pipeline risk: "
+                "production (declared risk: 'standard')."
+            ),
+            "path": expected_path,
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "steps_block",
+    [
+        _play_step_yaml(),
+        "      - sequence:\n" + "          steps:\n" + _play_step_yaml(indent="            "),
+        "      - parallel:\n" + "          steps:\n" + _play_step_yaml(indent="            "),
+    ],
+)
+def test_google_play_step_passes_validation_under_production_risk(tmp_path, steps_block):
+    (tmp_path / "cdt.yaml").write_text(_google_play_pipeline("production", steps_block), encoding="utf-8")
+    register_builtin_steps()
+    config = load_pipeline_config(tmp_path)
+
+    assert validate_pipeline(config, "play") == []
+
+
+def test_non_google_play_steps_do_not_require_production_risk(tmp_path):
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    steps:\n      - flutter.pub_get\n",
+        encoding="utf-8",
+    )
+    register_builtin_steps()
+    config = load_pipeline_config(tmp_path)
+
+    assert validate_pipeline(config, "demo") == []

@@ -11,6 +11,7 @@ from ..steps.git import (
     RequireSyncedMainStep,
 )
 from ..steps.github import WaitReleaseStep
+from ..steps.google_play import GooglePlayUploadAabStep
 from ..steps.hook import PythonScriptHookStep
 from ..steps.ios import IncrementIosBuildNumberStep, IosFlutterBuildIpaStep, IosXcodeBuildIpaStep
 from ..steps.notify import NotifyProdUserAgentPachcaStep, NotifySuccessStep
@@ -38,6 +39,7 @@ _BUILTINS: dict[str, type] = {
     "git.release_tag_push": ReleaseTagPushStep,
     "git.require_synced_main": RequireSyncedMainStep,
     "github.wait_release": WaitReleaseStep,
+    "google_play.upload_aab": GooglePlayUploadAabStep,
     "ios.bump_xcode_build_number": IncrementIosBuildNumberStep,
     "ios.flutter_build_ipa": IosFlutterBuildIpaStep,
     "ios.xcode_build_ipa": IosXcodeBuildIpaStep,
@@ -218,6 +220,19 @@ _BUILTIN_METADATA: dict[str, StepMetadata] = {
         risk="safe",
         produces=(ResultProduction("release_confirmation"),),
         external_tools=("gh",),
+    ),
+    "google_play.upload_aab": StepMetadata(
+        name="google_play.upload_aab",
+        description=(
+            "Upload one AAB to Google Play and create a release on an explicitly chosen track "
+            "(draft, inProgress or completed) via ADC, with a durable checkpoint and safe recovery. "
+            "Requires pipeline risk: production and the exact CLI confirmation; commit never cancels "
+            "an in-progress review."
+        ),
+        category="google_play",
+        risk="upload",
+        requires=(ResultRequirement(("android_aab",), name_options=("artifact",)),),
+        produces=(ResultProduction("upload_result"),),
     ),
     "ios.bump_xcode_build_number": StepMetadata(
         name="ios.bump_xcode_build_number",

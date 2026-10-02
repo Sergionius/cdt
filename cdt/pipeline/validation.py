@@ -5,7 +5,7 @@ from difflib import get_close_matches
 from typing import Any
 
 from .config import ParallelSpec, PipelineConfig, PipelineItemSpec, PipelineSpec, SequenceSpec, StepSpec
-from .registry import get_step_factory, list_step_metadata, list_steps
+from .registry import get_step_factory, get_step_metadata, list_step_metadata, list_steps
 
 
 def pipeline_names(config: PipelineConfig) -> list[str]:
@@ -35,6 +35,17 @@ def validate_pipeline(config: PipelineConfig, name: str | None = None) -> list[d
     for pipeline in pipelines:
         errors.extend(_validate_steps(pipeline))
     return errors
+
+
+def _google_play_risk_error(step_name: str, pipeline_risk: str, path: str) -> dict[str, str]:
+    return {
+        "code": "production_risk_required",
+        "message": (
+            f"Step {step_name} publishes to Google Play and requires pipeline risk: production "
+            f"(declared risk: {pipeline_risk!r})."
+        ),
+        "path": path,
+    }
 
 
 def declared_inputs_payload(pipeline: PipelineSpec | None) -> dict[str, dict[str, Any]]:
@@ -98,26 +109,32 @@ def _validate_steps(pipeline: PipelineSpec) -> list[dict[str, str]]:
     errors: list[dict[str, str]] = []
     for index, item in enumerate(pipeline.steps):
         path = f"pipelines.{pipeline.name}.steps[{index}]"
-        errors.extend(_validate_item(item, path))
+        errors.extend(_validate_item(item, path, pipeline.risk))
     return errors
 
 
-def _validate_item(item: PipelineItemSpec, path: str) -> list[dict[str, str]]:
+def _validate_item(item: PipelineItemSpec, path: str, pipeline_risk: str) -> list[dict[str, str]]:
     if isinstance(item, (ParallelSpec, SequenceSpec)):
         group_name = "parallel" if isinstance(item, ParallelSpec) else "sequence"
         errors: list[dict[str, str]] = []
         for child_index, child in enumerate(item.steps):
-            errors.extend(_validate_item(child, f"{path}.{group_name}.steps[{child_index}]"))
+            errors.extend(_validate_item(child, f"{path}.{group_name}.steps[{child_index}]", pipeline_risk))
         return errors
-    return _validate_step(item, path)
+    return _validate_step(item, path, pipeline_risk)
 
 
-def _validate_step(step: StepSpec, path: str) -> list[dict[str, str]]:
+def _validate_step(step: StepSpec, path: str, pipeline_risk: str) -> list[dict[str, str]]:
     try:
         factory = get_step_factory(step.name)
     except Exception as exc:
         return [{"code": "unknown_step", "message": str(exc), "path": path}]
-    return _validate_step_options(step, factory, path)
+    errors: list[dict[str, str]] = []
+    # Any Google Play step demands a production pipeline, recursively through
+    # sequence/parallel groups; a dynamic track cannot bypass this protection.
+    if get_step_metadata(step.name).category == "google_play" and pipeline_risk != "production":
+        errors.append(_google_play_risk_error(step.name, pipeline_risk, path))
+    errors.extend(_validate_step_options(step, factory, path))
+    return errors
 
 
 def _validate_step_options(step: StepSpec, factory: Any, path: str) -> list[dict[str, str]]:

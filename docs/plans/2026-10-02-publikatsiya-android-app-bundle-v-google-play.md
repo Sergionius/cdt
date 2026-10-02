@@ -124,20 +124,20 @@ CDT не определяет Managed publishing по косвенным при�
 - Modify: `tests/test_pipeline_registry.py`
 - Modify: `tests/test_agent_first.py`
 
-- [ ] Добавить `google_play.upload_aab` с обязательными `artifact`, `package_name`, `track`, `release_status`; необязательными `release_notes: dict[str, str]`, `release_name`, `user_fraction`.
-- [ ] Не задавать defaults для track и release status. Проверять package/track, существование файла, тип AAB и непустые локализованные notes при их наличии.
-- [ ] Разрешить только `draft`, `inProgress`, `completed`. Для `inProgress` требовать `0 < user_fraction < 1`; для остальных статусов запрещать fraction.
-- [ ] Валидировать числовые строки после input-интерполяции; отвергать bool, NaN, infinity и нечисловые значения.
-- [ ] Использовать существующую интерполяцию inputs. Не выводить параметры из Firebase credentials, имени pipeline или общих mutable values.
-- [ ] Рекурсивно требовать `risk: production` в `validate_pipeline` для любого Google Play шага, включая шаги внутри `sequence`/`parallel`. Динамический track не обходит защиту.
-- [ ] Использовать существующее точное подтверждение direct/detached CLI, без отдельного prompt внутри шага.
-- [ ] Зарегистрировать metadata: вход `android_aab`, результат `upload_result`, риск `upload`. Не объявлять `GOOGLE_APPLICATION_CREDENTIALS` обязательной переменной.
-- [ ] В preflight проверять явно заданный ADC-файл без внешних мутаций. Отсутствие этой переменной не считать ошибкой; наличие credentials не выдавать за доказательство Play Console permissions.
-- [ ] Dry-run, plan, inspect и schema не должны обращаться к ADC/network или создавать checkpoint.
-- [ ] Выводить package, track, version code, запрошенный статус и подтверждение commit. Для draft явно писать, что создан draft; для недрафтового релиза — что изменения приняты, но одобрение/доступность не проверялись.
-- [ ] Для недрафтового результата сообщать: при применимом Managed publishing выпуск требует ручного Publish; иначе дальнейший выпуск выполняет Google. Не утверждать, что CDT определил настройку.
-- [ ] Перегенерировать bundled schema существующим генератором и проверить совпадение с `schema_payload()`.
-- [ ] Добавить тесты контракта шага, обязательных options, production validation и безопасных итоговых сообщений.
+- [x] Добавить `google_play.upload_aab` с обязательными `artifact`, `package_name`, `track`, `release_status`; необязательными `release_notes: dict[str, str]`, `release_name`, `user_fraction`.
+- [x] Не задавать defaults для track и release status. Проверять package/track, существование файла, тип AAB и непустые локализованные notes при их наличии.
+- [x] Разрешить только `draft`, `inProgress`, `completed`. Для `inProgress` требовать `0 < user_fraction < 1`; для остальных статусов запрещать fraction.
+- [x] Валидировать числовые строки после input-интерполяции; отвергать bool, NaN, infinity и нечисловые значения.
+- [x] Использовать существующую интерполяцию inputs. Не выводить параметры из Firebase credentials, имени pipeline или общих mutable values.
+- [x] Рекурсивно требовать `risk: production` в `validate_pipeline` для любого Google Play шага, включая шаги внутри `sequence`/`parallel`. Динамический track не обходит защиту.
+- [x] Использовать существующее точное подтверждение direct/detached CLI, без отдельного prompt внутри шага.
+- [x] Зарегистрировать metadata: вход `android_aab`, результат `upload_result`, риск `upload`. Не объявлять `GOOGLE_APPLICATION_CREDENTIALS` обязательной переменной.
+- [x] В preflight проверять явно заданный ADC-файл без внешних мутаций. Отсутствие этой переменной не считать ошибкой; наличие credentials не выдавать за доказательство Play Console permissions.
+- [x] Dry-run, plan, inspect и schema не должны обращаться к ADC/network или создавать checkpoint.
+- [x] Выводить package, track, version code, запрошенный статус и подтверждение commit. Для draft явно писать, что создан draft; для недрафтового релиза — что изменения приняты, но одобрение/доступность не проверялись.
+- [x] Для недрафтового результата сообщать: при применимом Managed publishing выпуск требует ручного Publish; иначе дальнейший выпуск выполняет Google. Не утверждать, что CDT определил настройку.
+- [x] Перегенерировать bundled schema существующим генератором и проверить совпадение с `schema_payload()`.
+- [x] Добавить тесты контракта шага, обязательных options, production validation и безопасных итоговых сообщений.
 
 ### Task 4: Проверка CLI, resume и границ публикации
 
