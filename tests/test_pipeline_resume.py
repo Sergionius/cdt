@@ -6,10 +6,12 @@ from typing import Any
 
 from typer.testing import CliRunner
 
+import cdt.services.appstore as appstore_service
 import cdt.steps.google_play as google_play_step
 from cdt.cli import app
 from cdt.pipeline.registry import _clear_steps_for_tests
 from cdt.runs import list_runs, read_json, run_paths
+from cdt.services.appstore_state import save_upload_record
 from cdt.services.google_play import (
     STAGE_EDIT_COMMIT,
     STAGE_EDIT_GET,
@@ -17,6 +19,7 @@ from cdt.services.google_play import (
     GooglePlayError,
     compute_file_sha256,
 )
+from tests.test_services_appstore_state import FakeAsc, _stub_client
 
 runner = CliRunner()
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -29,15 +32,15 @@ def _compact_visible_text(output: str) -> str:
 
 def setup_function():
     _clear_steps_for_tests()
-    sys.modules.pop("cdt_steps.resume", None)
-    sys.modules.pop("cdt_steps.play", None)
+    for module in ("cdt_steps.resume", "cdt_steps.play", "cdt_steps.notify"):
+        sys.modules.pop(module, None)
     sys.modules.pop("cdt_steps", None)
 
 
 def teardown_function():
     _clear_steps_for_tests()
-    sys.modules.pop("cdt_steps.resume", None)
-    sys.modules.pop("cdt_steps.play", None)
+    for module in ("cdt_steps.resume", "cdt_steps.play", "cdt_steps.notify"):
+        sys.modules.pop(module, None)
     sys.modules.pop("cdt_steps", None)
 
 
@@ -488,6 +491,205 @@ def test_rolled_back_release_reruns_fresh_with_same_inputs(tmp_path, monkeypatch
     assert fresh.exit_code == 0, fresh.output
     assert 'version = "0.5.2"' in (tmp_path / "pyproject.toml").read_text(encoding="utf-8")
     assert "## v0.5.2 - " in (tmp_path / "CHANGELOG.md").read_text(encoding="utf-8")
+
+
+# -- appstore.submit_review resume over the review operation checkpoint ---------------
+
+
+def _write_submit_project(tmp_path: Path, *, notify: bool = False) -> None:
+    steps = [
+        "      - appstore.submit_review:",
+        "          whats_new:",
+        '            ru: "${inputs.whats_new}"',
+        "          release_mode: manual",
+        "          phased_release: true",
+    ]
+    if notify:
+        package = tmp_path / "cdt_steps"
+        package.mkdir()
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        (package / "notify.py").write_text(
+            "\n".join(
+                [
+                    "import typer",
+                    "from cdt.sdk import step",
+                    "",
+                    "@step('demo.notify')",
+                    "def notify(ctx):",
+                    "    if (ctx.cwd / 'notify-fail').exists():",
+                    "        raise typer.BadParameter('notification outage')",
+                    "    with (ctx.cwd / 'notify-count.txt').open('a', encoding='utf-8') as handle:",
+                    "        handle.write('sent\\n')",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        steps.append("      - demo.notify")
+    config = ["version: 1"]
+    if notify:
+        config += ["plugins:", "  - cdt_steps.notify"]
+    config += [
+        "pipelines:",
+        "  submit:",
+        "    risk: production",
+        "    inputs:",
+        "      whats_new:",
+        "        required: true",
+        "    steps:",
+        *steps,
+    ]
+    (tmp_path / "cdt.yaml").write_text("\n".join(config) + "\n", encoding="utf-8")
+    (tmp_path / ".env").write_text("IOS_BUNDLE_ID=com.example.app\n", encoding="utf-8")
+
+
+def _run_submit(tmp_path: Path, *extra: str):
+    return runner.invoke(app, ["run", "submit", "--input", "whats_new=Исправления", "--confirm", "submit", *extra])
+
+
+def _failed_submit_status(tmp_path: Path) -> Path:
+    runs = list_runs(tmp_path)
+    return run_paths(tmp_path, runs[-1]["run_id"]).status
+
+
+def _submit_attempt_counts(calls: list[dict]) -> tuple[int, int, int]:
+    """Return (submission creations, submission items, submit requests) among ASC calls."""
+
+    creations = [c for c in calls if c["method"] == "POST" and c["path"] == "/v1/reviewSubmissions"]
+    items = [c for c in calls if c["path"] == "/v1/reviewSubmissionItems"]
+    submits = [
+        c
+        for c in calls
+        if c["method"] == "PATCH" and re.fullmatch(r"/v1/reviewSubmissions/rs-\d+", c["path"])
+    ]
+    return len(creations), len(items), len(submits)
+
+
+def test_submit_resume_after_interruption_does_not_recreate_or_resubmit(tmp_path, monkeypatch):
+    """Resume of an interrupted submit after a confirmed upload completes the
+
+    same operation: the submission is neither created nor sent a second time.
+    """
+
+    _write_submit_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    save_upload_record(tmp_path, "com.example.app", "1.2.3+5")
+    asc = FakeAsc(monkeypatch)
+    _stub_client(monkeypatch)
+
+    asc.stop_after_mutations = 4  # crash the process in the middle of preparation
+    failed = _run_submit(tmp_path)
+    assert failed.exit_code != 0
+    status_path = _failed_submit_status(tmp_path)
+    failed_status = read_json(status_path)
+    assert failed_status["status"] == "failed"
+    assert _submit_attempt_counts(asc.calls) == (0, 0, 0)  # interrupted before anything was sent
+    checkpoints = list((tmp_path / ".cdt" / "appstore" / "operations").glob("*.json"))
+    assert len(checkpoints) == 1
+    checkpoint = json.loads(checkpoints[0].read_text(encoding="utf-8"))
+    assert checkpoint["phase"] != "confirmed"
+
+    calls_after_first_run = len(asc.calls)
+    resumed = _run_submit(
+        tmp_path,
+        "--resume-status-file",
+        str(status_path),
+        "--status-file",
+        str(tmp_path / "out" / "status.json"),
+        "--skip-completed",
+    )
+
+    assert resumed.exit_code == 0, resumed.output
+    resumed_calls = asc.calls[calls_after_first_run:]
+    # The resume only performed the remaining changes; nothing was applied twice.
+    assert len([c for c in resumed_calls if c["method"] == "POST" and c["path"] == "/v1/appStoreVersions"]) == 0
+    assert _submit_attempt_counts(asc.calls) == (1, 1, 1)  # exactly once across both runs
+    assert len(asc.mutating()) == 8
+    checkpoint = json.loads(checkpoints[0].read_text(encoding="utf-8"))
+    assert checkpoint["phase"] == "confirmed"
+
+
+def test_submit_resume_after_lost_apple_response_stays_blocked_without_resubmission(tmp_path, monkeypatch):
+    """A lost submit response leaves a blocking state: resume explains it and
+
+    never creates or sends the application again.
+    """
+
+    _write_submit_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    save_upload_record(tmp_path, "com.example.app", "1.2.3+5")
+    asc = FakeAsc(monkeypatch)
+    _stub_client(monkeypatch)
+    asc.fail_on(
+        "PATCH",
+        "/v1/reviewSubmissions",
+        appstore_service.AscAmbiguousResultError(
+            "ambiguous",
+            method="PATCH",
+            path="/v1/reviewSubmissions",
+            code=502,
+            category="http_502",
+            detail="lost response",
+        ),
+        apply=False,
+    )
+
+    failed = _run_submit(tmp_path)
+    assert failed.exit_code != 0
+    assert "App Store Connect" in failed.output  # the ambiguity is explained, not hidden
+    status_path = _failed_submit_status(tmp_path)
+    calls_after_first_run = len(asc.calls)
+
+    resumed = _run_submit(
+        tmp_path,
+        "--resume-status-file",
+        str(status_path),
+        "--status-file",
+        str(tmp_path / "out" / "status.json"),
+        "--skip-completed",
+    )
+
+    assert resumed.exit_code != 0
+    assert "blocked" in resumed.output
+    # The blocked checkpoint stops every change: the resumed run only re-reads
+    # the target (read-only GETs) and never mutates anything at Apple.
+    assert all(c["method"] == "GET" for c in asc.calls[calls_after_first_run:])
+    # One draft with one item exists, and the single submit attempt never
+    # succeeded — nothing is created or sent again while blocked.
+    assert _submit_attempt_counts(asc.calls) == (1, 1, 1)
+
+
+def test_confirmed_submit_checkpoint_is_independent_of_pipeline_status(tmp_path, monkeypatch):
+    """A confirmed submission followed by a failing notification step must not
+
+    cause a new submission on the next run: the checkpoint — not the pipeline
+    status — decides, and the re-executed step only verifies via GET.
+    """
+
+    _write_submit_project(tmp_path, notify=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    save_upload_record(tmp_path, "com.example.app", "1.2.3+5")
+    asc = FakeAsc(monkeypatch)
+    _stub_client(monkeypatch)
+    (tmp_path / "notify-fail").write_text("", encoding="utf-8")
+
+    first = _run_submit(tmp_path)
+    assert first.exit_code != 0
+    failed_status = read_json(_failed_submit_status(tmp_path))
+    assert failed_status["status"] == "failed"
+    assert failed_status["completed_steps"] == ["0"]  # the submission step itself succeeded
+    assert not (tmp_path / "notify-count.txt").exists()
+
+    (tmp_path / "notify-fail").unlink()
+    calls_after_first_run = len(asc.calls)
+    second = _run_submit(tmp_path)
+
+    assert second.exit_code == 0, second.output
+    assert "already confirmed earlier" in second.output
+    assert all(c["method"] == "GET" for c in asc.calls[calls_after_first_run:])
+    assert (tmp_path / "notify-count.txt").read_text(encoding="utf-8") == "sent\n"
+    assert _submit_attempt_counts(asc.calls) == (1, 1, 1)  # still exactly one submission
 
 
 # -- Google Play resume over checkpoints and saved artifacts --------------------------

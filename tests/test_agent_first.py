@@ -19,7 +19,7 @@ from cdt.pipeline.builtins import register_builtin_steps
 from cdt.pipeline.registry import _clear_steps_for_tests, list_step_metadata
 from cdt.runs import create_run, list_runs, read_json, run_paths, write_exit_code
 from cdt.schema import bundled_schema_path, schema_payload
-from cdt.services.appstore_state import save_upload_record
+from cdt.services.appstore_state import load_upload_record, save_upload_record
 from cdt.services.google_play_state import PublishOutcome
 from tests.test_services_appstore_state import FakeAsc, _stub_client
 
@@ -383,6 +383,24 @@ def test_submit_run_with_exact_confirmation_submits_with_interpolated_whats_new(
     assert checkpoint["whats_new"] == {"ru": "Исправления и улучшения"}
     assert checkpoint["submission_id"] == submission_id
     assert checkpoint["phase"] == "confirmed"
+
+
+def test_standalone_submit_without_record_fails_without_scanning_apple(tmp_path, monkeypatch):
+    _write_submit_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    asc = FakeAsc(monkeypatch)
+    _stub_client(monkeypatch)
+
+    result = runner.invoke(app, ["run", "submit", "--input", "whats_new=Исправления", "--confirm", "submit"])
+
+    assert result.exit_code != 0
+    assert "No recorded TestFlight build" in result.output
+    assert "appstore.upload_testflight" in result.output
+    assert "does not pick an arbitrary" in result.output
+    # Apple was never contacted: no app lookup and no unfiltered latest-build
+    # scan — the refusal happened entirely from the missing local record.
+    assert asc.calls == []
+    assert not (tmp_path / ".cdt" / "appstore").exists()
 
 
 def test_detached_submit_start_without_exact_confirmation_requests_it_before_any_run(tmp_path, monkeypatch):
@@ -958,6 +976,76 @@ def test_detached_execution_does_not_duplicate_output_lines(tmp_path):
     assert result.returncode == 0, result.stderr
     log = (run_dir / "output.log").read_text(encoding="utf-8")
     assert log.count("detached marker line") == 1
+
+
+def test_existing_testflight_pipeline_external_actions_unchanged_without_submit_step(tmp_path, monkeypatch):
+    """Without the new step an existing TestFlight pipeline behaves as before:
+
+    one build, one upload, one completion — and no App Review activity at all.
+    """
+
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  iosapp:",
+                "    steps:",
+                "      - ios.bump_xcode_build_number",
+                "      - ios.xcode_build_ipa",
+                "      - appstore.upload_testflight",
+                "      - appstore.complete_testflight",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".env").write_text(
+        "IOS_BUNDLE_ID=com.example.app\nIOS_TEST_SCHEME=Runner\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    def fail(method, path, client, payload=None, retry_ambiguous=True):
+        raise AssertionError(f"existing TestFlight pipeline must not contact the ASC API: {method} {path}")
+
+    monkeypatch.setattr(appstore_service, "_asc_request", fail)
+
+    from cdt.steps import appstore as appstore_steps
+    from cdt.steps import ios as ios_steps
+
+    uploads, completions = [], []
+    ipa = tmp_path / "App.ipa"
+
+    def build_ipa(cwd, env, scheme):
+        ipa.write_bytes(b"ipa")
+        return ipa
+
+    monkeypatch.setattr(ios_steps, "_increment_ios_build_number", lambda cwd, env, scheme: ("1.2.3+4", "1.2.3+5"))
+    monkeypatch.setattr(ios_steps, "_ios_xcode_build_ipa", build_ipa)
+    monkeypatch.setattr(
+        appstore_steps,
+        "_upload_testflight",
+        lambda path, env, changelog, new_version: uploads.append((changelog, new_version)) or 0,
+    )
+    monkeypatch.setattr(
+        appstore_steps,
+        "_complete_testflight_after_upload",
+        lambda env, changelog, new_version: completions.append(new_version) or 0,
+    )
+
+    result = runner.invoke(app, ["run", "iosapp"])
+
+    assert result.exit_code == 0, result.output
+    assert uploads == [("dev build", "1.2.3+5")]  # exactly one upload, same build number
+    assert completions == ["1.2.3+5"]
+    # No App Review activity: no ASC API call, no submission message, no review checkpoint.
+    assert "Submitted for App Store review" not in result.output
+    assert not (tmp_path / ".cdt" / "appstore" / "operations").exists()
+    # The only new local effect is the additive upload record; Apple-facing
+    # actions are unchanged.
+    record = load_upload_record(tmp_path, "com.example.app")
+    assert (record.marketing_version, record.build_number) == ("1.2.3", "5")
 
 
 def test_resume_skips_finished_upload_and_reruns_only_testflight_completion(tmp_path, monkeypatch):

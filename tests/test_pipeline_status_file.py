@@ -6,6 +6,8 @@ from typer.testing import CliRunner
 from cdt.cli import app
 from cdt.pipeline.registry import _clear_steps_for_tests
 from cdt.runs import list_runs, read_json
+from cdt.services.appstore_state import save_upload_record
+from tests.test_services_appstore_state import FakeAsc, _stub_client
 
 runner = CliRunner()
 
@@ -183,6 +185,81 @@ def test_run_status_file_records_release_confirmation_results(tmp_path, monkeypa
         "github_release_url": "https://github.com/example/cdt/releases/tag/v0.5.2",
         "pypi_release_url": "https://pypi.org/project/cdt-release/0.5.2/",
     }
+
+
+def _write_submit_project(tmp_path) -> None:
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  submit:",
+                "    risk: production",
+                "    inputs:",
+                "      whats_new:",
+                "        required: true",
+                "    steps:",
+                "      - appstore.submit_review:",
+                "          whats_new:",
+                "            ru: \"${inputs.whats_new}\"",
+                "          release_mode: manual",
+                "          phased_release: true",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                "IOS_BUNDLE_ID=com.example.app",
+                "ASC_KEY_ID=SECRETKEYID42",
+                "ASC_ISSUER_ID=SECRETISSUER42",
+                "ASC_PRIVATE_KEY_PATH=secrets/SUPERSECRETKEY.p8",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_submit_review_status_file_records_result_without_secrets(tmp_path, monkeypatch):
+    _write_submit_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    save_upload_record(tmp_path, "com.example.app", "1.2.3+5")
+    FakeAsc(monkeypatch)
+    _stub_client(monkeypatch)  # credentials are never used against real Apple
+    status_file = tmp_path / ".cdt" / "status.json"
+
+    result = runner.invoke(
+        app,
+        ["run", "submit", "--input", "whats_new=Исправления", "--confirm", "submit",
+         "--status-file", str(status_file)],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(status_file.read_text(encoding="utf-8"))
+    assert payload["status"] == "success"
+    assert payload["error"] is None
+    release_results = dict(payload["release_results"])
+    submission_id = release_results.pop("appstore_review_submission_id")
+    assert submission_id
+    assert release_results == {
+        "appstore_review_bundle_id": "com.example.app",
+        "appstore_review_marketing_version": "1.2.3",
+        "appstore_review_build_number": "5",
+        "appstore_review_submission_state": "WAITING_FOR_REVIEW",
+        "appstore_review_release_mode": "manual",
+        "appstore_review_phased_release": "true",
+    }
+    # No ASC credential material reaches the status file.
+    text = status_file.read_text(encoding="utf-8")
+    for secret in ("SECRETKEYID42", "SECRETISSUER42", "SUPERSECRETKEY", "BEGIN PRIVATE KEY"):
+        assert secret not in text
+    # The message separates review submission from user availability.
+    assert "Submitted for App Store review" in result.output
+    assert "does NOT mean approval or user availability" in result.output
+    assert "available to users" not in result.output.split("Submitted for App Store review")[0]
 
 
 def test_run_resume_from_restores_artifacts_and_skips_prior_steps(tmp_path, monkeypatch):

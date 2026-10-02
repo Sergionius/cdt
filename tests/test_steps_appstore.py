@@ -240,6 +240,40 @@ def test_selected_build_is_reverified_in_asc_before_submission(tmp_path, monkeyp
     assert not (tmp_path / ".cdt" / "appstore").exists()
 
 
+# -- standalone submit pipeline needs no build, IPA or artifacts -----------------
+
+
+def test_standalone_submit_pipeline_needs_no_ipa_or_build_artifacts(tmp_path, monkeypatch):
+    """A submit-only pipeline identifies app and build without any build inputs."""
+
+    _write_submit_project(tmp_path)
+    (tmp_path / ".env").write_text("IOS_BUNDLE_ID=com.example.app\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    save_upload_record(tmp_path, BUNDLE_ID, "1.2.3+5")
+    asc = FakeAsc(monkeypatch)
+    _stub_client(monkeypatch)
+    status_file = tmp_path / "out" / "status.json"
+
+    result = runner.invoke(
+        app,
+        ["run", "submit", "--input", "whats_new=Исправления", "--confirm", "submit",
+         "--status-file", str(status_file)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Submitting 1.2.3+5" in result.output
+    # The pipeline declared no build steps and no IPA exists anywhere in the
+    # project: the build came from the recorded completion only.
+    assert not list(tmp_path.rglob("*.ipa"))
+    payload = json.loads(status_file.read_text(encoding="utf-8"))
+    assert payload["status"] == "success"
+    assert payload["artifacts"] == []
+    assert payload["new_version"] is None
+    checkpoint = _confirmed_checkpoint(tmp_path, whats_new={"ru": "Исправления"})
+    assert (checkpoint.marketing_version, checkpoint.build_number) == ("1.2.3", "5")
+    assert any(call["path"] == "/v1/builds" for call in asc.calls)  # exact build lookup happened
+
+
 # -- confirmed result, interpolation and registration ---------------------------
 
 

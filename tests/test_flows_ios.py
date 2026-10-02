@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -5,7 +6,7 @@ import typer
 
 from cdt.artifacts import ArtifactKind, BuildArtifact
 from cdt.flows import ios_flow
-from cdt.pipeline import PipelineContext
+from cdt.pipeline import PipelineContext, PipelineExecutor
 from cdt.runner import CommandRunner
 from cdt.services import appstore_state
 from cdt.services.appstore_state import load_upload_record
@@ -13,7 +14,13 @@ from cdt.steps import appstore as appstore_steps
 from cdt.steps import ios as ios_steps
 from cdt.steps import notify as notify_steps
 from cdt.steps import tracker as tracker_steps
-from cdt.steps.appstore import CompleteTestFlightStep, UploadTestFlightIpaStep, UploadTestFlightStep
+from cdt.steps.appstore import (
+    CompleteTestFlightStep,
+    SubmitReviewStep,
+    UploadTestFlightIpaStep,
+    UploadTestFlightStep,
+)
+from tests.test_services_appstore_state import FakeAsc, _stub_client
 
 
 def _pipeline_context(tmp_path, env=None, new_version=None):
@@ -281,6 +288,51 @@ def test_failed_full_upload_does_not_record_build(tmp_path, monkeypatch):
 
     assert excinfo.value.exit_code == 1
     assert load_upload_record(tmp_path, "com.example.app") is None
+
+
+def test_upload_completion_submit_review_pipeline_reuses_the_same_build(tmp_path, monkeypatch):
+    """One pipeline: upload -> completion -> submit_review shares the same build.
+
+    The submission reuses the exact uploaded version, performs no second
+    upload and never changes the build number.
+    """
+
+    uploads = []
+    monkeypatch.setattr(
+        appstore_steps,
+        "_upload_testflight",
+        lambda path, env, changelog, new_version: uploads.append(new_version) or 0,
+    )
+    monkeypatch.setattr(appstore_steps, "_complete_testflight_after_upload", lambda env, changelog, new_version: 0)
+    asc = FakeAsc(monkeypatch)
+    _stub_client(monkeypatch)
+
+    ctx = _pipeline_context(tmp_path, env={"IOS_BUNDLE_ID": "com.example.app"}, new_version="1.2.3+5")
+    _register_ipa(ctx, tmp_path / "App.ipa")
+
+    PipelineExecutor().run(
+        [
+            UploadTestFlightStep("notes"),
+            CompleteTestFlightStep("notes"),
+            SubmitReviewStep(whats_new={"ru": "Исправления"}, release_mode="manual", phased_release=True),
+        ],
+        ctx,
+    )
+
+    # Exactly one upload of exactly the pipeline version; completion and the
+    # submission reused it without a second upload or a changed build number.
+    assert uploads == ["1.2.3+5"]
+    assert ctx.new_version == "1.2.3+5"
+    record = load_upload_record(tmp_path, "com.example.app")
+    assert (record.marketing_version, record.build_number) == ("1.2.3", "5")
+    operations = list((tmp_path / ".cdt" / "appstore" / "operations").glob("*.json"))
+    assert len(operations) == 1
+    checkpoint = json.loads(operations[0].read_text(encoding="utf-8"))
+    assert (checkpoint["marketing_version"], checkpoint["build_number"]) == ("1.2.3", "5")
+    assert checkpoint["phase"] == "confirmed"
+    mutating = asc.mutating()
+    assert len([c for c in mutating if c["path"] == "/v1/reviewSubmissions" and c["method"] == "POST"]) == 1
+    assert len([c for c in mutating if c["path"] == "/v1/reviewSubmissionItems"]) == 1
 
 
 def test_failed_completion_does_not_record_build(tmp_path, monkeypatch):
