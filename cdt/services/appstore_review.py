@@ -57,6 +57,15 @@ OPEN_REVIEW_SUBMISSION_STATES = (
 # appStoreVersionPhasedReleases.phasedReleaseState: enabled but not started yet.
 PHASED_RELEASE_STATE_INACTIVE = "INACTIVE"
 
+# reviewSubmissions.state values that mean the submission has not reached Apple
+# yet (the developer-side stages). Anything else — WAITING_FOR_REVIEW, IN_REVIEW
+# and the terminal ACCEPTED / REJECTED / METADATA_REJECTED / CANCELLED /
+# COMPLETED states — proves Apple accepted the submit request.
+UNSUBMITTED_REVIEW_SUBMISSION_STATES = (
+    REVIEW_SUBMISSION_STATE_DRAFT,
+    REVIEW_SUBMISSION_STATE_READY_FOR_REVIEW,
+)
+
 
 class AppStoreReviewError(Exception):
     """Base class for App Store review preparation failures."""
@@ -78,6 +87,18 @@ class UnknownLocaleError(AppStoreReviewError):
     """A requested ``whatsNew`` locale has no existing version localization."""
 
 
+class VersionStateError(AppStoreReviewError):
+    """The App Store version is in a state that must not be prepared or resubmitted."""
+
+
+class BuildConflictError(AppStoreReviewError):
+    """The version already has a different build selected; CDT does not overwrite it."""
+
+
+class SubmissionConflictError(AppStoreReviewError):
+    """A review submission contains foreign items; CDT does not touch it."""
+
+
 def _attributes(resource: dict) -> dict:
     return resource.get("attributes") or {}
 
@@ -91,6 +112,104 @@ def _related_id(resource: dict, relationship: str) -> str | None:
 
 def _quote(value: str) -> str:
     return urllib.parse.quote(str(value), safe="")
+
+
+def version_state(version: dict) -> str | None:
+    """Return the ``appStoreState`` of an appStoreVersions resource, or None."""
+    return _attributes(version).get("appStoreState")
+
+
+def version_release_type(version: dict) -> str | None:
+    """Return the ``releaseType`` of an appStoreVersions resource, or None."""
+    return _attributes(version).get("releaseType")
+
+
+def version_string(version: dict) -> str | None:
+    return _attributes(version).get("versionString")
+
+
+def version_platform(version: dict) -> str | None:
+    return _attributes(version).get("platform")
+
+
+def ensure_version_editable(version: dict) -> str:
+    """Allow new submission preparation only for an editable version.
+
+    Returns the observed ``appStoreState`` when it is
+    ``PREPARE_FOR_SUBMISSION``. Rejected, already-submitted, awaiting-release
+    and unknown states raise :class:`VersionStateError` with an explanation:
+    CDT never resubmits or overwrites such versions automatically.
+    """
+    state = version_state(version)
+    if state == VERSION_STATE_PREPARE_FOR_SUBMISSION:
+        return state
+    if not state:
+        raise VersionStateError(
+            f"App Store version {version.get('id')} reports no appStoreState; CDT prepares submissions "
+            "only for versions in PREPARE_FOR_SUBMISSION - resolve the version in App Store Connect"
+        )
+    raise VersionStateError(
+        f"App Store version {version.get('id')} is in state {state}; new submission preparation requires "
+        "PREPARE_FOR_SUBMISSION. Rejected, blocked or already-submitted versions must be resolved in "
+        "App Store Connect - CDT does not resubmit or overwrite them automatically"
+    )
+
+
+def get_app_store_version(version_id: str, client: _AscClient) -> dict | None:
+    """Return one appStoreVersions resource by id, or None when it is gone."""
+    try:
+        rsp = appstore._asc_request("GET", f"/v1/appStoreVersions/{_quote(version_id)}", client)
+    except appstore.AscHttpError as exc:
+        if exc.code == 404:
+            return None
+        raise
+    data = rsp.get("data")
+    return data if isinstance(data, dict) else None
+
+
+def get_review_submission(submission_id: str, client: _AscClient) -> dict | None:
+    """Return one reviewSubmissions resource by id, or None when it is gone."""
+    try:
+        rsp = appstore._asc_request("GET", f"/v1/reviewSubmissions/{_quote(submission_id)}", client)
+    except appstore.AscHttpError as exc:
+        if exc.code == 404:
+            return None
+        raise
+    data = rsp.get("data")
+    return data if isinstance(data, dict) else None
+
+
+def get_whats_new(version_id: str, client: _AscClient) -> dict[str, str]:
+    """Return the current ``whatsNew`` text per existing version localization."""
+    texts: dict[str, str] = {}
+    for loc in get_version_localizations(version_id, client):
+        locale = _attributes(loc).get("locale")
+        if isinstance(locale, str):
+            value = _attributes(loc).get("whatsNew")
+            texts[locale] = value if isinstance(value, str) else ""
+    return texts
+
+
+def submission_state(submission: dict) -> str | None:
+    return _attributes(submission).get("state")
+
+
+def submission_version_id(submission: dict) -> str | None:
+    """Return the version the submission was created for, when set."""
+    return _related_id(submission, "appStoreVersionForReview")
+
+
+def item_version_id(item: dict) -> str | None:
+    return _related_id(item, "appStoreVersion")
+
+
+def submission_is_submitted(state: str | None) -> bool:
+    """True when the submission left the unsubmitted stages (DRAFT / READY_FOR_REVIEW).
+
+    Only such a state proves Apple accepted the submit request; a draft alone
+    is never a success.
+    """
+    return state is not None and state not in UNSUBMITTED_REVIEW_SUBMISSION_STATES
 
 
 def _asc_list_responses(path: str, client: _AscClient) -> list[dict]:

@@ -660,3 +660,81 @@ def test_mutating_requests_never_use_blind_retries_across_flow(monkeypatch):
     gets = asc.calls_for("GET")
     assert len(gets) == 8
     assert all(c["retry_ambiguous"] is True for c in gets)  # reads keep the default safe mode
+
+
+# --- resume reads, state gates and submission stage helpers ----------------------
+
+
+def test_get_app_store_version_returns_resource_and_none_on_404(monkeypatch):
+    ScriptedAsc(monkeypatch, [{"data": _version("v-1", "1.2.3", state="PREPARE_FOR_SUBMISSION")}])
+    version = review.get_app_store_version("v-1", _stub_client(monkeypatch))
+    assert version is not None and version["id"] == "v-1"
+
+    ScriptedAsc(monkeypatch, [_http_404("/v1/appStoreVersions/v-1")])
+    assert review.get_app_store_version("v-1", _stub_client(monkeypatch)) is None
+
+
+def test_get_review_submission_returns_resource_and_none_on_404(monkeypatch):
+    ScriptedAsc(monkeypatch, [{"data": _submission("rs-1", "WAITING_FOR_REVIEW")}])
+    submission = review.get_review_submission("rs-1", _stub_client(monkeypatch))
+    assert submission is not None and submission["id"] == "rs-1"
+
+    ScriptedAsc(monkeypatch, [_http_404("/v1/reviewSubmissions/rs-1")])
+    assert review.get_review_submission("rs-1", _stub_client(monkeypatch)) is None
+
+
+def test_get_whats_new_reads_existing_localization_texts(monkeypatch):
+    localizations = [
+        {"id": "loc-ru", "type": "appStoreVersionLocalizations", "attributes": {"locale": "ru", "whatsNew": "Текст"}},
+        {"id": "loc-en", "type": "appStoreVersionLocalizations", "attributes": {"locale": "en-US"}},
+    ]
+    ScriptedAsc(monkeypatch, [_list_rsp(localizations)])
+
+    assert review.get_whats_new("v-1", _stub_client(monkeypatch)) == {"ru": "Текст", "en-US": ""}
+
+
+def test_version_attribute_extractors():
+    version = _version("v-1", "1.2.3", state="WAITING_FOR_REVIEW")
+    version["attributes"]["releaseType"] = "MANUAL"
+    assert review.version_state(version) == "WAITING_FOR_REVIEW"
+    assert review.version_release_type(version) == "MANUAL"
+    assert review.version_string(version) == "1.2.3"
+    assert review.version_platform(version) == "IOS"
+
+
+def test_ensure_version_editable_accepts_prepare_for_submission():
+    version = _version("v-1", "1.2.3", state="PREPARE_FOR_SUBMISSION")
+    assert review.ensure_version_editable(version) == "PREPARE_FOR_SUBMISSION"
+
+
+def test_ensure_version_editable_stops_other_states_with_explanation():
+    for state in ("REJECTED", "METADATA_REJECTED", "WAITING_FOR_REVIEW", "PENDING_DEVELOPER_RELEASE", None):
+        version = _version("v-1", "1.2.3", state=state)
+        with pytest.raises(review.VersionStateError, match="PREPARE_FOR_SUBMISSION") as excinfo:
+            review.ensure_version_editable(version)
+        assert "App Store Connect" in str(excinfo.value)
+
+
+def test_submission_is_submitted_classification():
+    assert not review.submission_is_submitted(None)
+    assert not review.submission_is_submitted(review.REVIEW_SUBMISSION_STATE_DRAFT)
+    assert not review.submission_is_submitted(review.REVIEW_SUBMISSION_STATE_READY_FOR_REVIEW)
+    for submitted_state in ("WAITING_FOR_REVIEW", "IN_REVIEW", "ACCEPTED", "REJECTED", "CANCELLED"):
+        assert review.submission_is_submitted(submitted_state)
+
+
+def test_submission_and_item_version_helpers():
+    submission = {
+        "id": "rs-1",
+        "type": "reviewSubmissions",
+        "relationships": {"appStoreVersionForReview": {"data": {"type": "appStoreVersions", "id": "v-9"}}},
+    }
+    item = {
+        "id": "item-1",
+        "type": "reviewSubmissionItems",
+        "relationships": {"appStoreVersion": {"data": {"type": "appStoreVersions", "id": "v-9"}}},
+    }
+    assert review.submission_version_id(submission) == "v-9"
+    assert review.item_version_id(item) == "v-9"
+    assert review.submission_version_id({"id": "rs-2", "type": "reviewSubmissions"}) is None
+    assert review.item_version_id({"id": "item-2", "type": "reviewSubmissionItems"}) is None
