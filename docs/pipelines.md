@@ -214,6 +214,126 @@ Transient failures are retried up to 4 attempts per request with bounded exponen
 - `ASC_WAIT_TIMEOUT_SEC` (integer, default `30`) sets the overall completion wait for the build to appear and finish processing in TestFlight. It bounds the whole wait, and request retry delays are clamped to the same deadline so retries cannot extend it.
 - Progress is written to the run log as `==> ASC transient failure, attempt N/4 (category); retrying in Xs` lines. When the retry budget is exhausted, the error names the attempt count and the last failure category. No credentials or authorization headers are included in these messages.
 
+## App Store review submission
+
+`appstore.submit_review` continues a finished TestFlight upload: it creates or reuses the App Store version, binds the exact verified build, fills the localized "What's new" text, sets the release mode and phased release, and sends the version for App Store review through the current ASC `reviewSubmissions` flow. It never uploads an IPA, needs no Flutter, Xcode or `xcrun` tooling, and never changes the build number.
+
+There are two equivalent configurations. Add the step after `appstore.complete_testflight` in an existing production pipeline so every release is submitted right after the upload completes:
+
+```yaml
+- sequence:
+    steps:
+      - ios.flutter_build_ipa:
+          profile: prod
+          artifact: ios_ipa
+      - appstore.upload_testflight_ipa:
+          artifact: ios_ipa
+      - appstore.complete_testflight:
+          changelog: prod build
+      - appstore.submit_review:
+          whats_new:
+            ru: "${inputs.whats_new}"
+          release_mode: manual
+          phased_release: true
+```
+
+Or declare a standalone `submit-review` pipeline that submits an already uploaded build later, without rebuilding or re-uploading anything (see [Which build is submitted](#which-build-is-submitted)):
+
+```yaml
+  submit-review:
+    risk: production
+    inputs:
+      whats_new:
+        required: true
+    steps:
+      - appstore.submit_review:
+          whats_new:
+            ru: "${inputs.whats_new}"
+          release_mode: manual
+          phased_release: true
+```
+
+```bash
+cdt run submit-review --input whats_new="Исправления ошибок и улучшения" --confirm submit-review
+```
+
+### Required options
+
+All three options are mandatory and validated before the step runs; a submission can never start with an unspecified text, release mode or phased-release choice:
+
+| Option | Required | Description |
+|---|---|---|
+| `whats_new` | yes | Non-empty mapping from locale to non-empty text, for example `{ru: "Исправления ошибок"}`. Supports the existing `${inputs.*}` interpolation. Only the listed locales are written; other localizations stay untouched. |
+| `release_mode` | yes | `manual` or `automatic`. No default is applied. |
+| `phased_release` | yes | A real boolean (`true`/`false`). No default is applied, and quoted strings such as `"false"` are rejected instead of silently counting as a choice. |
+
+The app is taken from `IOS_BUNDLE_ID`; authentication uses the existing `ASC_KEY_ID`, `ASC_ISSUER_ID`, and `ASC_PRIVATE_KEY_PATH`. No manual app, version, or build input is needed.
+
+### Which build is submitted
+
+The exact build is determined automatically:
+
+- inside a pipeline, the current version context wins: `new_version` (for example `1.2.3+456`) set by the build steps and restored from the status file on resume;
+- a standalone run with no version context reads the record of the last successfully completed TestFlight completion for this bundle ID in this checkout, stored at `.cdt/appstore/uploads/<bundle-key>.json` (the key is a SHA-256 of the bundle ID, so two apps never overwrite each other).
+
+When neither source is available, the step fails with an explicit error telling you to run `appstore.upload_testflight` or `appstore.complete_testflight` for the app first. CDT never picks an arbitrary latest Apple build and never substitutes a previous build for a missing one. The selected build is re-verified in App Store Connect on every submission — the local record is only the source of the choice, never the proof.
+
+Records from runs made before this functionality do not exist. To create a record for an already uploaded build, rerun the completion of that known build with the version context restored from the old run's status file:
+
+```bash
+cdt run prod \
+  --resume-status-file .cdt/runs/<run-id>/status.json \
+  --resume-from appstore.complete_testflight
+```
+
+Completion is idempotent: it re-finds the build, confirms processing, and writes the record without re-uploading the IPA or changing the build number.
+
+### Production confirmation
+
+Every pipeline containing `appstore.submit_review` requires `risk: production` — including the step nested inside `sequence` or `parallel` — and every real run needs the exact CLI confirmation (`cdt run <pipeline> --confirm <pipeline>`), both direct and detached. Existing pipelines do not start submitting versions for review automatically: the shipped `prod` pipeline keeps only building and uploading to TestFlight until you explicitly add the step.
+
+Planning commands (`cdt pipeline inspect`, `cdt pipeline plan`, `cdt run --dry-run`) never contact Apple and never create checkpoints or upload records.
+
+### What manual/automatic and phased release mean
+
+Both `release_mode` values describe what happens **after Apple approves** the version:
+
+- `manual` — the version is held for an explicit release in App Store Connect after approval;
+- `automatic` — the version is released to users automatically once Apple approves it.
+
+`phased_release: true` enables Apple's standard seven-day phased release for automatic updates: the update rolls out to an increasing percentage of users over seven days. It is not an absolute prohibition on getting the update earlier — a user can still update manually in the App Store. `phased_release: false` submits the version without the seven-day rollout.
+
+Apple does not support phased release for some versions, for example the first version of an app. In such cases CDT reports Apple's error and stops instead of silently changing the chosen release behavior.
+
+### What to prepare before submitting
+
+- The app card (description, screenshots, prices, availability) and all other mandatory review data must already exist in App Store Connect. CDT does not edit them; missing mandatory data surfaces as a blocking error from Apple during review.
+- Every locale in `whats_new` must already exist as a version localization. Unknown locales fail with an explanation to prepare them in App Store Connect first — CDT does not create partial app cards.
+- The version must be editable (`PREPARE_FOR_SUBMISSION`). Rejected, already-submitted, awaiting-release, and unknown version states stop with an explanation; CDT never resubmits or overwrites such versions automatically.
+
+### When the step stops instead of submitting
+
+CDT refuses to guess and stops without external changes when:
+
+- no build can be identified (no current version context and no saved record for the app);
+- the App Store version already has a different build selected — an existing build selection is never overwritten automatically;
+- an open review submission belongs to another version, or a submission contains items of other versions — CDT does not add the version to a foreign submission and does not submit it;
+- an unfinished submission operation with different parameters exists for the same app, or another submission for the app is running in this checkout (per-app lock);
+- a response from Apple was lost and the outcome cannot be established with read-only requests — the operation is saved as blocked and requires verification in App Store Connect.
+
+### Checkpoints, resume and unknown outcomes
+
+Every submission writes a versioned checkpoint under `.cdt/appstore/operations/<operation-id>.json`; the operation ID derives from the app, platform, version, build number and the canonical submission parameters. The checkpoint stores only non-secret values and is written atomically before every external change — nothing is sent to Apple if the checkpoint could not be saved. A per-app lock file under `.cdt/appstore/locks/` serializes submissions within this checkout.
+
+- Resume (`cdt run <pipeline> --resume-status-file .cdt/runs/<run-id>/status.json --skip-completed`) skips confirmed steps and continues an unfinished operation from its recorded phase; every re-run re-verifies the checkpoint against App Store Connect, so the local phase is never treated as proof.
+- An identical already-confirmed operation is re-verified remotely and returns its stored result without submitting again; changed parameters while an operation is unfinished stop with an explicit conflict.
+- After a lost response, the step verifies the version, settings, and submission composition with GET requests. An accepted submission completes the operation without repeating the submit request; a remaining ambiguity saves a blocked state and fails with an explicit message naming the checkpoint.
+- The safe reaction to a blocked result is verifying the version and the submission in App Store Connect. Deleting a checkpoint is **not** a safe way to retry: it only erases CDT's memory of changes that may already have been applied remotely.
+
+A successful step means Apple accepted the submission and it left the unsubmitted stage — **not** that Apple approved the version or that users can download it. The final message states this distinction explicitly; approval and the actual release happen later and outside this step.
+
+See [Run records → App Store review checkpoints](runs.md#app-store-review-checkpoints) for how checkpoints interact with run status and resume.
+
 ## Google Play upload (AAB)
 
 `google_play.upload_aab` uploads one named AAB artifact and creates one release on one explicitly chosen Google Play track through the Google Play Android Publisher API. It is unrelated to Firebase App Distribution and does not read Firebase credentials.

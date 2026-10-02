@@ -34,6 +34,14 @@ pipelines:
                       artifact: ios_ipa
                   - appstore.complete_testflight:
                       changelog: prod build
+                  # Optional: submit the same build for App Store review right
+                  # after completion. Requires risk: production (already set)
+                  # and the exact CLI confirmation. See docs/pipelines.md.
+                  # - appstore.submit_review:
+                  #     whats_new:
+                  #       ru: "${inputs.whats_new}"
+                  #     release_mode: manual
+                  #     phased_release: true
             - sequence:
                 steps:
                   - android.build_aab:
@@ -86,3 +94,19 @@ pipelines:
             - firebase.upload_app_distribution:
                 artifact: android_aab
                 release_notes_from_ids: true
+
+  # Standalone App Store review submission for an already uploaded build:
+  # no IPA build, no re-upload, no manual version/build input. The app comes
+  # from IOS_BUNDLE_ID; the build comes from the pipeline version context or
+  # the last recorded TestFlight completion. Requires production confirmation.
+  submit-review:
+    risk: production
+    inputs:
+      whats_new:
+        required: true
+    steps:
+      - appstore.submit_review:
+          whats_new:
+            ru: "${inputs.whats_new}"
+          release_mode: manual
+          phased_release: true

@@ -202,6 +202,7 @@ Use `cdt pipeline steps` for the complete list. Common built-ins:
 - `appstore.upload_testflight`
 - `appstore.upload_testflight_ipa`
 - `appstore.complete_testflight`
+- `appstore.submit_review`
 - `google_play.upload_aab`
 - `artifact.copy_to_downloads`
 - `hook.python_script`
@@ -211,6 +212,12 @@ Use `cdt pipeline steps` for the complete list. Common built-ins:
 Build steps use `profile` for CDT presets (`profile: prod` adds `--dart-define=ENV=prod`). Flutter `flavor` is separate. Build steps do not run `flutter pub get` or increment versions implicitly.
 
 `appstore.upload_testflight` keeps the full upload cycle in one step and remains supported. New pipelines should prefer the resumable pair `appstore.upload_testflight_ipa` (iTMSTransporter upload only) followed by `appstore.complete_testflight` (find the uploaded build, wait for processing, set the changelog), so a failed completion can resume without re-uploading the IPA. See [Pipelines](docs/pipelines.md) for details.
+
+## App Store review submission
+
+`appstore.submit_review` sends the completed TestFlight build for App Store review: it creates or reuses the App Store version, binds the exact verified build, fills localized "What's new" text, sets the release mode and phased release, and submits through the ASC `reviewSubmissions` flow with durable checkpoints and safe recovery. The app comes from `IOS_BUNDLE_ID`; the build is taken from the current pipeline version context or the last recorded TestFlight completion — never an arbitrary latest Apple build. Required options: `whats_new` (locale → text mapping), `release_mode` (`manual`/`automatic` release after Apple approval), and `phased_release` (a real boolean for Apple's standard seven-day rollout).
+
+Every pipeline containing the step requires `risk: production` and the exact CLI confirmation (`cdt run <pipeline> --confirm <pipeline>`). Success means the submission was sent for review — not Apple approval and not user availability. Existing pipelines never start submitting automatically: add the step explicitly, either after `appstore.complete_testflight` or as a standalone `submit-review` pipeline that needs no rebuild or re-upload. The app card, version localizations, and all other mandatory review data must already exist in App Store Connect. See [App Store review submission](docs/pipelines.md#app-store-review-submission) for pipeline examples, the meaning of release modes, prerequisites, and recovery rules.
 
 ## Firebase App Distribution
 
