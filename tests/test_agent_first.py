@@ -3,18 +3,22 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.error
 from pathlib import Path
+from typing import Any
 
 import yaml
 from typer.testing import CliRunner
 
+import cdt.steps.google_play as google_play_step
 from cdt.agent_release import release_status, stop_release
 from cdt.cli import app
 from cdt.pipeline.builtins import register_builtin_steps
 from cdt.pipeline.registry import _clear_steps_for_tests, list_step_metadata
 from cdt.runs import create_run, list_runs, read_json, run_paths, write_exit_code
 from cdt.schema import bundled_schema_path, schema_payload
+from cdt.services.google_play_state import PublishOutcome
 
 runner = CliRunner()
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,12 +28,14 @@ RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 def setup_function():
     _clear_steps_for_tests()
     sys.modules.pop("cdt_steps.demo", None)
+    sys.modules.pop("cdt_steps.play", None)
     sys.modules.pop("cdt_steps", None)
 
 
 def teardown_function():
     _clear_steps_for_tests()
     sys.modules.pop("cdt_steps.demo", None)
+    sys.modules.pop("cdt_steps.play", None)
     sys.modules.pop("cdt_steps", None)
 
 
@@ -99,6 +105,190 @@ def test_production_pipeline_can_be_confirmed_interactively(tmp_path, monkeypatc
 
     assert result.exit_code == 0
     assert "Enter the pipeline name" in result.output
+
+
+# -- Google Play production confirmation gates -------------------------------------
+
+
+def _write_play_project(path: Path) -> None:
+    """Production pipeline that registers an AAB and uploads it to Google Play."""
+    package = path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "play.py").write_text(
+        "\n".join(
+            [
+                "from cdt.artifacts import ArtifactKind, BuildArtifact",
+                "from cdt.sdk import step",
+                "",
+                "@step('demo.aab')",
+                "def make_aab(ctx, output: str):",
+                "    aab = ctx.cwd / output",
+                "    aab.write_bytes(b'android-app-bundle-bytes')",
+                "    ctx.register_artifact('aab', BuildArtifact(ArtifactKind.AAB, aab, 'Android AAB'))",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "plugins:",
+                "  - cdt_steps.play",
+                "pipelines:",
+                "  play:",
+                "    risk: production",
+                "    steps:",
+                "      - demo.aab: {output: app-release.aab}",
+                "      - google_play.upload_aab:",
+                "          artifact: aab",
+                "          package_name: com.example.app",
+                "          track: internal",
+                "          release_status: completed",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _patch_publishing_api(
+    monkeypatch: Any,
+    *,
+    outcome: PublishOutcome | None = None,
+    error: Exception | None = None,
+    captured: dict[str, Any] | None = None,
+) -> dict[str, int]:
+    """Stub the Android Publisher client and operation, recording each construction."""
+    calls = {"client": 0, "operation": 0}
+    captured = captured if captured is not None else {}
+
+    def fake_client(env: dict[str, str], cwd: Path):
+        calls["client"] += 1
+        captured["env"] = env
+        captured["cwd"] = cwd
+        return ("fake-play-client",)
+
+    class FakeOperation:
+        def __init__(self, client: Any, cwd: Path, intent: Any, aab_path: Path):
+            calls["operation"] += 1
+            captured["intent"] = intent
+            captured["aab_path"] = aab_path
+
+        def run(self) -> PublishOutcome:
+            if error is not None:
+                raise error
+            assert outcome is not None
+            return outcome
+
+    monkeypatch.setattr(google_play_step, "GooglePlayClient", fake_client)
+    monkeypatch.setattr(google_play_step, "GooglePlayPublishOperation", FakeOperation)
+    return calls
+
+
+def _confirmed_outcome() -> PublishOutcome:
+    return PublishOutcome(
+        operation_id="op",
+        package_name="com.example.app",
+        track="internal",
+        release_status="completed",
+        version_code=40,
+        aab_sha256="a" * 64,
+        changes_sent_for_review=True,
+    )
+
+
+def test_play_run_without_or_wrong_confirmation_never_calls_publishing_api(tmp_path, monkeypatch):
+    _write_play_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    calls = _patch_publishing_api(monkeypatch)
+
+    missing = runner.invoke(app, ["run", "play"])
+    wrong = runner.invoke(app, ["run", "play", "--confirm", "wrong"])
+
+    # Without --confirm the interactive prompt is offered and never satisfied;
+    # with a wrong value the exact-confirmation requirement fails the run.
+    missing_visible = " ".join(re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", missing.output).split())
+    assert "Enter the pipeline name to continue" in missing_visible
+    wrong_visible = " ".join(re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", wrong.output).split())
+    assert "requires --confirm play" in wrong_visible
+    for rejected in (missing, wrong):
+        assert rejected.exit_code != 0
+    assert calls == {"client": 0, "operation": 0}
+    assert not (tmp_path / ".cdt" / "runs").exists()
+    assert not (tmp_path / ".cdt" / "google-play").exists()
+
+
+def test_play_run_with_exact_confirmation_allows_the_publishing_step(tmp_path, monkeypatch):
+    _write_play_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    captured: dict[str, Any] = {}
+    calls = _patch_publishing_api(monkeypatch, outcome=_confirmed_outcome(), captured=captured)
+
+    result = runner.invoke(app, ["run", "play", "--confirm", "play"])
+
+    assert result.exit_code == 0, result.output
+    assert calls["client"] == 1
+    assert calls["operation"] == 1
+    assert "commit: confirmed" in result.output
+    assert captured["intent"].package_name == "com.example.app"
+    assert captured["intent"].track == "internal"
+    assert captured["intent"].release_status == "completed"
+    runs = list_runs(tmp_path)
+    assert len(runs) == 1
+    assert read_json(run_paths(tmp_path, runs[0]["run_id"]).status)["status"] == "success"
+
+
+def test_detached_play_start_without_exact_confirmation_requests_it_before_any_run(tmp_path, monkeypatch):
+    _write_play_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    calls = _patch_publishing_api(monkeypatch)
+
+    missing = runner.invoke(app, ["agent-release", "start", "play", "--json"])
+    wrong = runner.invoke(app, ["agent-release", "start", "play", "--confirm", "wrong", "--json"])
+
+    for rejected in (missing, wrong):
+        payload = json.loads(rejected.output)
+        assert rejected.exit_code == 2
+        assert payload["status"] == "confirmation_required"
+        assert payload["required_confirmation"] == "play"
+    assert calls == {"client": 0, "operation": 0}
+    assert not (tmp_path / ".cdt" / "runs").exists()
+    assert not (tmp_path / ".cdt" / "google-play").exists()
+
+
+def test_detached_play_start_with_exact_confirmation_runs_the_step_offline_of_credentials(
+    tmp_path, monkeypatch
+):
+    _write_play_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    # The ADC file is missing, so the detached worker can only fail at credential
+    # loading: reaching that failure proves the step was allowed to run while the
+    # publishing API stays unreachable without real credentials.
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(tmp_path / "missing-adc.json"))
+
+    started = runner.invoke(app, ["agent-release", "start", "play", "--confirm", "play", "--json"])
+
+    payload = json.loads(started.output)
+    assert started.exit_code == 0, started.output
+    run_id = payload["run_id"]
+    paths = run_paths(tmp_path, run_id)
+    deadline = time.time() + 60
+    while not paths.exit.exists() and time.time() < deadline:
+        time.sleep(0.1)
+    assert paths.exit.exists(), "detached Google Play worker did not finish"
+
+    status = read_json(paths.status)
+    assert status["status"] == "failed"
+    assert "GOOGLE_APPLICATION_CREDENTIALS file not found" in status["error"]
+    # The publication never got far enough to open an edit or save a checkpoint.
+    assert not (tmp_path / ".cdt" / "google-play" / "operations").exists()
 
 
 def test_background_start_reports_config_errors_as_json(tmp_path, monkeypatch):

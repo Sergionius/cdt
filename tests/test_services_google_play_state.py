@@ -426,6 +426,76 @@ def test_completed_release_replaces_old_without_merging_version_codes(tmp_path, 
     assert backend.tracks["internal"] == [{"status": "completed", "versionCodes": [40]}]
 
 
+@pytest.mark.parametrize(
+    ("status_options", "expected_release"),
+    [
+        pytest.param(
+            {"release_status": "draft", "release_notes": {"en-US": "New draft"}},
+            {
+                "status": "draft",
+                "versionCodes": [40],
+                "releaseNotes": [{"language": "en-US", "text": "New draft"}],
+            },
+            id="draft",
+        ),
+        pytest.param(
+            {"release_status": "inProgress", "user_fraction": 0.25},
+            {"status": "inProgress", "versionCodes": [40], "userFraction": 0.25},
+            id="staged-rollout",
+        ),
+        pytest.param(
+            {"release_status": "completed"},
+            {"status": "completed", "versionCodes": [40]},
+            id="completed",
+        ),
+    ],
+)
+@pytest.mark.parametrize("track_setup", [pytest.param("missing"), pytest.param("empty")])
+def test_new_release_on_track_without_completed_base_stands_alone(
+    tmp_path, backend, aab, status_options, expected_release, track_setup
+):
+    if track_setup == "empty":
+        backend.set_track("internal", [])
+    options = dict(status_options)
+    if options["release_status"] == "completed":
+        options.pop("release_notes", None)
+    intent = make_intent(**options)
+    operation = make_operation(backend, tmp_path, intent, aab)
+
+    outcome = operation.run()
+
+    assert outcome.changes_sent_for_review is (intent.release_status != "draft")
+    assert backend.tracks["internal"] == [expected_release]
+    checkpoint = load_checkpoint(checkpoint_path(tmp_path, outcome.operation_id))
+    assert checkpoint.source_release is None
+
+
+def test_draft_and_staged_rollout_retain_the_previous_completed_release(tmp_path, backend, aab):
+    attempts = (
+        ("draft", {"release_notes": {"en-US": "Next"}}),
+        ("inProgress", {"user_fraction": 0.5}),
+    )
+    for release_status, extra in attempts:
+        other_aab = tmp_path / f"app-{release_status}.aab"
+        other_aab.write_bytes(AAB_BYTES + release_status.encode("utf-8"))
+        backend.set_track("beta", [completed_release(11, name="1.0.0")])
+        intent = make_intent(track="beta", release_status=release_status, **extra)
+        operation = make_operation(backend, tmp_path, intent, other_aab)
+
+        outcome = operation.run()
+
+        statuses = [release["status"] for release in backend.tracks["beta"]]
+        assert statuses == ["completed", release_status], release_status
+        retained, new_release = backend.tracks["beta"]
+        assert retained == completed_release(11, name="1.0.0"), release_status
+        assert new_release["versionCodes"] == [outcome.version_code]
+        assert new_release["status"] == release_status
+        if release_status == "inProgress":
+            assert new_release["userFraction"] == 0.5
+        checkpoint = load_checkpoint(checkpoint_path(tmp_path, outcome.operation_id))
+        assert checkpoint.source_release == completed_release(11, name="1.0.0")
+
+
 def test_intent_checkpoint_exists_before_first_external_call(tmp_path, backend, aab):
     intent = make_intent()
     sha = google_play.compute_file_sha256(aab)
@@ -749,6 +819,31 @@ def test_commit_rejection_while_under_review_is_propagated_without_retry(tmp_pat
     assert checkpoint.phase == PHASE_TRACK_UPDATED
 
 
+def test_retry_after_review_completes_commits_again_without_reupload(tmp_path, backend, aab):
+    backend.fail_once(
+        "edits.commit",
+        GooglePlayError(STAGE_EDIT_COMMIT, "app is currently under review", http_status=409),
+    )
+    intent = make_intent()
+    with pytest.raises(GooglePlayError):
+        make_operation(backend, tmp_path, intent, aab).run()
+
+    # The review finished; the same operation is retried after the rejection.
+    outcome = make_operation(backend, tmp_path, intent, aab).run()
+
+    assert outcome.version_code == 40
+    # The edit that Google kept open is committed once more, unchanged: the same
+    # upload and the same track payload, never a re-upload and never a flag
+    # switch like changesNotSentForReview=true.
+    assert backend.calls.count("edits.commit") == 2
+    assert backend.calls.count("edits.bundles.upload") == 1
+    assert backend.calls.count("edits.insert") == 1
+    sha = google_play.compute_file_sha256(aab)
+    checkpoint = load_checkpoint(checkpoint_path(tmp_path, compute_operation_id(intent, sha)))
+    assert checkpoint.phase == PHASE_CONFIRMED
+    assert backend.tracks["internal"] == [{"status": "completed", "versionCodes": [40]}]
+
+
 # -- track conflicts ------------------------------------------------------------------
 
 
@@ -812,6 +907,76 @@ def test_unfinished_operation_with_changed_parameters_blocks_publication(tmp_pat
 
     assert "blocks a publication with changed parameters" in str(excinfo.value)
     assert backend.calls == []
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        pytest.param({"track": "beta"}, id="track"),
+        pytest.param({"release_status": "draft"}, id="release-status"),
+        pytest.param({"release_notes": {"en-US": "Different notes"}}, id="release-notes"),
+        pytest.param({"release_name": "Release 2.0"}, id="release-name"),
+        pytest.param({"release_status": "inProgress", "user_fraction": 0.25}, id="staged-fraction"),
+    ],
+)
+def test_changed_release_parameters_between_attempts_are_blocked(
+    tmp_path, backend, aab, change
+):
+    seed_checkpoint(
+        tmp_path,
+        make_intent(),
+        aab,
+        phase=PHASE_TRACK_UPDATED,
+        edit_id="edit-1",
+        version_code=40,
+    )
+    operation = make_operation(backend, tmp_path, make_intent(**change), aab)
+
+    with pytest.raises(ConflictingOperationError):
+        operation.run()
+
+    assert backend.calls == [], "a blocked attempt must not touch the publishing API"
+
+
+def test_changed_aab_content_between_attempts_maps_to_new_blocked_operation(tmp_path, backend, aab):
+    seed_checkpoint(
+        tmp_path,
+        make_intent(),
+        aab,
+        phase=PHASE_EDIT_CREATED,
+        edit_id="edit-1",
+        version_code=40,
+    )
+    other_aab = aab.with_name("app-release-v2.aab")
+    other_aab.write_bytes(AAB_BYTES + b"-v2")
+    base_sha = google_play.compute_file_sha256(aab)
+    other_sha = google_play.compute_file_sha256(other_aab)
+    assert compute_operation_id(make_intent(), other_sha) != compute_operation_id(make_intent(), base_sha)
+
+    operation = make_operation(backend, tmp_path, make_intent(), other_aab)
+
+    with pytest.raises(ConflictingOperationError):
+        operation.run()
+
+    assert backend.calls == []
+
+
+def test_changed_package_between_attempts_publishes_as_separate_operation(tmp_path, backend, aab):
+    seed_checkpoint(
+        tmp_path,
+        make_intent(),
+        aab,
+        phase=PHASE_TRACK_UPDATED,
+        edit_id="edit-1",
+        version_code=40,
+    )
+    operation = make_operation(backend, tmp_path, make_intent(package_name=OTHER_PACKAGE), aab)
+
+    outcome = operation.run()
+
+    assert outcome.package_name == OTHER_PACKAGE
+    assert outcome.operation_id != compute_operation_id(make_intent(), google_play.compute_file_sha256(aab))
+    assert outcome.version_code == 40
 
 
 def test_confirmed_operation_with_other_parameters_does_not_block(tmp_path, backend, aab):
@@ -948,6 +1113,53 @@ def test_package_lock_is_released_after_run(tmp_path, backend, aab):
     )
     lock.acquire()
     lock.release()
+
+
+def test_concurrent_publications_of_same_package_allow_exactly_one(tmp_path, backend, aab):
+    started = {"first": threading.Event(), "second": threading.Event()}
+
+    def before_call(label: str) -> None:
+        # The lock holder pauses inside its first API call, so the other worker
+        # necessarily collides with a held lock instead of racing the release.
+        started["first"].wait(timeout=10)
+        started["second"].wait(timeout=10)
+
+    backend.before_call = before_call
+    results: dict[str, Any] = {}
+
+    def worker(name: str) -> None:
+        started[name].set()
+        try:
+            results[name] = make_operation(backend, tmp_path, make_intent(), aab).run()
+        except GooglePlayStateError as exc:
+            results[name] = exc
+
+    workers = [threading.Thread(target=worker, args=(name,)) for name in ("first", "second")]
+    for thread in workers:
+        thread.start()
+    for thread in workers:
+        thread.join(timeout=30)
+
+    outcomes = list(results.values())
+    succeeded = [outcome for outcome in outcomes if isinstance(outcome, google_play_state.PublishOutcome)]
+    refused = [outcome for outcome in outcomes if isinstance(outcome, OperationLockedError)]
+    assert len(succeeded) == 1
+    assert len(refused) == 1
+    assert succeeded[0].version_code == 40
+    assert PACKAGE in str(refused[0])
+    # The refused worker never reached the publishing API; the call log is the
+    # winner's ordinary happy path.
+    assert backend.calls == [
+        "edits.insert",
+        "edits.tracks.get",
+        "edits.bundles.list",
+        "edits.bundles.upload",
+        "edits.tracks.update",
+        "edits.commit",
+    ]
+    checkpoints = list((tmp_path / ".cdt" / "google-play" / "operations").glob("*.json"))
+    assert len(checkpoints) == 1
+    assert json.loads(checkpoints[0].read_text(encoding="utf-8"))["phase"] == PHASE_CONFIRMED
 
 
 # -- checkpoint hygiene -----------------------------------------------------------------

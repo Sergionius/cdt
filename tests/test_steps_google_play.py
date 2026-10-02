@@ -9,6 +9,8 @@ from __future__ import annotations
 import inspect
 import json
 import re
+import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -26,12 +28,18 @@ from cdt.pipeline.preflight import preflight_payload
 from cdt.pipeline.registry import _clear_steps_for_tests
 from cdt.schema import schema_payload
 from cdt.services.google_play import (
+    STAGE_EDIT_COMMIT,
     STAGE_EDIT_GET,
     STAGE_TRACK_GET,
     GooglePlayError,
     compute_file_sha256,
 )
-from cdt.services.google_play_state import PublishIntent, PublishOutcome
+from cdt.services.google_play_state import (
+    PublishIntent,
+    PublishOutcome,
+    TrackConflictError,
+    UnknownResultError,
+)
 from cdt.steps.google_play import GooglePlayUploadAabStep
 
 runner = CliRunner()
@@ -42,10 +50,14 @@ PACKAGE = "com.example.app"
 def setup_function():
     _clear_steps_for_tests()
     register_builtin_steps()
+    for module_name in ("cdt_steps.demo", "cdt_steps.play", "cdt_steps"):
+        sys.modules.pop(module_name, None)
 
 
 def teardown_function():
     _clear_steps_for_tests()
+    for module_name in ("cdt_steps.demo", "cdt_steps.play", "cdt_steps"):
+        sys.modules.pop(module_name, None)
 
 
 def _context(tmp_path: Path, *, env: dict[str, str] | None = None) -> PipelineContext:
@@ -205,13 +217,22 @@ def test_missing_aab_file_is_rejected(tmp_path):
 # -- run wiring and safe final messages -------------------------------------------
 
 
-def _patch_operation(monkeypatch, outcome: PublishOutcome, captured: dict[str, Any]) -> None:
+def _patch_operation(
+    monkeypatch,
+    outcome: PublishOutcome | None,
+    captured: dict[str, Any],
+    *,
+    error: Exception | None = None,
+) -> None:
     class FakeOperation:
         def __init__(self, client: Any, cwd: Path, intent: PublishIntent, aab_path: Path):
             captured["intent"] = intent
             captured["aab_path"] = aab_path
 
         def run(self) -> PublishOutcome:
+            if error is not None:
+                raise error
+            assert outcome is not None
             return outcome
 
     def fake_client(env: dict[str, str], cwd: Path):
@@ -319,6 +340,140 @@ def test_resumed_outcome_reports_no_repeated_mutation(tmp_path, monkeypatch, cap
     assert "nothing was uploaded or committed again" in out
 
 
+# -- review rejections, Console-required errors and message boundaries ---------------
+
+
+def test_review_rejection_fails_without_success_claims_or_flag_suggestions(tmp_path, monkeypatch, capsys):
+    error = GooglePlayError(STAGE_EDIT_COMMIT, "app is currently under review", http_status=409)
+    captured: dict[str, Any] = {}
+    _patch_operation(monkeypatch, None, captured, error=error)
+
+    with pytest.raises(typer.BadParameter) as excinfo:
+        _step(track="production", release_status="completed").run(_context(tmp_path))
+
+    out = capsys.readouterr().out
+    assert "app is currently under review" in str(excinfo.value)
+    # The definite Google rejection is surfaced as-is: no success claims, no
+    # promise of a review submission and no suggestion to retry with flags that
+    # would cancel the running review.
+    assert "✅" not in out
+    assert "accepted the changes" not in out
+    assert "commit: confirmed" not in out
+    assert "sent for review" not in out
+    all_text = out + str(excinfo.value)
+    assert "changesNotSentForReview" not in all_text
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_fragment"),
+    [
+        pytest.param(
+            TrackConflictError(
+                "target track 'internal' has a release with status 'draft'; CDT stops instead of replacing "
+                "it - resolve the track in Google Play Console"
+            ),
+            "Google Play Console",
+            id="track-conflict",
+        ),
+        pytest.param(
+            UnknownResultError(
+                "Google Play publication result is unknown: the track update response was lost. Verify the "
+                "release in Google Play Console before doing anything else"
+            ),
+            "result is unknown",
+            id="unknown-result",
+        ),
+        pytest.param(
+            GooglePlayError(
+                STAGE_EDIT_COMMIT, "The current user has insufficient permissions", http_status=403
+            ),
+            "insufficient permissions",
+            id="permission-denied",
+        ),
+    ],
+)
+def test_console_required_errors_stop_without_success_or_review_claims(
+    tmp_path, monkeypatch, capsys, error, expected_fragment
+):
+    captured: dict[str, Any] = {}
+    _patch_operation(monkeypatch, None, captured, error=error)
+
+    with pytest.raises(typer.BadParameter) as excinfo:
+        _step().run(_context(tmp_path))
+
+    out = capsys.readouterr().out
+    assert expected_fragment in str(excinfo.value)
+    # Console-bound problems are never turned into success and never promise
+    # that changes were submitted for review.
+    assert "✅" not in out
+    assert "accepted the changes" not in out
+    assert "commit: confirmed" not in out
+    assert "sent for review" not in out
+    assert "Draft release created" not in out
+
+
+def test_final_messages_keep_commit_review_managed_publishing_and_release_separate(
+    tmp_path, monkeypatch, capsys
+):
+    captured: dict[str, Any] = {}
+    _patch_operation(
+        monkeypatch,
+        PublishOutcome(
+            operation_id="op",
+            package_name=PACKAGE,
+            track="internal",
+            release_status="draft",
+            version_code=40,
+            aab_sha256="abc",
+            changes_sent_for_review=False,
+        ),
+        captured,
+    )
+
+    _step(release_status="draft").run(_context(tmp_path))
+
+    draft_out = capsys.readouterr().out
+    assert "commit: confirmed" in draft_out
+    assert "Draft release created" in draft_out
+    assert "NOT sent for review" in draft_out
+    assert "nothing is published" in draft_out
+    assert "not available to users" in draft_out
+    # A draft never mixes in review approval or managed-publishing wording.
+    assert "Managed publishing" not in draft_out
+    assert "accepted the changes" not in draft_out
+    assert "Review approval" not in draft_out
+
+    _patch_operation(
+        monkeypatch,
+        PublishOutcome(
+            operation_id="op",
+            package_name=PACKAGE,
+            track="production",
+            release_status="completed",
+            version_code=41,
+            aab_sha256="abc",
+            changes_sent_for_review=True,
+        ),
+        captured,
+    )
+
+    _step(track="production", release_status="completed").run(_context(tmp_path))
+
+    completed_out = capsys.readouterr().out
+    assert "commit: confirmed" in completed_out
+    assert "accepted the changes" in completed_out
+    assert "Review approval and user availability were NOT verified" in completed_out
+    assert "manual" in completed_out
+    assert "Publish in Google Play Console" in completed_out
+    assert "if it applies" in completed_out
+    assert "CDT cannot detect which mode is enabled" in completed_out
+    # A confirmed commit is never reported as approval or user availability.
+    assert "Draft release created" not in completed_out
+    assert "was approved" not in completed_out
+    assert "is now available" not in completed_out
+    assert "successfully published" not in completed_out
+
+
 # -- offline end-to-end against the fake Android Publisher API ---------------------
 
 
@@ -421,6 +576,216 @@ def test_step_staged_rollout_keeps_completed_base_release(tmp_path, monkeypatch,
     assert staged["userFraction"] == 0.25
 
 
+def test_step_draft_publication_keeps_previous_completed_release(tmp_path, monkeypatch, capsys):
+    client = FakePlayClient()
+    client.app_tracks["production"] = [{"status": "completed", "versionCodes": [39], "name": "1.0.0"}]
+    monkeypatch.setattr(google_play_step, "GooglePlayClient", lambda env, cwd: client)
+    ctx = _context(tmp_path)
+
+    _step(
+        track="production",
+        release_status="draft",
+        release_notes={"en-US": "Next drop"},
+    ).run(ctx)
+
+    out = capsys.readouterr().out
+    # The retained completed release stays next to the new draft; only the draft
+    # message is shown and it never claims a review submission or publication.
+    assert client.app_tracks["production"] == [
+        {"status": "completed", "versionCodes": [39], "name": "1.0.0"},
+        {
+            "status": "draft",
+            "versionCodes": [40],
+            "releaseNotes": [{"language": "en-US", "text": "Next drop"}],
+        },
+    ]
+    assert "Draft release created" in out
+    assert "NOT sent for review" in out
+
+
+# -- parallel branches keep different apps strictly isolated -------------------------
+
+
+class MultiAppPlayClient:
+    """Thread-safe duck-typed GooglePlayClient with per-package app state."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._edit_counter = 0
+        self.apps: dict[str, dict[str, Any]] = {}
+
+    def _app(self, package_name: str) -> dict[str, Any]:
+        return self.apps.setdefault(
+            package_name,
+            {"committed_bundles": {}, "tracks": {}, "edits": {}, "next_version_code": 40},
+        )
+
+    def create_edit(self, package_name: str) -> dict[str, Any]:
+        with self._lock:
+            self._edit_counter += 1
+            edit_id = f"edit-{self._edit_counter}"
+            app = self._app(package_name)
+            app["edits"][edit_id] = {
+                "bundles": dict(app["committed_bundles"]),
+                "tracks": {track: list(releases) for track, releases in app["tracks"].items()},
+            }
+            return {"id": edit_id, "expiryTimeSeconds": "43200"}
+
+    def get_edit(self, package_name: str, edit_id: str) -> dict[str, Any]:
+        with self._lock:
+            if edit_id not in self._app(package_name)["edits"]:
+                raise GooglePlayError(STAGE_EDIT_GET, "edit not found", http_status=404)
+            return {"id": edit_id}
+
+    def delete_edit(self, package_name: str, edit_id: str) -> None:
+        with self._lock:
+            self._app(package_name)["edits"].pop(edit_id, None)
+
+    def list_bundles(self, package_name: str, edit_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            edit = self._app(package_name)["edits"][edit_id]
+            return [dict(bundle) for _, bundle in sorted(edit["bundles"].items())]
+
+    def upload_bundle(self, package_name: str, edit_id: str, aab_path: Path) -> dict[str, Any]:
+        with self._lock:
+            app = self._app(package_name)
+            bundle = {
+                "versionCode": app["next_version_code"],
+                "sha256": compute_file_sha256(Path(aab_path)),
+            }
+            app["next_version_code"] += 1
+            app["edits"][edit_id]["bundles"][bundle["versionCode"]] = bundle
+            return dict(bundle)
+
+    def get_track(self, package_name: str, edit_id: str, track: str) -> dict[str, Any]:
+        with self._lock:
+            releases = self._app(package_name)["edits"][edit_id]["tracks"].get(track)
+            if releases is None:
+                raise GooglePlayError(STAGE_TRACK_GET, "track not found", http_status=404)
+            return {"track": track, "releases": list(releases)}
+
+    def update_track(
+        self, package_name: str, edit_id: str, track: str, releases: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        with self._lock:
+            edit = self._app(package_name)["edits"][edit_id]
+            edit["tracks"][track] = [dict(release) for release in releases]
+            return {"track": track, "releases": list(releases)}
+
+    def commit_edit(self, package_name: str, edit_id: str) -> dict[str, Any]:
+        with self._lock:
+            app = self._app(package_name)
+            data = app["edits"].pop(edit_id)
+            app["committed_bundles"].update(data["bundles"])
+            app["tracks"] = {track: list(releases) for track, releases in data["tracks"].items()}
+            return {"id": edit_id}
+
+
+def _write_parallel_play_project(tmp_path: Path) -> None:
+    """Two apps published by two parallel branches with fully explicit parameters."""
+    package = tmp_path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "play.py").write_text(
+        "\n".join(
+            [
+                "from cdt.artifacts import ArtifactKind, BuildArtifact",
+                "from cdt.sdk import step",
+                "",
+                "@step('demo.aab')",
+                "def make_aab(ctx, artifact: str, output: str, content: str):",
+                "    aab = ctx.cwd / output",
+                "    aab.write_bytes(('aab-' + content).encode('utf-8'))",
+                "    ctx.register_artifact(artifact, BuildArtifact(ArtifactKind.AAB, aab, 'Android AAB'))",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "plugins:",
+                "  - cdt_steps.play",
+                "pipelines:",
+                "  apps:",
+                "    risk: production",
+                "    steps:",
+                "      - parallel:",
+                "          steps:",
+                "            - demo.aab: {artifact: aab-one, output: one.aab, content: first}",
+                "            - demo.aab: {artifact: aab-two, output: two.aab, content: second}",
+                "      - parallel:",
+                "          steps:",
+                "            - google_play.upload_aab:",
+                "                artifact: aab-one",
+                "                package_name: com.example.one",
+                "                track: internal",
+                "                release_status: completed",
+                "                release_notes:",
+                "                  en-US: First app notes",
+                "            - google_play.upload_aab:",
+                "                artifact: aab-two",
+                "                package_name: com.example.two",
+                "                track: beta",
+                "                release_status: draft",
+                "                release_notes:",
+                "                  en-US: Second app notes",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_parallel_branches_keep_different_apps_and_artifacts_isolated(tmp_path, monkeypatch):
+    _write_parallel_play_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    for module_name in ("cdt_steps.play", "cdt_steps"):
+        sys.modules.pop(module_name, None)
+    client = MultiAppPlayClient()
+    monkeypatch.setattr(google_play_step, "GooglePlayClient", lambda env, cwd: client)
+
+    result = runner.invoke(app, ["run", "apps", "--confirm", "apps"])
+
+    assert result.exit_code == 0, result.output
+    # Each branch delivered its own artifact, package, track, status and notes:
+    # no parameter or bundle ever crossed between the apps.
+    assert client.apps["com.example.one"]["tracks"]["internal"] == [
+        {
+            "status": "completed",
+            "versionCodes": [40],
+            "releaseNotes": [{"language": "en-US", "text": "First app notes"}],
+        }
+    ]
+    assert client.apps["com.example.two"]["tracks"]["beta"] == [
+        {
+            "status": "draft",
+            "versionCodes": [40],
+            "releaseNotes": [{"language": "en-US", "text": "Second app notes"}],
+        }
+    ]
+    assert result.output.count("commit: confirmed") == 2
+    assert "Draft release created" in result.output
+    payloads = {
+        payload["package_name"]: payload
+        for payload in (
+            json.loads(path.read_text(encoding="utf-8"))
+            for path in (tmp_path / ".cdt" / "google-play" / "operations").glob("*.json")
+        )
+    }
+    assert set(payloads) == {"com.example.one", "com.example.two"}
+    assert payloads["com.example.one"]["track"] == "internal"
+    assert payloads["com.example.one"]["release_status"] == "completed"
+    assert payloads["com.example.one"]["aab_sha256"] == compute_file_sha256(tmp_path / "one.aab")
+    assert payloads["com.example.two"]["track"] == "beta"
+    assert payloads["com.example.two"]["release_status"] == "draft"
+    assert payloads["com.example.two"]["release_notes"] == {"en-US": "Second app notes"}
+    assert payloads["com.example.two"]["aab_sha256"] == compute_file_sha256(tmp_path / "two.aab")
+
+
 # -- planning, preflight and schema stay offline -----------------------------------
 
 
@@ -501,3 +866,76 @@ def test_pipeline_without_play_step_is_not_affected_by_adc_check(tmp_path):
 
     assert payload["status"] == "ok"
     assert payload["env"] == []
+
+
+# -- standard pipelines are rejected before any step runs ----------------------------
+
+
+def _write_plugin_project(tmp_path: Path, *, risk: str) -> None:
+    """Project with a marker step preceding google_play.upload_aab."""
+    package = tmp_path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "demo.py").write_text(
+        "\n".join(
+            [
+                "from cdt.sdk import step",
+                "",
+                "@step('demo.marker')",
+                "def marker(ctx, output: str):",
+                "    (ctx.cwd / output).write_text('ran', encoding='utf-8')",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "plugins:",
+                "  - cdt_steps.demo",
+                "pipelines:",
+                "  play:",
+                f"    risk: {risk}",
+                "    steps:",
+                "      - demo.marker: {output: marker.txt}",
+                "      - google_play.upload_aab:",
+                "          artifact: aab",
+                f"          package_name: {PACKAGE}",
+                "          track: internal",
+                "          release_status: draft",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_standard_pipeline_rejects_play_step_before_running_preceding_steps(tmp_path, monkeypatch):
+    _write_plugin_project(tmp_path, risk="standard")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    for module_name in ("cdt_steps.demo", "cdt_steps"):
+        sys.modules.pop(module_name, None)
+    constructed: list[bool] = []
+
+    def forbidden_client(env: dict[str, str], cwd: Path):
+        constructed.append(True)
+        raise AssertionError("publishing API client must not be constructed for a standard pipeline")
+
+    monkeypatch.setattr(google_play_step, "GooglePlayClient", forbidden_client)
+
+    validation = runner.invoke(app, ["pipeline", "validate", "play"])
+    result = runner.invoke(app, ["run", "play"])
+
+    assert validation.exit_code != 0
+    assert "pipelines.play.steps[1]" in validation.output
+    assert result.exit_code != 0
+    visible = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", result.output)
+    assert "requires pipeline risk: production" in " ".join(visible.split())
+    # Validation stops the whole pipeline: the preceding step never ran and the
+    # publishing API was never touched.
+    assert not (tmp_path / "marker.txt").exists()
+    assert constructed == []
+    assert not (tmp_path / ".cdt" / "google-play").exists()
