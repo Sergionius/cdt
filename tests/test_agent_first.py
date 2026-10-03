@@ -807,6 +807,31 @@ def test_schema_exposes_appstore_submit_review_required_options():
     assert payload == json.loads(bundled_schema_path().read_text(encoding="utf-8"))
 
 
+def test_schema_exposes_appstore_update_metadata_required_options():
+    register_builtin_steps()
+    payload = schema_payload()
+    step_schemas = [obj for obj in payload["$defs"]["step"]["oneOf"] if isinstance(obj, dict) and obj.get("properties")]
+    options_by_name = {next(iter(obj["properties"])): next(iter(obj["properties"].values())) for obj in step_schemas}
+
+    metadata_options = options_by_name["appstore.update_metadata"]
+    assert metadata_options["required"] == ["version", "localizations"]
+    assert sorted(metadata_options["properties"]) == ["localizations", "version"]
+    assert metadata_options["properties"]["version"] == {"type": "string"}
+    assert metadata_options["properties"]["localizations"] == {
+        "type": "object",
+        "additionalProperties": {"type": "object", "additionalProperties": {"type": "string"}},
+    }
+    metadata = next(m for m in list_step_metadata() if m.name == "appstore.update_metadata")
+    # No automatic retries and no envelope timeout capability: ASC keeps its own
+    # request retry settings.
+    assert metadata.retry_safe is False
+    assert metadata.timeout_option is None
+    assert metadata.risk == "upload"
+    serialized = json.dumps(payload)
+    assert "appstore.update_metadata" in serialized
+    assert payload == json.loads(bundled_schema_path().read_text(encoding="utf-8"))
+
+
 def test_release_summary_includes_release_results_without_reading_the_log(tmp_path, monkeypatch):
     package = tmp_path / "cdt_steps"
     package.mkdir()

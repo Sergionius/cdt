@@ -4,7 +4,7 @@ from typing import Any
 import typer
 
 from ..pipeline import PipelineContext
-from ..services import appstore, appstore_state
+from ..services import appstore, appstore_metadata, appstore_state
 from ..services.appstore import _complete_testflight_after_upload, _upload_testflight, _upload_testflight_ipa
 from ..services.appstore_review import RELEASE_MODES, AppStoreReviewError
 from ..services.appstore_state import AppStoreReviewOperation, AppStoreStateError, ReviewIntent
@@ -13,10 +13,11 @@ from ..sounds import _play_fail_sound
 ChangelogProvider = str | Callable[[PipelineContext], str]
 
 SUBMIT_REVIEW_STEP_NAME = "appstore.submit_review"
+UPDATE_METADATA_STEP_NAME = "appstore.update_metadata"
 
 
-def _option_error(detail: str) -> typer.BadParameter:
-    return typer.BadParameter(detail, param_hint=SUBMIT_REVIEW_STEP_NAME)
+def _option_error(detail: str, step_name: str = SUBMIT_REVIEW_STEP_NAME) -> typer.BadParameter:
+    return typer.BadParameter(detail, param_hint=step_name)
 
 
 def _validate_whats_new(value: Any) -> dict[str, str]:
@@ -28,8 +29,7 @@ def _validate_whats_new(value: Any) -> dict[str, str]:
         )
     if not value:
         raise _option_error(
-            f"{SUBMIT_REVIEW_STEP_NAME} option 'whats_new' must not be empty; "
-            "provide at least one localized text"
+            f"{SUBMIT_REVIEW_STEP_NAME} option 'whats_new' must not be empty; provide at least one localized text"
         )
     whats_new: dict[str, str] = {}
     for locale, text in value.items():
@@ -60,8 +60,7 @@ def _validate_phased_release(value: Any) -> bool:
     # phased-release choice.
     if not isinstance(value, bool):
         raise _option_error(
-            f"{SUBMIT_REVIEW_STEP_NAME} option 'phased_release' must be a real boolean (true/false), "
-            f"got {value!r}"
+            f"{SUBMIT_REVIEW_STEP_NAME} option 'phased_release' must be a real boolean (true/false), got {value!r}"
         )
     return value
 
@@ -236,4 +235,65 @@ class SubmitReviewStep:
         typer.echo(
             "   This does NOT mean approval or user availability: the version reaches users only after Apple "
             "approves it and the chosen release mode releases it."
+        )
+
+
+class AppStoreUpdateMetadataStep:
+    """Update localized App Store metadata texts of an existing iOS version.
+
+    A thin adapter over :mod:`cdt.services.appstore_metadata`, kept separate
+    from :class:`SubmitReviewStep`: it changes only ``description``,
+    ``keywords``, ``promotional_text`` and ``whats_new`` of existing version
+    localizations of an exactly identified version in ``PREPARE_FOR_SUBMISSION``.
+    It never creates a version, a localization or a review submission, never
+    selects a build and never sends anything for review.
+
+    Production safety works exactly as for the review submission: the pipeline
+    must declare ``risk: production`` (enforced by pipeline validation, also for
+    conditionally skipped steps) and every real run needs the existing exact
+    direct/detached CLI confirmation.
+    """
+
+    name = UPDATE_METADATA_STEP_NAME
+
+    def __init__(self, version: str, localizations: dict[str, dict[str, str]]):
+        # Both options are mandatory and validated at construction time, which
+        # happens after ${inputs.*} interpolation: the step never runs with an
+        # unspecified version or an empty/invalid localization request.
+        try:
+            self.version = appstore_metadata.validate_version(version)
+            self.localizations = appstore_metadata.validate_localizations(localizations)
+        except appstore_metadata.InvalidMetadataOptionError as exc:
+            raise _option_error(str(exc), self.name) from exc
+
+    def run(self, ctx: PipelineContext) -> None:
+        bundle_id = ctx.env.get("IOS_BUNDLE_ID", "").strip()
+        if not bundle_id:
+            raise _option_error(f"{UPDATE_METADATA_STEP_NAME} requires IOS_BUNDLE_ID in the project .env", self.name)
+
+        # Credentials are created per call from the final pipeline env; nothing
+        # here reads or mutates the global environment.
+        client = appstore._AscClient(ctx.env)
+        try:
+            outcome = appstore_metadata.update_metadata(bundle_id, self.version, self.localizations, client)
+        except (appstore_metadata.MetadataUpdateError, AppStoreReviewError) as exc:
+            _play_fail_sound(ctx.env, ctx.cwd)
+            raise _option_error(str(exc), self.name) from exc
+
+        typer.echo(f"==> Updating App Store metadata of version {outcome.version_string} for {outcome.bundle_id}")
+        for locale in sorted(outcome.updated):
+            typer.echo(f"    {locale}: updated {', '.join(sorted(outcome.updated[locale]))}")
+        for locale in outcome.unchanged:
+            typer.echo(f"    {locale}: already up to date, nothing was changed")
+        ctx.register_release_results(
+            {
+                "appstore_metadata_bundle_id": outcome.bundle_id,
+                "appstore_metadata_marketing_version": outcome.version_string,
+                "appstore_metadata_updated_locales": ", ".join(sorted(outcome.updated)),
+                "appstore_metadata_unchanged_locales": ", ".join(sorted(outcome.unchanged)),
+            }
+        )
+        typer.echo(
+            "✅ App Store metadata updated: only the listed locales and text fields of the existing version "
+            "were changed. Nothing was submitted for review and no build was selected."
         )

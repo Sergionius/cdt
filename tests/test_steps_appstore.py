@@ -31,7 +31,7 @@ from cdt.services.appstore_state import (
     load_review_checkpoint,
     save_upload_record,
 )
-from cdt.steps.appstore import SUBMIT_REVIEW_STEP_NAME, SubmitReviewStep
+from cdt.steps.appstore import SUBMIT_REVIEW_STEP_NAME, AppStoreUpdateMetadataStep, SubmitReviewStep
 from tests.test_services_appstore_state import FakeAsc, _stub_client
 
 runner = CliRunner()
@@ -256,8 +256,7 @@ def test_standalone_submit_pipeline_needs_no_ipa_or_build_artifacts(tmp_path, mo
 
     result = runner.invoke(
         app,
-        ["run", "submit", "--input", "whats_new=Исправления", "--confirm", "submit",
-         "--status-file", str(status_file)],
+        ["run", "submit", "--input", "whats_new=Исправления", "--confirm", "submit", "--status-file", str(status_file)],
     )
 
     assert result.exit_code == 0, result.output
@@ -314,8 +313,11 @@ def test_whats_new_supports_input_interpolation(tmp_path, monkeypatch):
 def test_service_errors_fail_the_step_without_success_claims(tmp_path, monkeypatch, capsys):
     asc = FakeAsc(monkeypatch)
     _stub_client(monkeypatch)
-    asc.fail_on("POST", "/v1/reviewSubmissions", appstore.AscHttpError("denied", code=403, method="POST",
-                                                                     path="/v1/reviewSubmissions", body="denied"))
+    asc.fail_on(
+        "POST",
+        "/v1/reviewSubmissions",
+        appstore.AscHttpError("denied", code=403, method="POST", path="/v1/reviewSubmissions", body="denied"),
+    )
     ctx = _context(tmp_path, new_version="1.2.3+5")
 
     with pytest.raises(typer.BadParameter):
@@ -342,7 +344,7 @@ def _write_submit_project(tmp_path: Path) -> None:
                 "    steps:",
                 "      - appstore.submit_review:",
                 "          whats_new:",
-                "            ru: \"${inputs.whats_new}\"",
+                '            ru: "${inputs.whats_new}"',
                 "          release_mode: manual",
                 "          phased_release: true",
             ]
@@ -365,6 +367,199 @@ def test_inspect_plan_and_dry_run_do_not_touch_apple_or_create_checkpoints(tmp_p
         ["pipeline", "inspect", "submit", "--json"],
         ["pipeline", "plan", "submit", "--json"],
         ["run", "submit", "--dry-run", "--input", "whats_new=Исправления"],
+    ):
+        result = runner.invoke(app, argv)
+        assert result.exit_code == 0, (argv, result.output)
+
+    assert not (tmp_path / ".cdt" / "appstore").exists()
+    assert not (tmp_path / ".cdt" / "runs").exists()
+
+
+# -- appstore.update_metadata: separate step, same safety model -------------------
+
+
+def _metadata_step(**overrides: Any) -> AppStoreUpdateMetadataStep:
+    options: dict[str, Any] = {
+        "version": "1.2.3",
+        "localizations": {"ru": {"whats_new": "Исправления и улучшения"}},
+    }
+    options.update(overrides)
+    return AppStoreUpdateMetadataStep(**options)
+
+
+def test_update_metadata_is_registered_separately_from_submit_review():
+    from cdt.pipeline.registry import get_step_factory, get_step_metadata
+
+    assert get_step_factory("appstore.update_metadata") is AppStoreUpdateMetadataStep
+    assert get_step_factory("appstore.submit_review") is SubmitReviewStep
+    metadata = get_step_metadata("appstore.update_metadata")
+    assert metadata.category == "appstore"
+    assert metadata.risk == "upload"
+    # No automatic retries and no envelope timeout capability: ASC keeps its own
+    # request retry settings.
+    assert metadata.retry_safe is False
+    assert metadata.timeout_option is None
+
+
+def test_update_metadata_required_options_have_no_defaults():
+    signature = inspect.signature(AppStoreUpdateMetadataStep.__init__)
+    for option in ("version", "localizations"):
+        assert signature.parameters[option].default is inspect.Parameter.empty, option
+
+
+def test_update_metadata_schema_marks_options_required_and_typed():
+    payload = schema_payload()
+    step_schemas = [obj for obj in payload["$defs"]["step"]["oneOf"] if isinstance(obj, dict) and obj.get("properties")]
+    options_by_name = {next(iter(obj["properties"])): next(iter(obj["properties"].values())) for obj in step_schemas}
+
+    options = options_by_name["appstore.update_metadata"]
+    assert options["required"] == ["version", "localizations"]
+    assert options["properties"]["version"] == {"type": "string"}
+    assert options["properties"]["localizations"] == {
+        "type": "object",
+        "additionalProperties": {"type": "object", "additionalProperties": {"type": "string"}},
+    }
+    assert payload == json.loads(bundled_schema_path().read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"version": ""},
+        {"version": "   "},
+        {"version": None},
+        {"version": 5},
+        {"localizations": None},
+        {"localizations": {}},
+        {"localizations": {"ru": {}}},
+        {"localizations": {"ru": "Текст"}},
+        {"localizations": {"": {"whats_new": "Текст"}}},
+        {"localizations": {"ru": {"unknown": "Текст"}}},
+        {"localizations": {"ru": {"whats_new": 5}}},
+        {"localizations": {"ru": {"whats_new": True}}},
+        {"localizations": {"ru": {"whats_new": None}}},
+    ],
+)
+def test_update_metadata_option_validation_rejects_invalid_values(overrides):
+    with pytest.raises(typer.BadParameter):
+        _metadata_step(**overrides)
+
+
+def test_update_metadata_missing_ios_bundle_id_fails_before_any_asc_call(tmp_path, monkeypatch):
+    def fail(*args, **kwargs):
+        raise AssertionError("no ASC client may be created without IOS_BUNDLE_ID")
+
+    monkeypatch.setattr(appstore, "_AscClient", fail)
+    ctx = _context(tmp_path, env={"IOS_BUNDLE_ID": ""})
+
+    with pytest.raises(typer.BadParameter, match="IOS_BUNDLE_ID"):
+        _metadata_step().run(ctx)
+
+
+def test_update_metadata_updates_existing_localizations_and_registers_safe_summary(tmp_path, monkeypatch, capsys):
+    asc = FakeAsc(monkeypatch)
+    _stub_client(monkeypatch)
+    version = asc.add_version()
+    ctx = _context(tmp_path)
+
+    _metadata_step().run(ctx)
+
+    assert version["attributes"]["appStoreState"] == "PREPARE_FOR_SUBMISSION"  # nothing moved it forward
+    assert not any(call["path"].startswith("/v1/reviewSubmissions") for call in asc.calls)
+    assert not any(call["path"] == "/v1/builds" for call in asc.calls)
+    assert ctx.release_results == {
+        "appstore_metadata_bundle_id": BUNDLE_ID,
+        "appstore_metadata_marketing_version": "1.2.3",
+        "appstore_metadata_updated_locales": "ru",
+    }
+    output = capsys.readouterr().out
+    assert "Updating App Store metadata of version 1.2.3" in output
+    assert "ru: updated whats_new" in output
+    assert "Nothing was submitted for review" in output
+
+
+def test_update_metadata_rerun_skips_matching_fields_and_reports_them(tmp_path, monkeypatch, capsys):
+    asc = FakeAsc(monkeypatch)
+    _stub_client(monkeypatch)
+    asc.add_version()
+
+    _metadata_step().run(_context(tmp_path))
+    rerun_ctx = _context(tmp_path)
+    _metadata_step().run(rerun_ctx)
+
+    assert len([call for call in asc.mutating() if call["method"] == "PATCH"]) == 1
+    assert "appstore_metadata_updated_locales" not in rerun_ctx.release_results
+    assert rerun_ctx.release_results["appstore_metadata_unchanged_locales"] == "ru"
+    assert "ru: already up to date, nothing was changed" in capsys.readouterr().out
+
+
+def test_update_metadata_service_error_fails_without_success_claims(tmp_path, monkeypatch, capsys):
+    asc = FakeAsc(monkeypatch)
+    _stub_client(monkeypatch)
+    asc.add_version(state="WAITING_FOR_REVIEW")
+    ctx = _context(tmp_path)
+
+    with pytest.raises(typer.BadParameter, match="PREPARE_FOR_SUBMISSION"):
+        _metadata_step().run(ctx)
+
+    assert "App Store metadata updated" not in capsys.readouterr().out
+    assert not (tmp_path / ".cdt" / "appstore").exists()
+
+
+def test_update_metadata_supports_input_interpolated_version(tmp_path, monkeypatch):
+    asc = FakeAsc(monkeypatch)
+    _stub_client(monkeypatch)
+    asc.add_version(version_string="2.0.0")
+    ctx = _context(tmp_path, inputs={"version": "2.0.0"})
+    resolved = resolve_value("${inputs.version}", ctx)
+
+    AppStoreUpdateMetadataStep(
+        version=resolved,
+        localizations={"ru": {"whats_new": "Обновление"}},
+    ).run(ctx)
+
+    assert ctx.release_results["appstore_metadata_marketing_version"] == "2.0.0"
+
+
+def _write_metadata_project(tmp_path: Path) -> None:
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  meta:",
+                "    risk: production",
+                "    inputs:",
+                "      whats_new:",
+                "        required: true",
+                "    steps:",
+                "      - step: appstore.update_metadata",
+                "        with:",
+                '          version: "1.2.3"',
+                "          localizations:",
+                "            ru:",
+                '              whats_new: "${inputs.whats_new}"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".env").write_text("IOS_BUNDLE_ID=com.example.app\n", encoding="utf-8")
+
+
+def test_update_metadata_inspect_plan_and_dry_run_do_not_touch_apple(tmp_path, monkeypatch):
+    _write_metadata_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    def fail(method, path, client, payload=None, retry_ambiguous=True):
+        raise AssertionError(f"inspect/plan/dry-run must not contact App Store Connect: {method} {path}")
+
+    monkeypatch.setattr(appstore, "_asc_request", fail)
+
+    for argv in (
+        ["pipeline", "inspect", "meta", "--json"],
+        ["pipeline", "plan", "meta", "--json"],
+        ["run", "meta", "--dry-run", "--input", "whats_new=Исправления"],
     ):
         result = runner.invoke(app, argv)
         assert result.exit_code == 0, (argv, result.output)

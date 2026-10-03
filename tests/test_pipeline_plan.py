@@ -955,3 +955,90 @@ def test_pipeline_plan_carries_production_risk_error_for_submit_review(tmp_path,
             "path": "pipelines.submit.steps[0].sequence.steps[0]",
         }
     ]
+
+
+def test_pipeline_plan_reports_appstore_update_metadata_step(tmp_path, monkeypatch):
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  meta:",
+                "    risk: production",
+                "    steps:",
+                "      - step: appstore.update_metadata",
+                "        with:",
+                '          version: "1.2.3"',
+                "          localizations:",
+                "            ru:",
+                "              whats_new: Исправления и улучшения",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["pipeline", "plan", "meta", "--json"])
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0
+    assert payload["declared_risk"] == "production"
+    assert payload["overall_risk"] == "upload"
+    assert payload["errors"] == []
+    assert payload["warnings"] == []
+    assert payload["steps"][0]["name"] == "appstore.update_metadata"
+    assert payload["steps"][0]["risk"] == "upload"
+    assert payload["steps"][0]["artifact_flow"] == {
+        "requires": [],
+        "requires_names": [],
+        "produces_names": [],
+        "produces_types": ["appstore_metadata"],
+    }
+
+
+def test_pipeline_plan_carries_production_risk_error_for_update_metadata(tmp_path, monkeypatch):
+    """The production requirement is recursive and covers conditionally skipped leaves."""
+
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  meta:",
+                "    inputs:",
+                "      update:",
+                "        required: false",
+                "    steps:",
+                "      - parallel:",
+                "          steps:",
+                "            - step: appstore.update_metadata",
+                "              with:",
+                '                version: "1.2.3"',
+                "                localizations:",
+                "                  ru:",
+                "                    whats_new: Исправления и улучшения",
+                "              when:",
+                "                input: update",
+                '                equals: "yes"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["pipeline", "plan", "meta", "--json"])
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 1  # a validation error makes the plan exit non-zero
+    assert payload["errors"] == [
+        {
+            "code": "production_risk_required",
+            "message": (
+                "Step appstore.update_metadata updates localized App Store metadata texts and requires pipeline "
+                "risk: production (declared risk: 'standard')."
+            ),
+            "path": "pipelines.meta.steps[0].parallel.steps[0]",
+        }
+    ]

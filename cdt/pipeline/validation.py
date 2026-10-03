@@ -114,9 +114,17 @@ def _appstore_review_risk_error(step_name: str, pipeline_risk: str, path: str) -
     return _production_risk_error(step_name, pipeline_risk, path, "submits an app for App Store review")
 
 
+def _appstore_metadata_risk_error(step_name: str, pipeline_risk: str, path: str) -> dict[str, str]:
+    return _production_risk_error(step_name, pipeline_risk, path, "updates localized App Store metadata texts")
+
+
 # Submitting a version for App Store review is a production action on its own;
 # plain TestFlight upload/completion steps stay usable under any declared risk.
+# Mutating localized App Store metadata texts of a real version is equally
+# production-only. Both requirements are validated recursively through
+# sequence/parallel groups and apply to conditionally skipped steps as well.
 _APPSTORE_REVIEW_STEPS = frozenset({"appstore.submit_review"})
+_APPSTORE_METADATA_STEPS = frozenset({"appstore.update_metadata"})
 
 
 def declared_inputs_payload(pipeline: PipelineSpec | None) -> dict[str, dict[str, Any]]:
@@ -216,6 +224,8 @@ def _validate_step(step: StepSpec, path: str, pipeline_risk: str) -> list[dict[s
             errors.append(_google_play_risk_error(step.name, pipeline_risk, path))
         if step.name in _APPSTORE_REVIEW_STEPS:
             errors.append(_appstore_review_risk_error(step.name, pipeline_risk, path))
+        if step.name in _APPSTORE_METADATA_STEPS:
+            errors.append(_appstore_metadata_risk_error(step.name, pipeline_risk, path))
     if step.retry is not None and step.retry.max_attempts > 1 and not metadata.retry_safe:
         errors.append(_retry_capability_error(step.name, path))
     if step.timeout_seconds is not None:

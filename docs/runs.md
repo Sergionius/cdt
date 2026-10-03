@@ -240,3 +240,9 @@ During resume and reruns:
 - changed submission parameters while an operation is unfinished, a version in a non-editable state, a foreign review submission, or a remotely changed build stop with an explicit conflict instead of being overwritten or resubmitted.
 
 Deleting a checkpoint is **not** a safe way to repeat a submission: it erases CDT's knowledge of changes that may already have been applied remotely. Verify the version and the submission in App Store Connect and resolve any half-applied state there instead.
+
+### App Store metadata updates
+
+`appstore.update_metadata` keeps no checkpoint files under `.cdt/appstore/`: it stores its durable state in App Store Connect itself. Every run re-reads the current version localizations before the first mutation, skips requested fields that already match, and verifies every PATCH by reading it back; an unverifiable result fails the run without repeating the PATCH, and you resolve it in App Store Connect.
+
+The step registers only a safe summary in `release_results`: bundle id, version string, and the names of the updated and unchanged locales. It never records credentials or metadata texts, and it never submits anything for review or selects a build.

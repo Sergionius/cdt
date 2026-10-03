@@ -324,6 +324,7 @@ Important built-ins include:
 - `appstore.upload_testflight`
 - `appstore.upload_testflight_ipa`
 - `appstore.complete_testflight`
+- `appstore.update_metadata`
 - `google_play.upload_aab`
 - `artifact.copy_to_downloads`
 - `hook.python_script`
@@ -505,6 +506,68 @@ Every submission writes a versioned checkpoint under `.cdt/appstore/operations/<
 A successful step means Apple accepted the submission and it left the unsubmitted stage — **not** that Apple approved the version or that users can download it. The final message states this distinction explicitly; approval and the actual release happen later and outside this step.
 
 See [Run records → App Store review checkpoints](runs.md#app-store-review-checkpoints) for how checkpoints interact with run status and resume.
+
+## App Store metadata updates
+
+`appstore.update_metadata` updates localized App Store metadata texts — `description`, `keywords`, `promotional_text` and `whats_new` — of existing localizations of an existing iOS App Store version. It is independent of `appstore.submit_review`: it never creates a version, a localization or a review submission, never selects a build and never sends anything for review. It also does not upload anything and needs no IPA, Flutter, Xcode or `xcrun` tooling.
+
+```yaml
+  metadata:
+    risk: production
+    inputs:
+      version:
+        required: true
+      whats_new:
+        required: true
+    steps:
+      - step: appstore.update_metadata
+        with:
+          version: "${inputs.version}"
+          localizations:
+            ru:
+              description: "Описание приложения"
+              keywords: "ключевое,слово,приложение"
+              promotional_text: "Промо-текст"
+              whats_new: "${inputs.whats_new}"
+            en-US:
+              whats_new: "Bug fixes and improvements"
+```
+
+```bash
+cdt run metadata --input version=1.2.3 --input whats_new="Исправления ошибок" --confirm metadata
+```
+
+### Required options
+
+| Option | Required | Description |
+|---|---|---|
+| `version` | yes | Non-empty version string of the existing iOS App Store version, for example `"1.2.3"`. Supports the existing `${inputs.*}` interpolation. |
+| `localizations` | yes | Non-empty mapping from locale to a non-empty mapping of fields. Supported fields: `description`, `keywords`, `promotional_text`, `whats_new` (written to the ASC attributes `description`, `keywords`, `promotionalText`, `whatsNew`). |
+
+Field values must be strings: numbers, booleans and `null` are rejected instead of being silently converted to text. An empty string is kept as an explicit clear request and sent to Apple only when App Store Connect accepts empty values for that field. The app is taken from `IOS_BUNDLE_ID`; authentication uses the existing `ASC_KEY_ID`, `ASC_ISSUER_ID`, and `ASC_PRIVATE_KEY_PATH`.
+
+### What the step requires and never does
+
+- The version is looked up exactly (paginated, with client-side verification) and must already exist: a missing version stops the step — CDT never falls back to get-or-create and never uses the last uploaded TestFlight build to guess the version.
+- The version must be in `PREPARE_FOR_SUBMISSION`. Rejected, submitted, awaiting-release and unknown states stop with an explanation; CDT never modifies such versions automatically.
+- Before the first mutation the step verifies that every requested locale already exists as a version localization. One unknown locale fails the whole step without any partial update — CDT does not create partial app cards.
+
+### Minimal, verified updates
+
+The step reads the current localizations first and PATCHes only the values that actually differ from the request; already matching fields are skipped, so a repeated run with an unchanged request performs no mutations at all. Locales are processed in stable sorted order, and every PATCH is issued with ambiguous-retry disabled (`retry_ambiguous=False`).
+
+After every PATCH the step verifies the result by reading the localization back:
+
+- a lost or ambiguous PATCH response is accepted only when the read-back confirms every requested value;
+- an unverifiable or mismatching result fails the step with an explicit "unverified result" message and no further PATCH is sent in that run — verify the localization in App Store Connect instead of retrying blindly.
+
+A partially successful run is not rolled back: locales confirmed before a failure keep their new texts, and the failure message never claims a completed transaction. Nothing is submitted for review and no build is selected, in this or in any later run.
+
+### Production confirmation and limits
+
+Every pipeline containing `appstore.update_metadata` requires `risk: production` — recursively through `sequence` and `parallel`, including conditionally skipped steps — and every real run needs the exact CLI confirmation (`cdt run <pipeline> --confirm <pipeline>`), both direct and detached. Planning commands (`cdt pipeline inspect`, `cdt pipeline plan`, `cdt run --dry-run`) never contact App Store Connect.
+
+The step declares no automatic retries and no envelope `timeout_seconds` capability: App Store Connect requests keep their own bounded retry settings. A successful run registers only safe summary values in the status file (bundle id, version string and the processed locale names) — never credentials and never the metadata texts.
 
 ## Google Play upload (AAB)
 

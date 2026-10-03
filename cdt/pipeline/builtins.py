@@ -1,5 +1,6 @@
 from ..steps.android import AndroidBuildAabStep, AndroidBuildApkStep
 from ..steps.appstore import (
+    AppStoreUpdateMetadataStep,
     CompleteTestFlightStep,
     SubmitReviewStep,
     UploadTestFlightIpaStep,
@@ -31,6 +32,7 @@ _BUILTINS: dict[str, type] = {
     "android.build_apk": AndroidBuildApkStep,
     "appstore.complete_testflight": CompleteTestFlightStep,
     "appstore.submit_review": SubmitReviewStep,
+    "appstore.update_metadata": AppStoreUpdateMetadataStep,
     "appstore.upload_testflight": UploadTestFlightStep,
     "appstore.upload_testflight_ipa": UploadTestFlightIpaStep,
     "artifact.copy_to_downloads": CopyArtifactToDownloadsStep,
@@ -126,6 +128,20 @@ _BUILTIN_METADATA: dict[str, StepMetadata] = {
         category="appstore",
         risk="upload",
         produces=(ResultProduction("review_submission"),),
+        requires_env=("ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_PRIVATE_KEY_PATH", "IOS_BUNDLE_ID"),
+    ),
+    "appstore.update_metadata": StepMetadata(
+        name="appstore.update_metadata",
+        description=(
+            "Update localized App Store metadata texts (description, keywords, promotional_text, whats_new) "
+            "of existing localizations of an exactly identified existing iOS version in "
+            "PREPARE_FOR_SUBMISSION. Creates no version, localization, submission or build selection and "
+            "sends nothing for review; every PATCH is verified by a read-back and an unverifiable result "
+            "fails without repeating it. Requires pipeline risk: production and the exact CLI confirmation."
+        ),
+        category="appstore",
+        risk="upload",
+        produces=(ResultProduction("appstore_metadata"),),
         requires_env=("ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_PRIVATE_KEY_PATH", "IOS_BUNDLE_ID"),
     ),
     "artifact.copy_to_downloads": StepMetadata(

@@ -247,6 +247,44 @@
           "if": {
             "properties": {
               "step": {
+                "const": "appstore.update_metadata"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {
+                  "localizations": {
+                    "additionalProperties": {
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "type": "object"
+                  },
+                  "version": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "version",
+                  "localizations"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
                 "const": "appstore.upload_testflight"
               }
             }
@@ -1366,6 +1404,7 @@
             "android.build_apk",
             "appstore.complete_testflight",
             "appstore.submit_review",
+            "appstore.update_metadata",
             "appstore.upload_testflight",
             "appstore.upload_testflight_ipa",
             "artifact.copy_to_downloads",
@@ -1580,6 +1619,40 @@
           },
           "required": [
             "appstore.submit_review"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "appstore.update_metadata": {
+              "additionalProperties": false,
+              "properties": {
+                "localizations": {
+                  "additionalProperties": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
+                  "type": "object"
+                },
+                "version": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "version",
+                "localizations"
+              ],
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "appstore.update_metadata"
           ],
           "type": "object"
         },
@@ -2685,6 +2758,7 @@
             "android.build_apk",
             "appstore.complete_testflight",
             "appstore.submit_review",
+            "appstore.update_metadata",
             "appstore.upload_testflight",
             "appstore.upload_testflight_ipa",
             "artifact.copy_to_downloads",
@@ -2899,6 +2973,40 @@
           },
           "required": [
             "appstore.submit_review"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "appstore.update_metadata": {
+              "additionalProperties": false,
+              "properties": {
+                "localizations": {
+                  "additionalProperties": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
+                  "type": "object"
+                },
+                "version": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "version",
+                "localizations"
+              ],
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "appstore.update_metadata"
           ],
           "type": "object"
         },
