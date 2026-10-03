@@ -31,6 +31,8 @@ class PipelineContext:
     run_id: str | None = None
     current_step: str | None = None
     completed_steps: list[str] = field(default_factory=list)
+    skipped_steps: list[str] = field(default_factory=list)
+    step_decisions: dict[str, str] = field(default_factory=dict)
     failed_step: str | None = None
     error: str | None = None
     running_steps: list[str] = field(default_factory=list)
@@ -156,7 +158,7 @@ class PipelineContext:
         self.write_status("running")
 
     def should_skip_step(self, step_id: str) -> bool:
-        return self.skip_completed and step_id in self.completed_steps
+        return self.step_decisions.get(step_id) == "skip" or (self.skip_completed and step_id in self.completed_steps)
 
     def mark_parallel_step_started(self, step_id: str) -> None:
         if step_id not in self.running_steps:
@@ -203,6 +205,8 @@ class PipelineContext:
                 "pipeline": self.pipeline_name,
                 "current_step": self.current_step,
                 "completed_steps": list(self.completed_steps),
+                "skipped_steps": list(self.skipped_steps),
+                "step_decisions": dict(self.step_decisions),
                 "failed_step": self.failed_step,
                 "error": self.error,
                 "running_steps": list(self.running_steps),

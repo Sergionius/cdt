@@ -4,7 +4,15 @@ import inspect
 from difflib import get_close_matches
 from typing import Any
 
-from .config import ParallelSpec, PipelineConfig, PipelineItemSpec, PipelineSpec, SequenceSpec, StepSpec
+from .config import (
+    ParallelSpec,
+    PipelineConfig,
+    PipelineItemSpec,
+    PipelineSpec,
+    SequenceSpec,
+    StepSpec,
+    validate_condition,
+)
 from .registry import get_step_factory, get_step_metadata, list_step_metadata, list_steps
 
 
@@ -45,8 +53,7 @@ def _production_risk_error(step_name: str, pipeline_risk: str, path: str, reason
     return {
         "code": "production_risk_required",
         "message": (
-            f"Step {step_name} {reason} and requires pipeline risk: production "
-            f"(declared risk: {pipeline_risk!r})."
+            f"Step {step_name} {reason} and requires pipeline risk: production (declared risk: {pipeline_risk!r})."
         ),
         "path": path,
     }
@@ -122,18 +129,24 @@ def _validate_steps(pipeline: PipelineSpec) -> list[dict[str, str]]:
     errors: list[dict[str, str]] = []
     for index, item in enumerate(pipeline.steps):
         path = f"pipelines.{pipeline.name}.steps[{index}]"
-        errors.extend(_validate_item(item, path, pipeline.risk))
+        errors.extend(_validate_item(item, path, pipeline))
     return errors
 
 
-def _validate_item(item: PipelineItemSpec, path: str, pipeline_risk: str) -> list[dict[str, str]]:
+def _validate_item(item: PipelineItemSpec, path: str, pipeline: PipelineSpec) -> list[dict[str, str]]:
     if isinstance(item, (ParallelSpec, SequenceSpec)):
         group_name = "parallel" if isinstance(item, ParallelSpec) else "sequence"
         errors: list[dict[str, str]] = []
         for child_index, child in enumerate(item.steps):
-            errors.extend(_validate_item(child, f"{path}.{group_name}.steps[{child_index}]", pipeline_risk))
+            errors.extend(_validate_item(child, f"{path}.{group_name}.steps[{child_index}]", pipeline))
         return errors
-    return _validate_step(item, path, pipeline_risk)
+    errors = _validate_step(item, path, pipeline.risk)
+    if item.when is not None:
+        try:
+            validate_condition(item.when, pipeline.inputs)
+        except Exception as exc:
+            errors.append({"code": "invalid_condition", "message": str(exc), "path": f"{path}.when"})
+    return errors
 
 
 def _validate_step(step: StepSpec, path: str, pipeline_risk: str) -> list[dict[str, str]]:
@@ -196,4 +209,5 @@ def _step_node(item: PipelineItemSpec, step_id: str) -> dict[str, Any]:
         "step_id": step_id,
         "name": item.name,
         "options": item.options,
+        **({"when": item.when} if item.when is not None else {}),
     }

@@ -28,6 +28,42 @@ ROOT = Path(__file__).resolve().parents[1]
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 
 
+def test_skipped_production_leaf_keeps_risk_validation_and_confirmation(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    config = tmp_path / "cdt.yaml"
+    text = (
+        "version: 1\npipelines:\n  demo:\n    inputs: {deploy: {}}\n    steps:\n"
+        "      - parallel:\n          steps:\n            - sequence:\n                steps:\n"
+        "                  - step: appstore.submit_review\n"
+        "                    when: {input: deploy, present: true}\n"
+    )
+    config.write_text(text)
+    invalid = runner.invoke(app, ["pipeline", "plan", "demo", "--json", "--input", "deploy="])
+    assert invalid.exit_code != 0
+    assert any(e["code"] == "production_risk_required" for e in json.loads(invalid.output)["errors"])
+    config.write_text(text.replace("    inputs:", "    risk: production\n    inputs:"))
+    rejected = runner.invoke(app, ["run", "demo", "--confirm", "wrong"])
+    assert rejected.exit_code != 0
+    assert not (tmp_path / ".cdt").exists()
+    accepted = runner.invoke(app, ["run", "demo", "--confirm", "demo"])
+    assert accepted.exit_code == 0, accepted.output
+
+
+def test_extended_schema_is_unambiguous_and_bundled():
+    schema = schema_payload()
+    assert json.loads(bundled_schema_path().read_text()) == schema
+    extended = schema["$defs"]["extendedStep"]
+    assert extended["required"] == ["step"]
+    assert not extended["additionalProperties"]
+    plugin = next(item for item in schema["$defs"]["step"]["oneOf"] if item.get("description") == "Project plugin step")
+    assert re.fullmatch(plugin["propertyNames"]["pattern"], "step") is None
+    assert schema["$defs"]["condition"]["oneOf"] == [
+        {"required": ["equals"]},
+        {"required": ["not_equals"]},
+        {"required": ["present"]},
+    ]
+
+
 def setup_function():
     _clear_steps_for_tests()
     sys.modules.pop("cdt_steps.demo", None)
@@ -265,9 +301,7 @@ def test_detached_play_start_without_exact_confirmation_requests_it_before_any_r
     assert not (tmp_path / ".cdt" / "google-play").exists()
 
 
-def test_detached_play_start_with_exact_confirmation_runs_the_step_offline_of_credentials(
-    tmp_path, monkeypatch
-):
+def test_detached_play_start_with_exact_confirmation_runs_the_step_offline_of_credentials(tmp_path, monkeypatch):
     _write_play_project(tmp_path)
     monkeypatch.chdir(tmp_path)
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -311,7 +345,7 @@ def _write_submit_project(path: Path) -> None:
                 "    steps:",
                 "      - appstore.submit_review:",
                 "          whats_new:",
-                "            ru: \"${inputs.whats_new}\"",
+                '            ru: "${inputs.whats_new}"',
                 "          release_mode: manual",
                 "          phased_release: true",
             ]
@@ -1169,9 +1203,7 @@ def test_release_workflow_hands_off_artifacts_to_publish_and_release_jobs():
 
     for job_name in ("pypi-publish", "github-release"):
         downloads = [
-            step
-            for step in jobs[job_name]["steps"]
-            if step.get("uses", "").startswith("actions/download-artifact")
+            step for step in jobs[job_name]["steps"] if step.get("uses", "").startswith("actions/download-artifact")
         ]
         assert len(downloads) == 1
         assert downloads[0]["with"]["name"] == "dist"
@@ -1181,9 +1213,7 @@ def test_release_workflow_publishes_to_pypi_with_trusted_publishing_as_last_step
     job = _release_workflow_config()["jobs"]["pypi-publish"]
 
     assert job["permissions"] == {"id-token": "write"}
-    publish_steps = [
-        step for step in job["steps"] if step.get("uses", "").startswith("pypa/gh-action-pypi-publish")
-    ]
+    publish_steps = [step for step in job["steps"] if step.get("uses", "").startswith("pypa/gh-action-pypi-publish")]
     assert len(publish_steps) == 1
     assert job["steps"][-1] is publish_steps[0]
     assert not any("run" in step for step in job["steps"])
@@ -1195,9 +1225,7 @@ def test_release_workflow_creates_github_release_with_checksums_after_pypi():
     assert job["needs"] == "pypi-publish"
     runs = {step["name"]: step["run"] for step in job["steps"] if "run" in step}
     assert "sha256sum *.whl *.tar.gz > SHA256SUMS" in runs["Generate SHA-256 checksums"]
-    release_step = next(
-        step for step in job["steps"] if step.get("uses", "").startswith("softprops/action-gh-release")
-    )
+    release_step = next(step for step in job["steps"] if step.get("uses", "").startswith("softprops/action-gh-release"))
     assert "dist/*.whl" in release_step["with"]["files"]
     assert "dist/*.tar.gz" in release_step["with"]["files"]
     assert "dist/SHA256SUMS" in release_step["with"]["files"]

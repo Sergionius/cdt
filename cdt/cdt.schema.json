@@ -1,5 +1,1296 @@
 {
   "$defs": {
+    "condition": {
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "equals"
+          ]
+        },
+        {
+          "required": [
+            "not_equals"
+          ]
+        },
+        {
+          "required": [
+            "present"
+          ]
+        }
+      ],
+      "properties": {
+        "equals": {
+          "pattern": "^(?![\\s\\S]*\\$\\{)[\\s\\S]*$",
+          "type": "string"
+        },
+        "input": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+          "type": "string"
+        },
+        "not_equals": {
+          "pattern": "^(?![\\s\\S]*\\$\\{)[\\s\\S]*$",
+          "type": "string"
+        },
+        "present": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "type": "object"
+    },
+    "extendedStep": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "android.build_aab"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {
+                  "artifact": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "dart_defines": {},
+                  "extra_args": {
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "flavor": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "no_pub": {
+                    "type": "boolean"
+                  },
+                  "no_shrink": {
+                    "type": "boolean"
+                  },
+                  "obfuscate": {
+                    "type": "boolean"
+                  },
+                  "profile": {
+                    "type": "string"
+                  },
+                  "split_debug_info": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "target": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "android.build_apk"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {
+                  "artifact": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "dart_defines": {},
+                  "extra_args": {
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "flavor": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "no_pub": {
+                    "type": "boolean"
+                  },
+                  "no_shrink": {
+                    "type": "boolean"
+                  },
+                  "obfuscate": {
+                    "type": "boolean"
+                  },
+                  "profile": {
+                    "type": "string"
+                  },
+                  "split_debug_info": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "target": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "appstore.complete_testflight"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {
+                  "changelog": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {}
+                    ]
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "appstore.submit_review"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {
+                  "phased_release": {
+                    "type": "boolean"
+                  },
+                  "release_mode": {
+                    "type": "string"
+                  },
+                  "whats_new": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "whats_new",
+                  "release_mode",
+                  "phased_release"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "appstore.upload_testflight"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {
+                  "artifact": {
+                    "type": "string"
+                  },
+                  "changelog": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {}
+                    ]
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "appstore.upload_testflight_ipa"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {
+                  "artifact": {
+                    "type": "string"
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "artifact.copy_to_downloads"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {
+                  "artifact": {
+                    "type": "string"
+                  },
+                  "destination": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "artifact"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "firebase.deploy"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {},
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "firebase.ensure_cli"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {},
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "firebase.upload_app_distribution"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {
+                  "artifact": {
+                    "type": "string"
+                  },
+                  "release_notes_from_ids": {
+                    "type": "boolean"
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "flutter.increment_build_number"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {},
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "flutter.pub_get"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {},
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "git.commit_push"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {
+                  "message": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "repository": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "git.prepare_clean_main"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {},
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "git.release_commit"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {
+                  "files": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "message": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "files"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "git.release_tag_push"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {
+                  "branch": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "remote": {
+                    "type": "string"
+                  },
+                  "tag": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "git.require_synced_main"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {
+                  "branch": {
+                    "type": "string"
+                  },
+                  "remote": {
+                    "type": "string"
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "github.wait_release"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {
+                  "package": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "poll_interval": {
+                    "type": "number"
+                  },
+                  "pyproject": {
+                    "type": "string"
+                  },
+                  "remote": {
+                    "type": "string"
+                  },
+                  "repository": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "tag_prefix": {
+                    "type": "string"
+                  },
+                  "timeout": {
+                    "type": "number"
+                  },
+                  "version": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "workflow": {
+                    "type": "string"
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "google_play.upload_aab"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {
+                  "artifact": {
+                    "type": "string"
+                  },
+                  "package_name": {
+                    "type": "string"
+                  },
+                  "release_name": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "release_notes": {
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  },
+                  "release_status": {
+                    "type": "string"
+                  },
+                  "track": {
+                    "type": "string"
+                  },
+                  "user_fraction": {
+                    "type": [
+                      "number",
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "artifact",
+                  "package_name",
+                  "track",
+                  "release_status"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "hook.python_script"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "env": {
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  },
+                  "fail_on_error": {
+                    "type": "boolean"
+                  },
+                  "name": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "outputs": {
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "script": {
+                    "type": "string"
+                  },
+                  "strict_outputs": {
+                    "type": "boolean"
+                  },
+                  "timeout": {
+                    "type": [
+                      "integer",
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "script"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "ios.bump_xcode_build_number"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {
+                  "fallback_scheme_key": {
+                    "type": "string"
+                  },
+                  "scheme_key": {
+                    "type": "string"
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "ios.flutter_build_ipa"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {
+                  "artifact": {
+                    "type": "string"
+                  },
+                  "dart_defines": {},
+                  "extra_args": {
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "flavor": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "no_pub": {
+                    "type": "boolean"
+                  },
+                  "obfuscate": {
+                    "type": "boolean"
+                  },
+                  "profile": {
+                    "type": "string"
+                  },
+                  "split_debug_info": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "target": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "ios.xcode_build_ipa"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {
+                  "artifact": {
+                    "type": "string"
+                  },
+                  "mode": {
+                    "type": "string"
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "notify.prod_user_agent"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {},
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "notify.success"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {
+                  "include_ids": {
+                    "type": "boolean"
+                  },
+                  "message": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "python.build_distribution"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {
+                  "dist_dir": {
+                    "type": "string"
+                  },
+                  "python": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "sdist_artifact": {
+                    "type": "string"
+                  },
+                  "wheel_artifact": {
+                    "type": "string"
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "python.prepare_release"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {
+                  "changelog": {
+                    "type": "string"
+                  },
+                  "pyproject": {
+                    "type": "string"
+                  },
+                  "tag_reference_files": {
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "tag_reference_regex": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "version": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "version_file": {
+                    "type": "string"
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "python.pytest"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {},
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "python.ruff_check"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {},
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "release.require_version_available"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {
+                  "changelog": {
+                    "type": "string"
+                  },
+                  "github_repo": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "pypi_package": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "pyproject": {
+                    "type": "string"
+                  },
+                  "remote": {
+                    "type": "string"
+                  },
+                  "tag_prefix": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "tracker.comment"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {},
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "web.build"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {
+                  "env": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "env_name": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "web.cache_bust"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {
+                  "destination": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "inner": {
+                    "type": [
+                      "boolean",
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "web.copy"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {
+                  "destination": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "inner": {
+                    "type": [
+                      "boolean",
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "repository": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "step": {
+          "minLength": 1,
+          "not": {
+            "enum": [
+              "parallel",
+              "sequence"
+            ]
+          },
+          "type": "string"
+        },
+        "when": {
+          "$ref": "#/$defs/condition"
+        },
+        "with": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "step"
+      ],
+      "type": "object"
+    },
     "input": {
       "additionalProperties": false,
       "properties": {
@@ -1155,9 +2446,12 @@
           "maxProperties": 1,
           "minProperties": 1,
           "propertyNames": {
-            "pattern": "^(?!parallel$|sequence$)[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)+$"
+            "pattern": "^(?!step$|parallel$|sequence$)[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)+$"
           },
           "type": "object"
+        },
+        {
+          "$ref": "#/$defs/extendedStep"
         },
         {
           "additionalProperties": false,
@@ -2411,9 +3705,12 @@
           "maxProperties": 1,
           "minProperties": 1,
           "propertyNames": {
-            "pattern": "^(?!parallel$|sequence$)[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)+$"
+            "pattern": "^(?!step$|parallel$|sequence$)[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)+$"
           },
           "type": "object"
+        },
+        {
+          "$ref": "#/$defs/extendedStep"
         }
       ]
     }

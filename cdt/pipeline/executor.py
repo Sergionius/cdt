@@ -89,7 +89,13 @@ class ParallelStepGroup:
 
     def run(self, ctx: PipelineContext) -> None:
         selected_child = _selected_parallel_child(ctx.resume_from, self.step_id)
-        runnable_steps = [step for step in self.steps if selected_child is None or _step_id(step) == selected_child]
+        runnable_steps = [
+            step
+            for step in self.steps
+            if (selected_child is None or _step_id(step) == selected_child) and not ctx.should_skip_step(_step_id(step))
+        ]
+        if not runnable_steps:
+            return
         failures: dict[int, ChildFailure] = {}
         with ThreadPoolExecutor(max_workers=len(runnable_steps)) as pool:
             futures = {pool.submit(_run_parallel_child, step, ctx): step for step in runnable_steps}
@@ -118,6 +124,7 @@ class ParallelStepGroup:
 
 class PipelineExecutor:
     def run(self, steps: Sequence[Step], ctx: PipelineContext, *, resume_from: str | None = None) -> None:
+        _prepare_decisions(steps, ctx)
         ctx.mark_status_started()
         skipping_until = resume_from
         try:
@@ -163,6 +170,29 @@ class PipelineExecutor:
             if skipping_until is not None:
                 raise typer.BadParameter(f"Unknown resume step: {resume_from}")
             ctx.mark_status_success()
+
+
+def _prepare_decisions(steps: Sequence[Step], ctx: PipelineContext) -> None:
+    # Import locally: config builds the executor's group types.
+    from .config import evaluate_condition
+
+    ctx.step_decisions = {}
+    ctx.skipped_steps = []
+
+    def visit(step: Step) -> str:
+        step_id = _step_id(step)
+        if isinstance(step, (ParallelStepGroup, SequentialStepGroup)):
+            decisions = [visit(child) for child in step.steps]
+            decision = "skip" if decisions and all(value == "skip" for value in decisions) else "run"
+        else:
+            decision = evaluate_condition(getattr(step, "when", None), ctx.inputs)
+            if decision == "skip":
+                ctx.skipped_steps.append(step_id)
+        ctx.step_decisions[step_id] = decision
+        return decision
+
+    for step in steps:
+        visit(step)
 
 
 def _run_parallel_child(step: Step, ctx: PipelineContext) -> None:

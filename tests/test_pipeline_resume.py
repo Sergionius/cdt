@@ -30,6 +30,38 @@ def _compact_visible_text(output: str) -> str:
     return re.sub(r"\s+", "", visible)
 
 
+def test_resume_explicit_skipped_leaf_recomputes_conditions_from_inputs(tmp_path, monkeypatch):
+    _write_project(
+        tmp_path,
+        "      - parallel:\n          steps:\n            - sequence:\n                steps:\n"
+        "                  - step: demo.touch\n                    with: {output: '${MISSING}'}\n"
+        "                    when: {input: deploy, present: true}\n",
+    )
+    config = tmp_path / "cdt.yaml"
+    config.write_text(config.read_text().replace("    steps:\n", "    inputs: {deploy: {}}\n    steps:\n", 1))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    prior = tmp_path / "prior.json"
+    output = tmp_path / "out.json"
+    # A legacy status has no condition fields; stale saved decisions are also ignored.
+    for extra in ({}, {"step_decisions": {"0/0/0": "run"}, "skipped_steps": []}):
+        prior.write_text(json.dumps({"completed_steps": [], "artifacts": [], **extra}))
+        result = runner.invoke(
+            app,
+            ["run", "demo", "--resume-from", "0/0/0", "--resume-status-file", str(prior), "--status-file", str(output)],
+        )
+        assert result.exit_code == 0, result.output
+        status = json.loads(output.read_text())
+        assert status["skipped_steps"] == ["0/0/0"]
+        assert status["completed_steps"] == []
+        assert status["step_decisions"]["0/0/0"] == "skip"
+    mismatch = runner.invoke(
+        app, ["run", "demo", "--skip-completed", "--input", "deploy=yes", "--resume-status-file", str(prior)]
+    )
+    assert mismatch.exit_code != 0
+    assert "Resumeinputsdonotmatch" in _compact_visible_text(mismatch.output)
+
+
 def setup_function():
     _clear_steps_for_tests()
     for module in ("cdt_steps.resume", "cdt_steps.play", "cdt_steps.notify"):
@@ -557,11 +589,7 @@ def _submit_attempt_counts(calls: list[dict]) -> tuple[int, int, int]:
 
     creations = [c for c in calls if c["method"] == "POST" and c["path"] == "/v1/reviewSubmissions"]
     items = [c for c in calls if c["path"] == "/v1/reviewSubmissionItems"]
-    submits = [
-        c
-        for c in calls
-        if c["method"] == "PATCH" and re.fullmatch(r"/v1/reviewSubmissions/rs-\d+", c["path"])
-    ]
+    submits = [c for c in calls if c["method"] == "PATCH" and re.fullmatch(r"/v1/reviewSubmissions/rs-\d+", c["path"])]
     return len(creations), len(items), len(submits)
 
 
@@ -851,9 +879,7 @@ def test_google_play_resume_skips_completed_step_and_continues_from_checkpoint(t
     assert "commit: confirmed" in resumed.output
 
 
-def test_fresh_rerun_without_resume_continues_unfinished_operation_instead_of_bypassing(
-    tmp_path, monkeypatch
-):
+def test_fresh_rerun_without_resume_continues_unfinished_operation_instead_of_bypassing(tmp_path, monkeypatch):
     _write_play_project(tmp_path)
     monkeypatch.chdir(tmp_path)
     monkeypatch.syspath_prepend(str(tmp_path))

@@ -19,6 +19,8 @@ def preflight_payload(
     firebase_auth_required = False
     google_play_adc: str | None = None
     if pipeline is not None and not errors:
+        # Static preflight has no input set: inspect every declared leaf,
+        # including conditional ones. Conditions never waive risk validation.
         for step in _iter_steps(pipeline.steps):
             metadata = get_step_metadata(step.name)
             tools.update(metadata.external_tools)
@@ -29,21 +31,14 @@ def preflight_payload(
             if step.name == "google_play.upload_aab":
                 google_play_adc = (env.get("GOOGLE_APPLICATION_CREDENTIALS") or "").strip()
 
-    tool_checks = [
-        {"name": tool, "available": shutil.which(tool) is not None}
-        for tool in sorted(tools)
-    ]
-    env_checks = [
-        {"name": key, "present": bool(env.get(key, "").strip())}
-        for key in sorted(env_keys)
-    ]
+    tool_checks = [{"name": tool, "available": shutil.which(tool) is not None} for tool in sorted(tools)]
+    env_checks = [{"name": key, "present": bool(env.get(key, "").strip())} for key in sorted(env_keys)]
     if firebase_auth_required:
         env_checks.append(
             {
                 "name": "FIREBASE_TOKEN or GOOGLE_APPLICATION_CREDENTIALS",
                 "present": bool(
-                    env.get("FIREBASE_TOKEN", "").strip()
-                    or env.get("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+                    env.get("FIREBASE_TOKEN", "").strip() or env.get("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
                 ),
             }
         )
@@ -77,6 +72,6 @@ def preflight_payload(
 def _iter_steps(items: list[PipelineItemSpec]):
     for item in items:
         if isinstance(item, (ParallelSpec, SequenceSpec)):
-            yield from item.steps
+            yield from _iter_steps(item.steps)
         else:
             yield item

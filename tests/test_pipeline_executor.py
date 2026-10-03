@@ -10,6 +10,58 @@ from cdt.pipeline.executor import PipelineExecutionError
 from cdt.runner import CommandExecutionError, CommandRunner
 
 
+def test_condition_decisions_are_frozen_before_first_step(tmp_path):
+    events = []
+
+    class MutateInputs:
+        name = "mutate"
+
+        def run(self, ctx):
+            ctx.inputs["deploy"] = "yes"
+
+    leaf = RecordingStep("conditional", events)
+    leaf.when = {"input": "deploy", "equals": "yes"}
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner())
+    PipelineExecutor().run([MutateInputs(), leaf], ctx)
+    assert events == []
+    assert ctx.skipped_steps == ["conditional"]
+    assert ctx.completed_steps == ["mutate"]
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_all_skipped_parallel_never_constructs_pool_or_runtime_step(tmp_path, monkeypatch, nested):
+    from cdt.pipeline.config import ConfiguredStep
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("Skipped group must not create a thread pool")
+
+    monkeypatch.setattr("cdt.pipeline.executor.ThreadPoolExecutor", unexpected)
+    leaf = ConfiguredStep(
+        "unregistered.step",
+        {"option": "${MISSING}"},
+        "0/0/0" if nested else "0/0",
+        {"input": "deploy", "present": True},
+    )
+    children = [SequentialStepGroup([leaf], "0/0")] if nested else [leaf]
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner())
+    PipelineExecutor().run([ParallelStepGroup(children, "0")], ctx)
+    assert ctx.skipped_steps == [leaf.step_id]
+    assert ctx.completed_steps == []
+    assert ctx.artifacts == {}
+
+
+def test_mixed_sequence_skips_before_runtime_construction(tmp_path):
+    from cdt.pipeline.config import ConfiguredStep
+
+    events = []
+    active = RecordingStep("active", events)
+    skipped = ConfiguredStep("unregistered.step", {"option": "${MISSING}"}, "0/0", {"input": "deploy", "present": True})
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner())
+    PipelineExecutor().run([SequentialStepGroup([skipped, active], "0")], ctx)
+    assert events == ["active"]
+    assert "0/0" not in ctx.completed_steps
+
+
 class RecordingStep:
     def __init__(self, name: str, events: list[str], fail: bool = False):
         self.name = name

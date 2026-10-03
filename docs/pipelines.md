@@ -54,12 +54,52 @@ pipelines:
 Rules:
 
 - `required: true` fails the run when the input is missing; the optional `pattern` is a regex that the value must fully match.
-- Pass inputs as repeatable `--input KEY=VALUE` options on `cdt run` and `cdt agent-release start`. Unknown, duplicate, malformed (`no '='`), missing required, or pattern-violating inputs are rejected before any step runs.
+- Pass inputs as repeatable `--input KEY=VALUE` options on `cdt run`, `cdt pipeline plan`, and `cdt agent-release start`. Unknown, duplicate, malformed (`no '='`), missing required, or pattern-violating inputs are rejected before any step runs.
 - Step options interpolate inputs with `${inputs.<name>}`; referencing an undeclared input fails with a clear error.
 - Inputs are non-secret by contract: never pass credentials as inputs. They are stored redacted in the run manifest and status and shown by `cdt pipeline inspect` / `cdt pipeline plan` as declarations only (never runtime values).
 - Resume requires the same inputs as the original run; a release cannot be continued with a different version.
 
 Pipelines without `inputs` keep the previous behavior; no migration is needed.
+
+## Conditional steps
+
+Leaf steps also accept an extended form (including leaves inside existing groups):
+
+```yaml
+version: 1
+pipelines:
+  preview:
+    inputs:
+      deploy: {}
+    steps:
+      - step: firebase.deploy
+        with: {}
+        when:
+          input: deploy
+          equals: "yes"
+```
+
+`step` is required; `with` defaults to `{}` and contains only constructor options.
+`when` is optional. Unknown envelope fields are rejected. String and single-key
+step forms are unchanged. Conditions cannot be attached to groups.
+
+A condition names a declared input and exactly one operator:
+
+- `equals: "value"` / `not_equals: "value"`: exact, case-sensitive string comparisons.
+  Quote YAML booleans/numbers when using them as comparison strings.
+- `present: true`: the input exists and is not the empty string; whitespace is nonempty.
+  `present: false` is the inverse.
+- For an absent optional input, `equals` is false and `not_equals` is true.
+
+Conditions are literal: no `${...}` interpolation, env/runtime values, or expressions.
+All decisions are frozen after input validation and before the first step runs.
+Skipped leaves retain their numeric IDs, do not interpolate options or construct a
+runtime step, do not produce artifacts, and are not counted as completed.
+An entirely skipped parallel group does not create a worker pool.
+
+Conditions never bypass configuration validation, production risk requirements,
+or exact production confirmation. Static preflight remains conservative and checks
+all declared leaves, including conditional ones.
 
 ## CDT self-release pipeline
 
@@ -84,7 +124,14 @@ Use `cdt pipeline plan <pipeline>` to show the static step tree, parallel groups
 ```bash
 cdt pipeline plan prod
 cdt pipeline plan prod --json
+cdt pipeline plan preview --input deploy=yes --json
 ```
+
+Plans show each leaf's `when` and `decision` (`run`, `skip`, or `unknown`). With no
+`--input`, conditional decisions are `unknown`. Supplying inputs makes the set
+explicit: omitted optional inputs are absent, not unknown. Dry-run always uses an
+explicit set, even when empty: `cdt run preview --dry-run` skips the example above.
+Input declarations are shown, not the supplied runtime values.
 
 `cdt run <pipeline> --dry-run` uses the same planner and does not call step execution code. It is intended as a safe preflight before real release, upload, deploy, or git-push work. Dry runs do not create run records.
 
@@ -102,6 +149,11 @@ JSON plans include compact step metadata plus `artifact_flow` for each step. `ar
 
 `mode` is `all` when every listed type is required, or `any` when at least one is acceptable. `names` are best-effort artifact names inferred from static string options in `cdt.yaml` (for example, `artifact: ios_ipa`). Dynamic interpolations such as `${values.ios_artifact}` are ignored for static analysis. `artifact_flow.requires_names` and `produces_names` are flattened convenience lists.
 
+`artifact_flow` describes declared capabilities, not proof that a step will run.
+Only `run` producers contribute guaranteed available names; `skip` and `unknown`
+producers do not. Active consumers retain missing-artifact warnings, while skipped
+consumers need no artifacts.
+
 Artifact-flow warnings are preflight hints and do not block execution by themselves. A missing required artifact warning means a step refers to an artifact name that no previous sequential step declares. Parallel branches start together, so a branch cannot consume an artifact produced by a sibling branch; produce the artifact before the parallel group or consume it after the group completes.
 
 ## Steps and parallel groups
@@ -110,6 +162,7 @@ Each item in `steps` is one of:
 
 - Step name string: `- flutter.pub_get`
 - Single-key step mapping: `- android.build_aab: { profile: prod }`
+- Extended leaf mapping: `- step: flutter.pub_get` with optional `with` and `when`
 - Parallel group: `- parallel: { steps: [...] }`
 - Sequential group: `- sequence: { steps: [...] }`
 

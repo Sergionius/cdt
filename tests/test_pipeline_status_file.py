@@ -12,6 +12,28 @@ from tests.test_services_appstore_state import FakeAsc, _stub_client
 runner = CliRunner()
 
 
+def test_status_separates_skipped_leaves_from_completed(tmp_path, monkeypatch):
+    _write_demo_project(tmp_path)
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\nplugins: [cdt_steps.demo]\npipelines:\n  demo:\n"
+        "    inputs: {deploy: {}}\n    steps:\n"
+        "      - step: demo.artifact\n        when: {input: deploy, present: true}\n"
+        "      - demo.ok\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    output = tmp_path / "out.json"
+    result = runner.invoke(app, ["run", "demo", "--status-file", str(output)])
+    assert result.exit_code == 0, result.output
+    status = json.loads(output.read_text())
+    assert status["status"] == "success"
+    assert status["skipped_steps"] == ["0"]
+    assert status["completed_steps"] == ["1"]
+    assert status["step_decisions"] == {"0": "skip", "1": "run"}
+    assert status["artifacts"] == []
+    assert not (tmp_path / "build-count.txt").exists()
+
+
 def setup_function():
     _clear_steps_for_tests()
     sys.modules.pop("cdt_steps.demo", None)
@@ -201,7 +223,7 @@ def _write_submit_project(tmp_path) -> None:
                 "    steps:",
                 "      - appstore.submit_review:",
                 "          whats_new:",
-                "            ru: \"${inputs.whats_new}\"",
+                '            ru: "${inputs.whats_new}"',
                 "          release_mode: manual",
                 "          phased_release: true",
             ]
@@ -233,8 +255,7 @@ def test_submit_review_status_file_records_result_without_secrets(tmp_path, monk
 
     result = runner.invoke(
         app,
-        ["run", "submit", "--input", "whats_new=Исправления", "--confirm", "submit",
-         "--status-file", str(status_file)],
+        ["run", "submit", "--input", "whats_new=Исправления", "--confirm", "submit", "--status-file", str(status_file)],
     )
 
     assert result.exit_code == 0, result.output

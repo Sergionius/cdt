@@ -55,12 +55,18 @@ cdt agent-release status --run <run-id> --wait --json
 
 - `queued`: the record exists and execution has not started;
 - `running`: at least one step is executing or the pipeline is between steps;
-- `success`: every selected step completed;
+- `success`: every selected step completed or was skipped by its input condition;
 - `failed`: execution ended with an error;
 - `cancelled`: a detached process was stopped;
 - `blocked`: execution requires an external decision or state change.
 
 The status includes current/completed step IDs, parallel child state, artifact metadata, version changes, errors, and timestamps. Consumers must check `schema_version` before relying on fields.
+
+`step_decisions` records the precomputed `run`/`skip` decision by numeric ID (including
+groups). `skipped_steps` lists conditionally skipped leaves separately from
+`completed_steps`; they create no artifacts and do not renumber later steps.
+Decisions cover the whole pipeline even when resume selects only part of it.
+Older statuses may omit these optional fields.
 
 A status command may report `stale` when a detached PID disappeared without a terminal status or exit code. `timeout` is a wait result, not a pipeline terminal state.
 
@@ -152,6 +158,12 @@ cdt run release \
   --resume-status-file .cdt/runs/<run-id>/status.json \
   --skip-completed
 ```
+
+Input conditions are recomputed after matching the original inputs, not restored
+from saved decisions. Even an explicit `--resume-from <step-id>` cannot force a
+conditionally skipped leaf to run. Old statuses without condition fields remain
+valid resume sources; missing saved inputs mean an empty input set.
+See [Conditional steps](pipelines.md#conditional-steps) for syntax and semantics.
 
 For TestFlight pipelines, resume skips completed build and upload steps and starts at `appstore.complete_testflight` with the version context restored from the status file, so the IPA is not re-uploaded and the build number is unchanged:
 

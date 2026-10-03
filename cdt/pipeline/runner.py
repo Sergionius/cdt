@@ -92,6 +92,9 @@ def run_configured_pipeline(
         if resume_from or skip_completed:
             _restore_resume_status(ctx, resume_status_file)
         try:
+            # Recompute all conditions in the executor after resume input matching.
+            # Saved decisions/skips are informational, never execution authority;
+            # older status files need neither field.
             PipelineExecutor().run(steps, ctx, resume_from=resume_step_id)
         except BaseException as exc:
             if run_paths is not None:

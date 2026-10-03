@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .config import ParallelSpec, PipelineConfig, PipelineItemSpec, SequenceSpec, StepSpec
+from .config import ParallelSpec, PipelineConfig, PipelineItemSpec, SequenceSpec, StepSpec, evaluate_condition
 from .registry import StepMetadata, get_step_metadata
 from .validation import declared_inputs_payload, pipeline_names, validate_pipeline
 
@@ -22,19 +22,28 @@ _RISK_ORDER = {
 @dataclass
 class _PlanState:
     available_names: set[str] = field(default_factory=set)
+    inputs: dict[str, str] | None = None
 
     def copy(self) -> "_PlanState":
-        return _PlanState(set(self.available_names))
+        return _PlanState(set(self.available_names), self.inputs)
 
     def add_flow(self, flow: dict[str, Any]) -> None:
         self.available_names.update(flow["produces_names"])
 
 
-def plan_payload(config: PipelineConfig, name: str, *, errors: list[dict[str, str]] | None = None) -> dict[str, Any]:
+def plan_payload(
+    config: PipelineConfig,
+    name: str,
+    *,
+    errors: list[dict[str, str]] | None = None,
+    inputs: dict[str, str] | None = None,
+) -> dict[str, Any]:
     validation_errors = errors if errors is not None else validate_pipeline(config, name)
     pipeline = config.pipelines.get(name)
     warnings: list[dict[str, str]] = []
-    steps = [] if pipeline is None else _plan_sequence(pipeline.steps, warnings, f"pipelines.{pipeline.name}.steps")
+    steps = (
+        [] if pipeline is None else _plan_sequence(pipeline.steps, warnings, f"pipelines.{pipeline.name}.steps", inputs)
+    )
     return {
         "schema_version": 1,
         "pipeline": name,
@@ -53,11 +62,11 @@ def _plan_sequence(
     items: list[PipelineItemSpec],
     warnings: list[dict[str, str]],
     path_prefix: str,
+    inputs: dict[str, str] | None,
 ) -> list[dict[str, Any]]:
-    state = _PlanState()
+    state = _PlanState(inputs=inputs)
     return [
-        _plan_node(item, warnings, state, f"{path_prefix}[{index}]", str(index))
-        for index, item in enumerate(items)
+        _plan_node(item, warnings, state, f"{path_prefix}[{index}]", str(index)) for index, item in enumerate(items)
     ]
 
 
@@ -72,7 +81,7 @@ def _plan_node(
 ) -> dict[str, Any]:
     if isinstance(item, ParallelSpec):
         before_group = state.copy()
-        branch_outputs = [_declared_produced_names(child) for child in item.steps]
+        branch_outputs = [_declared_produced_names(child, state.inputs) for child in item.steps]
         planned_steps: list[dict[str, Any]] = []
         for index, child in enumerate(item.steps):
             produced_by_other_branches = set().union(
@@ -114,21 +123,27 @@ def _plan_node(
             "steps": planned_steps,
         }
     node = _plan_step(item, warnings, path, step_id)
-    _warn_for_missing_artifacts(
-        item.name,
-        node["artifact_flow"],
-        state,
-        warnings,
-        path,
-        sibling_produced_names=sibling_produced_names,
-    )
-    state.add_flow(node["artifact_flow"])
+    node["when"] = item.when
+    node["decision"] = evaluate_condition(item.when, state.inputs)
+    if node["decision"] != "skip":
+        _warn_for_missing_artifacts(
+            item.name,
+            node["artifact_flow"],
+            state,
+            warnings,
+            path,
+            sibling_produced_names=sibling_produced_names,
+        )
+    if node["decision"] == "run":
+        state.add_flow(node["artifact_flow"])
     return _strip_internal_path(node)
 
 
-def _declared_produced_names(item: PipelineItemSpec) -> set[str]:
+def _declared_produced_names(item: PipelineItemSpec, inputs: dict[str, str] | None) -> set[str]:
     if isinstance(item, (ParallelSpec, SequenceSpec)):
-        return set().union(*(_declared_produced_names(child) for child in item.steps))
+        return set().union(*(_declared_produced_names(child, inputs) for child in item.steps))
+    if evaluate_condition(item.when, inputs) != "run":
+        return set()
     try:
         metadata = get_step_metadata(item.name)
     except Exception:
@@ -254,8 +269,7 @@ def _warn_for_all_artifact_requirement(
             {
                 "code": "missing_required_artifact",
                 "message": (
-                    f"Step {step_name} requires artifact name {artifact_name}, "
-                    "but no previous step declares it."
+                    f"Step {step_name} requires artifact name {artifact_name}, but no previous step declares it."
                 ),
                 "path": path,
             }

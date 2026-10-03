@@ -1,0 +1,449 @@
+<!-- ralphex-base: 471f35ee31b83327a89c2cbffe7e13d1069d21c5 -->
+
+# Реализация восьми направлений P1 из backlog
+<!-- plan-slug: p1-backlog-implementation -->
+
+## Goal
+
+Реализовать согласованный минимальный объём всех восьми направлений P1: документацию существующих возможностей и iOS signing, условия по inputs, безопасные retries и поддерживаемые таймауты, изоляцию parallel values, generic webhook, локализованные тексты App Store и рецепт распространения Python-плагинов.
+
+Это единый исполняемый план изменений, а не roadmap создания будущих планов.
+
+## Context
+
+- Python ≥3.10; проект использует Typer, PyYAML, pytest и Ruff.
+- `cdt/pipeline/config.py` разбирает YAML v1, создаёт `ConfiguredStep` и разрешает `${inputs.*}`, `${values.*}`, env и ссылки на артефакты.
+- `cdt/pipeline/planning.py` строит статический план и проверяет поток артефактов. Исполнение находится в `cdt/pipeline/executor.py`.
+- `parallel` использует `ThreadPoolExecutor`, общий `PipelineContext` и дожидается остальных веток после ошибки. В `sequence` нельзя вкладывать группы.
+- Регистрация артефактов защищена lock, но `ctx.values` — общий словарь. Запись статуса защищена lock, изменения коллекций перед записью — не полностью.
+- Resume использует числовые step IDs, completed steps, артефакты и проверку совпадения inputs. Произвольные `values` сейчас не восстанавливаются.
+- `StepMetadata` и `cdt/sdk.py` описывают плагины; загрузка происходит через явный список Python-модулей.
+- `cdt/schema.py` генерирует `cdt/cdt.schema.json`; существующие тесты проверяют их соответствие.
+- `hook.python_script` уже имеет `timeout`, но `subprocess.run` не обеспечивает остановку всех потомков процесса.
+- ASC имеет собственные bounded retries и обработку неоднозначных мутаций. `appstore.submit_review` уже поддерживает локализованный `whats_new`.
+- `notify.success` использует Telegram/Pachca и сообщает ошибки предупреждениями.
+- `firebase.deploy`, `firebase.ensure_cli` и звуковые уведомления уже реализованы, но недостаточно представлены в документации.
+- Существующий `docs/plans/p1-backlog-roadmap.md` координирует будущие работы и не выполняет исходный запрос на единый implementation plan.
+
+## Scope
+
+### Условия
+
+Добавить расширенную запись листового шага, сохранив прежние формы:
+
+```yaml
+- step: firebase.deploy
+  with: {}
+  when:
+    input: deploy
+    equals: "yes"
+```
+
+`when` содержит имя объявленного input и ровно один оператор: `equals`, `not_equals` или `present`.
+
+- Сравнения строковые, без интерполяции и вычисления выражений.
+- `present: true` означает существующее непустое значение; `present: false` — обратное.
+- Для отсутствующего input `equals` возвращает false, `not_equals` — true.
+- Условия относятся только к листовым шагам, включая листья внутри существующих групп.
+- Все решения вычисляются до первого шага.
+- Статический план без набора inputs показывает `unknown`; план с inputs и dry-run — `run` или `skip`.
+- Пропуск не считается выполнением и не создаёт артефакты.
+- Условие не отменяет проверку production risk и необходимость существующего подтверждения.
+
+### Повторы и таймауты
+
+В расширенной записи доступны:
+
+```yaml
+retry:
+  max_attempts: 3
+  delay_seconds: 1
+timeout_seconds: 30
+```
+
+- По умолчанию одна попытка.
+- `max_attempts` — целое число от 1 до 5; задержка — конечное число от 0 до 60 секунд.
+- Повтор разрешён только при `StepMetadata.retry_safe: true` и специальной ошибке `RetryableStepError`.
+- Такая ошибка означает временный сбой, после которого безопасно повторить весь шаг, включая его локальные изменения.
+- Обычные исключения, ошибки валидации, отмена и неоднозначные результаты мутаций не повторяются.
+- Метка `risk: safe` сама по себе не разрешает retries.
+- Встроенным upload/push/publication, webhook и произвольным hooks автоматические повторы не разрешаются.
+- Первый рабочий путь общей retry policy — явно зарегистрированные безопасные SDK-шаги; существующие встроенные сервисные retries сохраняются.
+- `timeout_seconds` передаётся в объявленный metadata параметр нативного таймаута шага. Без такой capability настройка отклоняется до исполнения.
+- Первые встроенные потребители: `hook.python_script` и новый `notify.webhook`.
+- Таймаут не реализуется через ожидание Python-потока и не обещает принудительной остановки произвольного Python-кода.
+
+### Parallel values
+
+Каждая ветка получает исходный снимок `values`; последовательные шаги одной ветки видят её изменения, соседние — нет.
+
+После успешного завершения всех веток выполняется атомарное объединение:
+
+- изменения разных ключей объединяются;
+- одинаковые конечные значения одного ключа допустимы;
+- разные значения, либо удаление против записи одного ключа, вызывают ошибку группы;
+- при ошибке ветки или конфликте частичного объединения нет.
+
+Зарегистрированные артефакты и существующая модель завершения соседних веток сохраняются. Изоляция относится к `values`, а не является полной транзакцией context, файловой системы или внешних сервисов.
+
+### Webhook
+
+Добавить `notify.webhook`:
+
+- обязательные `url_env` и `payload`;
+- необязательный `authorization_env`, содержащий полное значение заголовка Authorization;
+- `timeout_seconds: 30`, `fail_on_error: true` по умолчанию;
+- HTTPS POST с JSON, без перенаправлений и автоматических повторов;
+- успешны только ответы 2xx;
+- payload задаётся явно, весь context не отправляется;
+- URL, авторизация и тело ответа не выводятся в сообщения и сохранённые логи.
+
+### App Store metadata
+
+Добавить production-шаг `appstore.update_metadata`:
+
+- обязательная явно указанная `version`, допускающая существующую интерполяцию inputs;
+- приложение выбирается по `IOS_BUNDLE_ID`;
+- обязательное непустое отображение `localizations`;
+- поддерживаемые поля: `description`, `keywords`, `promotional_text`, `whats_new`;
+- обновляются только переданные поля существующих локализаций существующей iOS-версии;
+- отсутствующее поле сохраняется; пустая строка означает явную очистку, если ASC её допускает;
+- версия должна находиться в `PREPARE_FOR_SUBMISSION`;
+- шаг не создаёт версию, локализацию или submission и не выбирает build;
+- после неоднозначного PATCH выполняется проверка чтением, но не слепой повтор.
+
+### Документация и плагины
+
+Документировать существующие Firebase-шаги, звук, безопасный signing для local/CI и повторное использование устанавливаемого Python-пакета через существующие SDK и `plugins`.
+
+Новые entry points, registry и механизм установки не вводятся.
+
+## Out of Scope
+
+- Screenshots и полная замена fastlane `deliver`.
+- Slack-specific formatting.
+- Условия по env/runtime values, Python expressions, matrix builds.
+- Новая вложенность групп и отмена соседних parallel-веток.
+- Изоляция каждого шага в отдельном процессе.
+- Универсальная транзакция или автоматический rollback внешних эффектов.
+- Новый signing manager, Ruby-зависимость, автоматическое создание сертификатов.
+- Реальные публикации, сетевые проверки production-сервисов и изменения версии пакета.
+
+## Implementation Steps
+
+### Task 1: Добавить условия по inputs сквозным изменением
+
+**Files:**
+- Modify: `cdt/pipeline/config.py`
+- Modify: `cdt/pipeline/planning.py`
+- Modify: `cdt/pipeline/validation.py`
+- Modify: `cdt/pipeline/preflight.py`
+- Modify: `cdt/pipeline/executor.py`
+- Modify: `cdt/pipeline/context.py`
+- Modify: `cdt/pipeline/runner.py`
+- Modify: `cdt/cli.py`
+- Modify: `cdt/schema.py`
+- Modify: `cdt/cdt.schema.json`
+- Modify: `tests/test_pipeline_config.py`
+- Modify: `tests/test_pipeline_plan.py`
+- Modify: `tests/test_pipeline_executor.py`
+- Modify: `tests/test_pipeline_resume.py`
+- Modify: `tests/test_pipeline_status_file.py`
+- Modify: `tests/test_agent_first.py`
+- Modify: `tests/test_cli.py`
+- Modify: `docs/pipelines.md`
+- Modify: `docs/runs.md`
+
+- [x] Добавить расширенную форму `step`/`with`/`when` без изменения старых строковых и single-key записей; неизвестные поля отклонять.
+- [x] Хранить условие отдельно от опций конструктора шага; сохранить существующие step IDs, включая пропущенные листья.
+- [x] Проверять объявление input, единственность оператора и тип значения; запретить динамическую интерполяцию внутри условия.
+- [x] Реализовать единый evaluator условий для планирования и исполнения; вычислять таблицу решений после проверки inputs и до выполнения pipeline.
+- [x] Добавить `--input` к `cdt pipeline plan`, передавать inputs в planner из dry-run; различать неизвестный набор inputs и явно переданный набор с отсутствующим optional input.
+- [x] Показывать условие и решение в текстовом/JSON плане; не считать условно произведённый артефакт гарантированным при неизвестном решении.
+- [x] Исключать outputs пропущенных шагов из доступного потока артефактов; для активного потребителя сохранять существующие предупреждения о недоступных артефактах.
+- [x] Пропускать шаг до интерполяции его опций и создания runtime-экземпляра; записывать `skipped_steps` отдельно от `completed_steps`.
+- [x] Обрабатывать группу, в которой все листья пропущены, без запуска пустого thread pool.
+- [x] Сохранить проверку конфигурации и production risk для всех объявленных шагов, даже пропущенных; статический preflight без inputs остаётся консервативным.
+- [x] Исправить обход листьев preflight для `sequence` внутри `parallel`, чтобы поддерживаемая форма не передавала group spec как обычный шаг.
+- [x] При resume пересчитывать условия с теми же inputs; явно выбранный пропущенный шаг не выполнять. Старые статусы без новых полей принимать.
+- [x] Обновить генератор и bundled schema вместе, исключив неоднозначное совпадение новой формы с plugin-схемой.
+- [x] Добавить регрессии для старого YAML, всех операторов, optional inputs, групп, пропущенных опций с отсутствующим env, артефактов, production risk и resume.
+- [x] Документировать синтаксис и семантику пропуска; выполнить применимые проверки из Validation.
+
+### Task 2: Изолировать parallel values и сохранить безопасный resume
+
+**Files:**
+- Create: `cdt/pipeline/values.py`
+- Modify: `cdt/pipeline/context.py`
+- Modify: `cdt/pipeline/executor.py`
+- Modify: `cdt/pipeline/runner.py`
+- Modify: `tests/test_pipeline_context.py`
+- Modify: `tests/test_pipeline_executor.py`
+- Modify: `tests/test_pipeline_resume.py`
+- Modify: `tests/test_pipeline_status_file.py`
+- Modify: `tests/test_pipeline_error_ux.py`
+- Modify: `docs/pipelines.md`
+- Modify: `docs/runs.md`
+
+- [ ] Ввести mapping-совместимое хранилище `values` с корневым словарём и scoped branch-local словарями; сохранить передачу обычного dict в конструктор context и привычные операции чтения/записи.
+- [ ] Привязывать branch scope внутри worker через context manager; очищать scope в `finally`, включая ошибки, пропуски и повторное использование потока.
+- [ ] Создавать снимки всех веток до их запуска; последовательным шагам одной ветки передавать один scope, не клонируя остальные поля context.
+- [ ] Вычислять delta относительно исходного снимка, включая удаления; после завершения всех веток проверять конфликты и применять общий результат атомарно только при успехе.
+- [ ] Сообщать конфликт по step IDs и именам ключей без вывода значений; при нескольких ошибках сохранять детерминированный порядок существующего отчёта.
+- [ ] Синхронизировать изменение status-коллекций вместе с созданием снимка статуса; применять единый порядок захвата locks без повторного захвата нерекурсивного lock.
+- [ ] Добавить версионированное необязательное состояние values в status: корневые values, исходный снимок незавершённой группы и branch snapshots на границах успешно завершённых листьев.
+- [ ] При resume восстанавливать исходную базу группы и branch snapshots, чтобы пропуск завершённых листьев не терял их values и не делал их видимыми соседним веткам.
+- [ ] При частичном resume группы не объединять delta неисполненной незавершённой ветки; объяснять необходимость завершения остальных веток.
+- [ ] Сохранять checkpoints через существующую redaction. Если redaction изменила данные, необходимые для восстановления, отмечать снимок невосстановимым и отклонять такой resume вместо восстановления `***` или повторения завершённых side effects.
+- [ ] Для старых статусов сохранить прежний resume вне затронутого сценария; при необходимости восстановить отсутствующее состояние частично завершённой parallel-группы выдавать понятную ошибку до новых шагов.
+- [ ] Проверить изоляцию sibling branches, видимость внутри sequence, одинаковые и конфликтующие записи, удаления, ошибку ветки, skipped leaves и восстановление после частичного выполнения.
+- [ ] Документировать изменение прежнего общего `values`, ограничения остальных полей context и отсутствие rollback внешних эффектов; выполнить применимые проверки.
+
+### Task 3: Реализовать opt-in retry policy для безопасных шагов
+
+**Files:**
+- Create: `cdt/pipeline/policy.py`
+- Modify: `cdt/pipeline/registry.py`
+- Modify: `cdt/sdk.py`
+- Modify: `cdt/pipeline/config.py`
+- Modify: `cdt/pipeline/validation.py`
+- Modify: `cdt/pipeline/planning.py`
+- Modify: `cdt/pipeline/context.py`
+- Modify: `cdt/schema.py`
+- Modify: `cdt/cdt.schema.json`
+- Modify: `tests/test_pipeline_registry.py`
+- Modify: `tests/test_pipeline_config.py`
+- Modify: `tests/test_pipeline_executor.py`
+- Modify: `tests/test_pipeline_status_file.py`
+- Modify: `tests/test_pipeline_resume.py`
+- Modify: `tests/test_agent_first.py`
+- Modify: `docs/pipelines.md`
+- Modify: `docs/runs.md`
+
+- [ ] Добавить `retry_safe: false` в metadata, её нормализацию, сериализацию и оба пути SDK-декоратора; экспортировать `RetryableStepError`.
+- [ ] Добавить `retry` в расширенную запись листа, отдельно от constructor options; валидировать границы, конечность чисел и запрет boolean вместо integer.
+- [ ] Разрешать `max_attempts > 1` только при явной capability; не выводить её из risk и не добавлять её автоматически встроенным шагам.
+- [ ] В `ConfiguredStep` применять policy одинаково для последовательных и parallel-листьев; на каждой попытке создавать новый runtime-экземпляр шага.
+- [ ] Повторять только `RetryableStepError`, с фиксированной задержкой и ограниченным числом попыток; остальные ошибки и `BaseException` не перехватывать как retryable.
+- [ ] Зафиксировать SDK-контракт: перед retryable ошибкой шаг обязан оставить context и внешние эффекты в повторяемом состоянии; executor не выполняет фиктивный общий rollback.
+- [ ] Отмечать лист завершённым только после успешной попытки; сохранять количество попыток и редактированную последнюю ошибку, не отмечая промежуточный сбой terminal failure.
+- [ ] При явном resume незавершённого шага начинать новый ограниченный цикл попыток; завершённый шаг по-прежнему пропускать.
+- [ ] Показывать policy и capability в inspect/plan; обновить generated schema.
+- [ ] Добавить SDK fixture с временной ошибкой и последующим успехом; проверить исчерпание попыток, отсутствие повторов для обычных ошибок, unsafe metadata, skipped steps и completed resume.
+- [ ] Проверить, что ASC, Google Play, webhook, hooks, push и публикации не получают новые автоматические повторы; документировать контракт и выполнить применимые проверки.
+
+### Task 4: Добавить capability-based timeouts и остановку hook subprocess
+
+**Files:**
+- Modify: `cdt/pipeline/registry.py`
+- Modify: `cdt/sdk.py`
+- Modify: `cdt/pipeline/config.py`
+- Modify: `cdt/pipeline/validation.py`
+- Modify: `cdt/pipeline/planning.py`
+- Modify: `cdt/pipeline/builtins.py`
+- Modify: `cdt/runner.py`
+- Modify: `cdt/steps/hook.py`
+- Modify: `cdt/schema.py`
+- Modify: `cdt/cdt.schema.json`
+- Modify: `tests/test_pipeline_config.py`
+- Modify: `tests/test_pipeline_registry.py`
+- Modify: `tests/test_runner.py`
+- Modify: `tests/test_steps_hook.py`
+- Modify: `tests/test_agent_first.py`
+- Modify: `docs/pipelines.md`
+
+- [ ] Добавить metadata `timeout_option: str | None`, передаваемую через SDK и inspect; capability обозначает существующий нативный параметр шага.
+- [ ] Поддержать положительный конечный `timeout_seconds` в расширенной записи; при отсутствии capability отклонять настройку до исполнения.
+- [ ] Передавать значение в объявленный constructor option; одновременную настройку envelope timeout и того же параметра в `with` отклонять как неоднозначную.
+- [ ] Для `hook.python_script` объявить `timeout_option: timeout`; сохранить старый синтаксис, default 30 секунд и `timeout: null` для старой формы.
+- [ ] Выделить в `cdt/runner.py` helper управляемого subprocess с сохранением текущего вывода hook, cwd и env; не менять все существующие command call sites.
+- [ ] На POSIX запускать hook в отдельной process group, при timeout отправлять TERM группе, затем KILL через ограниченный grace period и обязательно reap непосредственного процесса.
+- [ ] Использовать ту же очистку при прерывании ожидания; потомкам, самостоятельно покинувшим process group, не обещать гарантированную остановку.
+- [ ] На неподдерживаемой платформе отклонять новый envelope timeout capability, а не заявлять несуществующую гарантию дерева процессов; старое платформенное поведение отдельно документировать.
+- [ ] Сохранить `fail_on_error` и проверку outputs; timeout не превращать в retryable ошибку и не скрывать неуспех очистки.
+- [ ] Добавить контролируемые локальные тесты зависшего hook с дочерним процессом и cleanup в `finally`, а также проверки старых параметров и несовместимых настроек.
+- [ ] Документировать различие нативного operation timeout и жёсткого общего deadline Python-шага; обновить schema и выполнить применимые проверки.
+
+### Task 5: Добавить безопасный generic webhook
+
+**Files:**
+- Create: `cdt/services/webhook.py`
+- Create: `tests/test_services_webhook.py`
+- Create: `tests/test_steps_notify.py`
+- Modify: `cdt/steps/notify.py`
+- Modify: `cdt/pipeline/builtins.py`
+- Modify: `cdt/pipeline/preflight.py`
+- Modify: `cdt/redaction.py`
+- Modify: `cdt/schema.py`
+- Modify: `cdt/cdt.schema.json`
+- Modify: `tests/test_redaction.py`
+- Modify: `tests/test_agent_first.py`
+- Modify: `docs/pipelines.md`
+
+- [ ] Реализовать согласованный `notify.webhook` и регистрацию с `retry_safe: false`, `timeout_option: timeout_seconds`.
+- [ ] Проверять имена env keys, непустой JSON-object payload, положительный конечный timeout и boolean `fail_on_error`.
+- [ ] Разрешать обычную интерполяцию явно заданных payload полей, но не добавлять env, inputs, artifacts или context автоматически.
+- [ ] Получать destination и Authorization только по явно указанным env keys; принимать HTTPS URL с host, без userinfo и fragment.
+- [ ] Выполнять один POST через стандартную библиотеку с проверкой TLS и запретом redirects; не читать и не выводить тело ответа.
+- [ ] Считать успешным только 2xx; сетевые ошибки, timeout и другие статусы превращать в безопасную ошибку либо предупреждение согласно `fail_on_error`.
+- [ ] Не включать URL, Authorization, payload или сырое исключение transport в сообщения. Отражать только безопасную категорию ошибки и HTTP status при наличии.
+- [ ] Проверять payload на присутствие известных секретов context, destination и Authorization; отклонять такой payload до отправки, не подменяя секрет на `***` незаметно для пользователя.
+- [ ] На preflight проверять наличие динамически выбранных env keys без отправки запроса; plan/inspect оставлять без чтения credentials и сетевых действий.
+- [ ] Проверить default strict mode, warning mode, HTTP ошибки, redirects, timeout, отсутствие retries и утечек в status/output.log на mocked transport.
+- [ ] Сохранить Telegram/Pachca и прежнюю семантику `notify.success`; обновить schema, документацию и выполнить применимые проверки.
+
+### Task 6: Добавить обновление локализованных текстов App Store
+
+**Files:**
+- Create: `cdt/services/appstore_metadata.py`
+- Create: `tests/test_services_appstore_metadata.py`
+- Modify: `cdt/steps/appstore.py`
+- Modify: `cdt/pipeline/builtins.py`
+- Modify: `cdt/pipeline/validation.py`
+- Modify: `cdt/schema.py`
+- Modify: `cdt/cdt.schema.json`
+- Modify: `tests/test_steps_appstore.py`
+- Modify: `tests/test_agent_first.py`
+- Modify: `tests/test_pipeline_plan.py`
+- Modify: `docs/pipelines.md`
+- Modify: `docs/runs.md`
+
+- [ ] Реализовать `appstore.update_metadata(version, localizations)` отдельно от `SubmitReviewStep`.
+- [ ] Валидировать непустую version, непустые locale mappings, известные имена полей и строковые значения; не выполнять неявного преобразования чисел и boolean в тексты.
+- [ ] Использовать существующие `_AscClient`, точный поиск приложения/версии, пагинацию и получение version localizations.
+- [ ] Требовать существующую iOS-версию в `PREPARE_FOR_SUBMISSION`; не использовать get-or-create и не опираться на последнее uploaded build.
+- [ ] До первой мутации проверить существование всех запрошенных локализаций и валидность всего запроса; неизвестная locale должна остановить шаг без частичного обновления.
+- [ ] Сопоставить поля с ASC attributes: `description`, `keywords`, `promotionalText`, `whatsNew`; обновлять только отличающиеся явно переданные значения.
+- [ ] Обрабатывать локали в стабильном порядке; PATCH выполнять с `retry_ambiguous=False`.
+- [ ] После PATCH проверять результат чтением. При неоднозначном результате считать локаль успешной только при совпадении всех запрошенных полей; иначе завершаться сообщением о непроверенном результате без повторного PATCH в этом запуске.
+- [ ] При обычном повторном запуске сначала читать текущее состояние и пропускать совпадающие поля; частичный успех не объявлять общей транзакцией и не откатывать автоматически.
+- [ ] Сохранять безопасный итог с версией и обработанными locale names, без credentials и полного текста metadata; не заявлять отправку на review или публикацию.
+- [ ] Требовать `risk: production` рекурсивно, в том числе для условно пропущенного шага; использовать существующую CLI-защиту direct/detached.
+- [ ] Оставить `retry_safe: false` и не объявлять общий timeout capability: ASC сохраняет собственные настройки запросов.
+- [ ] Покрыть неизвестные version/locale, неeditable state, минимальные PATCH, пустую строку, частичный успех, неоднозначный ответ, read-back mismatch и повторный запуск.
+- [ ] Проверить отсутствие сетевых вызовов у inspect/plan/dry-run и отсутствие изменений в `appstore.submit_review`; обновить schema, документацию и выполнить применимые проверки.
+
+### Task 7: Документировать существующие шаги, signing и переносимые плагины
+
+**Files:**
+- Create: `docs/ios-signing.md`
+- Create: `docs/plugins.md`
+- Create: `examples/reusable-plugin/pyproject.toml`
+- Create: `examples/reusable-plugin/src/cdt_example_steps/__init__.py`
+- Create: `examples/reusable-plugin/cdt.yaml`
+- Modify: `README.md`
+- Modify: `docs/pipelines.md`
+- Modify: `docs/getting-started.md`
+- Modify: `tests/test_examples.py`
+- Modify: `tests/test_pipeline_registry.py`
+
+- [ ] Документировать реальные параметры и назначение `firebase.ensure_cli` и `firebase.deploy`, не вводя `web.deploy`.
+- [ ] Описать существующее звуковое поведение и настройки по `cdt/sounds.py`, включая ограничения среды, без обещания звука в headless CI.
+- [ ] Написать signing recipe для локального Xcode/Flutter и CI: certificate с private key, provisioning profile, bundle/team matching, временный keychain, import/access и cleanup.
+- [ ] Отделить code signing от ASC API authentication; не хранить секреты в YAML/repository и не предлагать вывод credentials в логи.
+- [ ] Использовать существующие способы конфигурации iOS-платформ, без новых runtime-флагов, Ruby или signing manager.
+- [ ] Создать минимальный пакет примера со `src` layout, `@step`, явными metadata и безопасным retryable read-only примером без реальных сетевых действий.
+- [ ] Показать установку пакета в то же Python-окружение, где находится CDT, и подключение `plugins: [cdt_example_steps]` из нескольких проектов.
+- [ ] Документировать доверенную природу Python imports, конфликт регистрации имён и отсутствие автоматического discovery/установки.
+- [ ] Проверить пример в изолированном subprocess теста с локальным import path; не устанавливать ничего глобально и не обращаться к package index.
+- [ ] Добавить ссылки из существующей документации; выполнить тесты примеров и применимые регрессии.
+
+### Task 8: Согласовать документацию, закрыть выполненные backlog-источники и проверить интеграцию
+
+**Files:**
+- Modify: `README.md`
+- Modify: `CHANGELOG.md`
+- Modify: `docs/plans/p1-backlog-roadmap.md`
+- Modify: `tests/test_pipeline_executor.py`
+- Modify: `tests/test_pipeline_resume.py`
+- Modify: `tests/test_pipeline_status_file.py`
+- Modify: `tests/test_agent_first.py`
+- Delete: `docs/backlog/p1-document-existing-steps.md`
+- Delete: `docs/backlog/p1-ios-signing-recipe.md`
+- Delete: `docs/backlog/p1-conditional-steps.md`
+- Delete: `docs/backlog/p1-safe-step-retries.md`
+- Delete: `docs/backlog/p1-parallel-step-safety.md`
+- Delete: `docs/backlog/p1-generic-notifications.md`
+- Delete: `docs/backlog/p1-app-store-metadata.md`
+- Delete: `docs/backlog/p1-plugin-discovery.md`
+
+- [ ] Добавить сквозной offline-сценарий: inputs → условные листья → parallel sequence → изолированные values → безопасная повторная попытка → mocked webhook.
+- [ ] Проверить отказ группы без частичного values merge, resume завершённых листьев без потери branch state и отсутствие повторной отправки завершённого webhook при `--skip-completed`.
+- [ ] Проверить, что новые production metadata steps не обходят подтверждение через условие, вложенность или detached execution.
+- [ ] Сверить generated schema и bundled schema, старые YAML-примеры, human-readable и JSON payloads.
+- [ ] Обновить README: вместо обещания будущего demand-driven roadmap дать ссылки на реализованные возможности и их ограничения.
+- [ ] Переписать старый roadmap как краткую историческую карту результатов восьми направлений с действующими ссылками на документацию, без утверждений об обязательных будущих дизайнах.
+- [ ] Зафиксировать в changelog новый синтаксис и намеренное изменение parallel values, ограничения retries/timeouts и новых интеграций.
+- [ ] Удалить восемь backlog-файлов только после выполнения соответствующих критериев этого плана; явно описать минимальное решение plugin discovery и отсутствие обещаний entry points.
+- [ ] Не менять завершённый исторический execution plan и не переписывать его прежние решения задним числом.
+- [ ] Выполнить полную Validation без реальных uploads, публикаций, credentials и production pipeline.
+
+## Validation
+
+После каждого Task выполнить существующие тесты изменённой области и `ruff check .`; generated schema и новые consumers должны оставаться согласованными в конце каждого Task.
+
+Для runtime, условий, policies и parallel:
+
+```bash
+pytest tests/test_pipeline_config.py tests/test_pipeline_registry.py tests/test_pipeline_plan.py tests/test_pipeline_executor.py tests/test_pipeline_context.py tests/test_pipeline_resume.py tests/test_pipeline_status_file.py tests/test_pipeline_error_ux.py tests/test_agent_first.py tests/test_cli.py
+ruff check .
+```
+
+Для subprocess:
+
+```bash
+pytest tests/test_runner.py tests/test_steps_hook.py
+```
+
+Для новых интеграций после появления соответствующих файлов:
+
+```bash
+pytest tests/test_services_webhook.py tests/test_steps_notify.py tests/test_services_notify.py tests/test_redaction.py
+pytest tests/test_services_appstore_metadata.py tests/test_steps_appstore.py tests/test_services_appstore.py tests/test_services_appstore_review.py tests/test_services_appstore_state.py
+```
+
+Для документационных примеров:
+
+```bash
+pytest tests/test_examples.py tests/test_pipeline_registry.py tests/test_steps_firebase.py tests/test_sounds.py tests/test_ios_flutter.py tests/test_ios_xcode.py
+```
+
+Итоговые проверки:
+
+```bash
+pytest
+ruff check .
+python -m build
+```
+
+Сборка проверяет включение новых Python-модулей и bundled schema. Все HTTP/ASC обращения в тестах подменяются. Process-tree тесты используют временные локальные scripts с гарантированным cleanup и платформенным ограничением.
+
+Дополнительно проверить существование относительных ссылок и отсутствие ссылок на удалённые backlog-файлы в актуальной документации; исторические планы не переписывать.
+
+## Acceptance Criteria
+
+- Все восемь направлений имеют конкретный работающий результат в согласованном минимальном объёме.
+- Старые YAML-формы и pipeline без новых настроек сохраняют поведение, кроме явно документированной изоляции parallel values.
+- Условия вычисляются до исполнения, видны в плане/status и не обходят production-защиту.
+- Parallel-ветки не видят изменения values соседей; объединение детерминировано, конфликты не оставляют частичного результата.
+- Resume не теряет необходимое branch state и не повторяет завершённые side effects автоматически.
+- Retry требует явной capability и специальной ошибки; неоднозначные публикации не повторяются.
+- Таймаут не выдаёт продолжающий работать поток или обычный subprocess timeout за гарантированную остановку произвольного Python-шага.
+- Webhook строгий по умолчанию, не следует redirects, не повторяется автоматически и не раскрывает credentials.
+- App Store metadata обновляет только четыре разрешённых текстовых поля существующих локализаций указанной версии и ничего не отправляет на review.
+- Signing и reusable-plugin recipes воспроизводимы на существующих интерфейсах без нового registry или Ruby.
+- Backlog закрыт по фактическому результату; текущая документация больше не подменяет реализацию roadmap будущих дизайнов.
+- Полный pytest, Ruff и сборка пакета проходят.
+
+## Execution Notes
+
+### Task 1
+
+- Implemented only Task 1; Tasks 2–8 and backlog files are unchanged.
+- Conditions are stored separately from constructor options. Runtime decisions are frozen before execution; status records leaf skips and decisions (including all-skipped groups). Resume recomputes rather than trusts saved decisions.
+- Static plans use unknown inputs; explicit plan inputs and dry-run resolve absent optional inputs. Declared artifact capabilities remain visible, but only run producers enter the guaranteed artifact flow.
+- Used the repository `.venv/bin` tools (no global `python`/`pytest`/`ruff` available). Formatted changed Python files with Ruff and regenerated the bundled schema.
+- Validation: the listed runtime test command passed, **260 tests**. Its initial legacy inspect JSON failure was fixed by omitting `when` for unconditional inspect nodes; the complete command was rerun successfully.
+- Additional validation: `pytest` passed **1003 tests**; `ruff check .` passed; `python -m build` produced wheel and sdist with the bundled schema.
+- Relative links in the changed documentation and the conditional YAML example were validated locally. No production pipelines, uploads, publication, or service credential checks were performed.
+

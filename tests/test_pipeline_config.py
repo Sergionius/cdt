@@ -21,6 +21,94 @@ from cdt.pipeline.validation import validate_pipeline
 from cdt.runner import CommandRunner
 
 
+@pytest.mark.parametrize(
+    "when,inputs,expected",
+    [
+        ({"input": "deploy", "equals": "yes"}, {"deploy": "yes"}, "run"),
+        ({"input": "deploy", "equals": "yes"}, {"deploy": "YES"}, "skip"),
+        ({"input": "deploy", "equals": ""}, {}, "skip"),
+        ({"input": "deploy", "equals": ""}, {"deploy": ""}, "run"),
+        ({"input": "deploy", "not_equals": "yes"}, {}, "run"),
+        ({"input": "deploy", "not_equals": "yes"}, {"deploy": "yes"}, "skip"),
+        ({"input": "deploy", "present": True}, {}, "skip"),
+        ({"input": "deploy", "present": True}, {"deploy": ""}, "skip"),
+        ({"input": "deploy", "present": True}, {"deploy": " "}, "run"),
+        ({"input": "deploy", "present": False}, {}, "run"),
+        ({"input": "deploy", "present": False}, {"deploy": "yes"}, "skip"),
+        ({"input": "deploy", "present": False}, None, "unknown"),
+        (None, None, "run"),
+    ],
+)
+def test_condition_evaluation(when, inputs, expected):
+    from cdt.pipeline.config import evaluate_condition
+
+    assert evaluate_condition(when, inputs) == expected
+
+
+@pytest.mark.parametrize(
+    "condition",
+    [
+        "null",
+        "[]",
+        "{input: deploy}",
+        "{equals: yes}",
+        "{input: deploy, equals: 'yes', present: true}",
+        "{input: deploy, equals: true}",
+        "{input: deploy, not_equals: 1}",
+        "{input: deploy, present: 'true'}",
+        "{input: deploy, unknown: 'yes'}",
+        "{input: '${inputs.deploy}', present: true}",
+        "{input: deploy, equals: '${ENV}'}",
+    ],
+)
+def test_invalid_condition_rejected(tmp_path, condition):
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    inputs: {deploy: {}}\n    steps:\n"
+        f"      - step: flutter.pub_get\n        when: {condition}\n"
+    )
+    with pytest.raises(typer.BadParameter, match="when"):
+        load_pipeline_config(tmp_path)
+
+
+def test_extended_step_preserves_legacy_forms_and_ids(tmp_path):
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    inputs: {deploy: {}}\n    steps:\n"
+        "      - flutter.pub_get\n      - flutter.pub_get: {}\n"
+        "      - parallel:\n          steps:\n            - sequence:\n                steps:\n"
+        "                  - step: flutter.pub_get\n                    with: {}\n"
+        "                    when: {input: deploy, present: true}\n"
+    )
+    register_builtin_steps()
+    config = load_pipeline_config(tmp_path)
+    assert validate_pipeline(config) == []
+    steps = configured_steps(config.pipelines["demo"])
+    assert steps[0].options == steps[1].options == {}
+    leaf = steps[2].steps[0].steps[0]
+    assert leaf.step_id == "2/0/0"
+    assert leaf.options == {}
+    assert leaf.when == {"input": "deploy", "present": True}
+
+
+@pytest.mark.parametrize("extra", ["typo: true", "retry: {}"])
+def test_extended_step_rejects_unknown_fields(tmp_path, extra):
+    (tmp_path / "cdt.yaml").write_text(
+        f"version: 1\npipelines:\n  demo:\n    steps:\n      - step: flutter.pub_get\n        {extra}\n"
+    )
+    with pytest.raises(typer.BadParameter, match="unsupported extended"):
+        load_pipeline_config(tmp_path)
+
+
+def test_condition_requires_declared_input_and_keeps_option_validation(tmp_path):
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    steps:\n"
+        "      - step: flutter.pub_get\n        with: {typo: true}\n"
+        "        when: {input: missing, present: false}\n"
+    )
+    register_builtin_steps()
+    errors = validate_pipeline(load_pipeline_config(tmp_path))
+    assert {error["code"] for error in errors} == {"invalid_condition", "unknown_step_option"}
+
+
 def setup_function():
     _clear_steps_for_tests()
 
@@ -488,14 +576,7 @@ def test_build_step_env_option_is_rejected_with_profile_hint(tmp_path):
 
 
 def _google_play_pipeline(risk: str, steps_block: str) -> str:
-    return (
-        "version: 1\n"
-        "pipelines:\n"
-        "  play:\n"
-        f"    risk: {risk}\n"
-        "    steps:\n"
-        f"{steps_block}"
-    )
+    return f"version: 1\npipelines:\n  play:\n    risk: {risk}\n    steps:\n{steps_block}"
 
 
 def _play_step_yaml(indent: str = "      ") -> str:
@@ -509,14 +590,7 @@ def _play_step_yaml(indent: str = "      ") -> str:
 
 
 def _submit_review_pipeline(risk: str, steps_block: str) -> str:
-    return (
-        "version: 1\n"
-        "pipelines:\n"
-        "  submit:\n"
-        f"    risk: {risk}\n"
-        "    steps:\n"
-        f"{steps_block}"
-    )
+    return f"version: 1\npipelines:\n  submit:\n    risk: {risk}\n    steps:\n{steps_block}"
 
 
 def _submit_review_step_yaml(indent: str = "      ") -> str:

@@ -28,6 +28,7 @@ _INPUT_FIELDS = {"required", "pattern"}
 class StepSpec:
     name: str
     options: dict[str, Any] = field(default_factory=dict)
+    when: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -70,6 +71,7 @@ class ConfiguredStep:
     name: str
     options: dict[str, Any]
     step_id: str | None = None
+    when: dict[str, Any] | None = None
 
     def run(self, ctx: PipelineContext) -> None:
         resolved_options = resolve_value(self.options, ctx)
@@ -219,6 +221,22 @@ def load_plugins(plugins: list[str]) -> None:
             raise typer.BadParameter(f"Failed to import pipeline plugin '{plugin}': {exc}") from exc
 
 
+def evaluate_condition(when: dict[str, Any] | None, inputs: Mapping[str, str] | None) -> str:
+    """Evaluate literal input conditions; None denotes an unknown input set."""
+    if when is None:
+        return "run"
+    if inputs is None:
+        return "unknown"
+    value = inputs.get(when["input"])
+    if "present" in when:
+        matches = bool(value) == when["present"]
+    elif "equals" in when:
+        matches = value is not None and value == when["equals"]
+    else:
+        matches = value is None or value != when["not_equals"]
+    return "run" if matches else "skip"
+
+
 def configured_steps(pipeline: PipelineSpec) -> list[ConfiguredStep | ParallelStepGroup | SequentialStepGroup]:
     return [_configured_item(item, str(index)) for index, item in enumerate(pipeline.steps)]
 
@@ -232,11 +250,11 @@ def _configured_item(
         return ParallelStepGroup(children, step_id=step_id)
     if isinstance(item, SequenceSpec):
         children = [
-            ConfiguredStep(step.name, step.options, f"{step_id}/{index}")
+            ConfiguredStep(step.name, step.options, f"{step_id}/{index}", step.when)
             for index, step in enumerate(item.steps)
         ]
         return SequentialStepGroup(children, step_id=step_id)
-    return ConfiguredStep(item.name, item.options, step_id)
+    return ConfiguredStep(item.name, item.options, step_id, item.when)
 
 
 def resolve_value(value: Any, ctx: PipelineContext) -> Any:
@@ -253,6 +271,18 @@ def _parse_step_spec(pipeline_name: str, index: int, item: Any) -> PipelineItemS
     prefix = f"Pipeline '{pipeline_name}' step #{index}"
     if isinstance(item, str):
         return StepSpec(name=item)
+    if isinstance(item, dict) and "step" in item:
+        if set(item) - {"step", "with", "when"}:
+            raise typer.BadParameter(f"{prefix} has unsupported extended step fields")
+        name = item["step"]
+        if not isinstance(name, str) or not name.strip() or name in {"parallel", "sequence"}:
+            raise typer.BadParameter(f"{prefix} step must be a leaf step name")
+        options = item.get("with", {})
+        if not isinstance(options, dict):
+            raise typer.BadParameter(f"{prefix} with must be a mapping")
+        if "when" in item:
+            validate_condition(item["when"])
+        return StepSpec(name=name, options=options, when=item.get("when"))
     if isinstance(item, dict) and len(item) == 1:
         name, options = next(iter(item.items()))
         if not isinstance(name, str) or not name.strip():
@@ -267,6 +297,26 @@ def _parse_step_spec(pipeline_name: str, index: int, item: Any) -> PipelineItemS
             raise typer.BadParameter(f"{prefix} options must be a mapping")
         return StepSpec(name=name, options=options)
     raise typer.BadParameter(f"{prefix} must be a step name or a single-key mapping")
+
+
+def validate_condition(when: Any, inputs: Mapping[str, InputSpec] | None = None) -> None:
+    if not isinstance(when, dict):
+        raise typer.BadParameter("when must be a mapping")
+    operators = set(when) - {"input"}
+    if len(operators) != 1 or not operators <= {"equals", "not_equals", "present"}:
+        raise typer.BadParameter("when requires exactly one operator: equals, not_equals or present")
+    name = when.get("input")
+    if not isinstance(name, str) or _INPUT_NAME_RE.fullmatch(name) is None:
+        raise typer.BadParameter("when input must be an input name, without interpolation")
+    if inputs is not None and name not in inputs:
+        raise typer.BadParameter(f"when references undeclared input: {name}")
+    operator = next(iter(operators))
+    value = when[operator]
+    if operator == "present":
+        if not isinstance(value, bool):
+            raise typer.BadParameter("when present must be a boolean")
+    elif not isinstance(value, str) or "${" in value:
+        raise typer.BadParameter(f"when {operator} must be a string without interpolation")
 
 
 def _parse_parallel_spec(pipeline_name: str, index: int, options: Any) -> ParallelSpec:
