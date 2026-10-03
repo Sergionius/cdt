@@ -131,16 +131,16 @@
 - Modify: `tests/test_agent_release.py`
 - Modify: `tests/test_agent_first.py`
 
-- [ ] Добавить `build_timings` и синхронизированные методы начала/завершения измерения в `PipelineContext`; monotonic start хранить только в памяти, не сериализовать.
-- [ ] В `ConfiguredStep.run` измерять только листья с metadata `risk="build"` вокруг полного исполнения leaf, а не отдельно вокруг каждой retry-попытки.
-- [ ] Финализировать outcome в `finally`/эквивалентной защищённой структуре, не изменяя исходный результат или исключение шага; KeyboardInterrupt и прерывания отмечать как `cancelled`.
-- [ ] Сохранять UTC timestamps и неотрицательную конечную длительность через существующий lock и redaction status-механизм.
-- [ ] Не добавлять таймеры группам и не смешивать их с branch values/checkpoints. Параллельные листья должны иметь независимые записи по стабильным IDs.
-- [ ] Пробросить необязательное поле через `release_status`, чтобы оно было доступно в `cdt status --json`, human-readable status и `agent-release status`.
-- [ ] Сохранить чтение старых status-файлов без нового поля и существующую schema version для обратно совместимого добавления.
-- [ ] При resume не восстанавливать старые timers; пропущенные completed/conditional листья остаются без новых измерений.
-- [ ] Добавить детерминированные тесты с подменёнными часами: success, failure, cancellation, retry с задержкой, parallel sequence, условный skip, completed resume и старый status.
-- [ ] Проверить, что обычный build-step по-прежнему вызывает runner при каждом новом исполнении, даже когда выходной artifact уже существует; новая телеметрия не вводит cache hit или up-to-date shortcut.
+- [x] Добавить `build_timings` и синхронизированные методы начала/завершения измерения в `PipelineContext`; monotonic start хранить только в памяти, не сериализовать.
+- [x] В `ConfiguredStep.run` измерять только листья с metadata `risk="build"` вокруг полного исполнения leaf, а не отдельно вокруг каждой retry-попытки.
+- [x] Финализировать outcome в `finally`/эквивалентной защищённой структуре, не изменяя исходный результат или исключение шага; KeyboardInterrupt и прерывания отмечать как `cancelled`.
+- [x] Сохранять UTC timestamps и неотрицательную конечную длительность через существующий lock и redaction status-механизм.
+- [x] Не добавлять таймеры группам и не смешивать их с branch values/checkpoints. Параллельные листья должны иметь независимые записи по стабильным IDs.
+- [x] Пробросить необязательное поле через `release_status`, чтобы оно было доступно в `cdt status --json`, human-readable status и `agent-release status`.
+- [x] Сохранить чтение старых status-файлов без нового поля и существующую schema version для обратно совместимого добавления.
+- [x] При resume не восстанавливать старые timers; пропущенные completed/conditional листья остаются без новых измерений.
+- [x] Добавить детерминированные тесты с подменёнными часами: success, failure, cancellation, retry с задержкой, parallel sequence, условный skip, completed resume и старый status.
+- [x] Проверить, что обычный build-step по-прежнему вызывает runner при каждом новом исполнении, даже когда выходной artifact уже существует; новая телеметрия не вводит cache hit или up-to-date shortcut.
 
 ### Task 4: Документировать контракт, зафиксировать решение по кэшу и закрыть P2
 

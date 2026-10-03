@@ -505,3 +505,47 @@ def test_run_redacts_secret_shaped_inputs_before_persistence(tmp_path, monkeypat
     assert "supersecret7" not in status_text
     assert "supersecret7" not in manifest_text
     assert "***" in status_text
+
+
+def test_status_file_records_build_timings_only_for_build_leaves(tmp_path, monkeypatch):
+    package = tmp_path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "demo.py").write_text(
+        "\n".join(
+            [
+                "from cdt.sdk import step",
+                "",
+                "@step('demo.build', risk='build')",
+                "def build(ctx):",
+                "    ctx.values['built'] = '1'",
+                "",
+                "@step('demo.plain')",
+                "def plain(ctx):",
+                "    ctx.values['plain'] = '1'",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\nplugins:\n  - cdt_steps.demo\npipelines:\n  demo:\n    steps:\n"
+        "      - demo.build\n      - demo.plain\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    status_file = tmp_path / ".cdt" / "status.json"
+
+    result = runner.invoke(app, ["run", "demo", "--status-file", str(status_file)])
+    payload = json.loads(status_file.read_text(encoding="utf-8"))
+
+    assert result.exit_code == 0, result.output
+    assert payload["schema_version"] == 1
+    assert set(payload["build_timings"]) == {"0"}
+    timing = payload["build_timings"]["0"]
+    assert set(timing) == {"name", "started_at", "finished_at", "duration_seconds", "outcome"}
+    assert timing["name"] == "demo.build"
+    assert timing["outcome"] == "success"
+    assert timing["started_at"] and timing["finished_at"]
+    assert timing["duration_seconds"] >= 0.0

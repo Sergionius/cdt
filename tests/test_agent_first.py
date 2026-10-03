@@ -1398,11 +1398,17 @@ def test_existing_testflight_pipeline_external_actions_unchanged_without_submit_
         lambda env, changelog, new_version: completions.append(new_version) or 0,
     )
 
-    result = runner.invoke(app, ["run", "iosapp"])
+    result = runner.invoke(app, ["run", "iosapp", "--status-file", str(tmp_path / "status.json")])
 
     assert result.exit_code == 0, result.output
     assert uploads == [("dev build", "1.2.3+5")]  # exactly one upload, same build number
     assert completions == ["1.2.3+5"]
+    # Only the real build leaf is measured; upload/complete leaves are not.
+    status = json.loads((tmp_path / "status.json").read_text(encoding="utf-8"))
+    assert set(status["build_timings"]) == {"1"}
+    assert status["build_timings"]["1"]["name"] == "ios.xcode_build_ipa"
+    assert status["build_timings"]["1"]["outcome"] == "success"
+    assert status["build_timings"]["1"]["duration_seconds"] >= 0.0
     # No App Review activity: no ASC API call, no submission message, no review checkpoint.
     assert "Submitted for App Store review" not in result.output
     assert not (tmp_path / ".cdt" / "appstore" / "operations").exists()
@@ -1483,6 +1489,8 @@ def test_resume_skips_finished_upload_and_reruns_only_testflight_completion(tmp_
     assert status["status"] == "success"
     assert status["completed_steps"] == ["0", "1", "2"]
     assert status["new_version"] == "1.2.3+5"
+    # The completed build/upload leaves are skipped; no new or restored timings.
+    assert status["build_timings"] == {}
 
 
 def _release_workflow_config():

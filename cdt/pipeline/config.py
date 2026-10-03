@@ -83,35 +83,53 @@ class ConfiguredStep:
     timeout_seconds: float | None = None
 
     def run(self, ctx: PipelineContext) -> None:
-        resolved_options = resolve_value(self.options, ctx)
-        self._inject_timeout_option(resolved_options)
-        policy = self.retry or RetryPolicy()
-        if policy.enabled:
-            # Defense in depth: validation already rejects retries for steps
-            # without the explicit retry_safe capability.
-            if not get_step_metadata(self.name).retry_safe:
-                raise typer.BadParameter(
-                    f"Step {self.name} is not declared retry_safe; "
-                    "retry.max_attempts > 1 requires an explicit retry-safe step"
-                )
+        metadata = get_step_metadata(self.name)
         attempt_id = self.step_id or self.name
-
-        def attempt() -> None:
-            # A fresh runtime instance per attempt: the previous instance may
-            # keep state mutated by the failed attempt.
-            step = get_step_factory(self.name)(**resolved_options)
-            step.run(ctx)
-
-        def on_retryable_failure(count: int, exc: RetryableStepError) -> None:
-            ctx.mark_step_retry(attempt_id, count, str(exc))
-
+        # Build leaves are measured around the whole configured call — option
+        # resolution, retries, retry delays and artifact registration — never
+        # around individual retry attempts.
+        timed = metadata.risk == "build"
+        if timed:
+            ctx.begin_build_timing(attempt_id, self.name)
+        outcome = "success"
         try:
-            run_with_retry_policy(policy, attempt, on_retryable_failure=on_retryable_failure, sleep=time.sleep)
-        except RetryableStepError as exc:
+            resolved_options = resolve_value(self.options, ctx)
+            self._inject_timeout_option(resolved_options)
+            policy = self.retry or RetryPolicy()
             if policy.enabled:
-                # Exhaustion is terminal: keep the final attempts count recorded.
-                ctx.mark_step_retry(attempt_id, policy.max_attempts, str(exc))
+                # Defense in depth: validation already rejects retries for steps
+                # without the explicit retry_safe capability.
+                if not metadata.retry_safe:
+                    raise typer.BadParameter(
+                        f"Step {self.name} is not declared retry_safe; "
+                        "retry.max_attempts > 1 requires an explicit retry-safe step"
+                    )
+
+            def attempt() -> None:
+                # A fresh runtime instance per attempt: the previous instance may
+                # keep state mutated by the failed attempt.
+                step = get_step_factory(self.name)(**resolved_options)
+                step.run(ctx)
+
+            def on_retryable_failure(count: int, exc: RetryableStepError) -> None:
+                ctx.mark_step_retry(attempt_id, count, str(exc))
+
+            try:
+                run_with_retry_policy(policy, attempt, on_retryable_failure=on_retryable_failure, sleep=time.sleep)
+            except RetryableStepError as exc:
+                if policy.enabled:
+                    # Exhaustion is terminal: keep the final attempts count recorded.
+                    ctx.mark_step_retry(attempt_id, policy.max_attempts, str(exc))
+                raise
+        except KeyboardInterrupt:
+            outcome = "cancelled"
             raise
+        except BaseException:
+            outcome = "failed"
+            raise
+        finally:
+            if timed:
+                ctx.finish_build_timing(attempt_id, outcome)
 
     def _inject_timeout_option(self, resolved_options: dict[str, Any]) -> None:
         """Deliver the envelope timeout into the declared native option.

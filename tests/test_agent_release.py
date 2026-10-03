@@ -359,6 +359,38 @@ def test_agent_release_status_includes_inputs(tmp_path, monkeypatch):
     assert payload["inputs"] == {"version": "0.5.2"}
 
 
+def test_release_status_passes_build_timings_through_and_stays_optional(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cdt_dir = tmp_path / ".cdt"
+    cdt_dir.mkdir()
+    (cdt_dir / "agent-release-test.exit").write_text("0\n", encoding="utf-8")
+    timings = {
+        "1": {
+            "name": "ios.flutter_build_ipa",
+            "started_at": "2026-10-03T10:00:00+00:00",
+            "finished_at": "2026-10-03T10:05:00+00:00",
+            "duration_seconds": 300.0,
+            "outcome": "success",
+        }
+    }
+    (cdt_dir / "agent-release-test.status.json").write_text(
+        json.dumps({"status": "success", "build_timings": timings}),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["agent-release", "status", "test", "--json"])
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0
+    assert payload["build_timings"] == timings
+    assert "ios.flutter_build_ipa" in runner.invoke(app, ["agent-release", "status", "test"]).output
+
+    # Old status files without the field keep working: the key stays absent.
+    (cdt_dir / "agent-release-test.status.json").write_text(json.dumps({"status": "success"}), encoding="utf-8")
+    legacy = json.loads(runner.invoke(app, ["agent-release", "status", "test", "--json"]).output)
+    assert "build_timings" not in legacy
+
+
 def test_capture_child_reuses_record_without_competing_for_supervisor_files(tmp_path, monkeypatch):
     import sys
 

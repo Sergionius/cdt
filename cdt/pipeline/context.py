@@ -1,5 +1,6 @@
 import hashlib
 import json
+import time
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -46,6 +47,7 @@ class PipelineContext:
     skipped_steps: list[str] = field(default_factory=list)
     step_decisions: dict[str, str] = field(default_factory=dict)
     step_attempts: dict[str, dict[str, Any]] = field(default_factory=dict)
+    build_timings: dict[str, dict[str, Any]] = field(default_factory=dict)
     failed_step: str | None = None
     error: str | None = None
     running_steps: list[str] = field(default_factory=list)
@@ -60,6 +62,8 @@ class PipelineContext:
     release_results: dict[str, str] = field(default_factory=dict)
     values_groups: dict[str, Any] = field(default_factory=dict)
     _rollback_snapshots: dict[Path, bytes] = field(default_factory=dict, repr=False)
+    # In-memory monotonic clock starts of running build measurements; never serialized.
+    _build_timer_starts: dict[str, float] = field(default_factory=dict, repr=False)
     _status_lock: Any = field(default_factory=RLock, repr=False)
     _redactor: SecretRedactor = field(init=False, repr=False)
 
@@ -180,6 +184,32 @@ class PipelineContext:
         return self.step_decisions.get(step_id) == "skip" or (self.skip_completed and step_id in self.completed_steps)
 
     @_synchronized
+    def begin_build_timing(self, step_id: str, name: str) -> None:
+        """Start a build-leaf measurement; the monotonic start stays in memory only."""
+        self._build_timer_starts[step_id] = _monotonic()
+        self.build_timings[step_id] = {
+            "name": name,
+            "started_at": _now(),
+            "finished_at": None,
+            "duration_seconds": None,
+            "outcome": None,
+        }
+        self.write_status("running")
+
+    @_synchronized
+    def finish_build_timing(self, step_id: str, outcome: str) -> None:
+        """Finalize a build-leaf measurement without changing the step result itself."""
+        entry = self.build_timings.get(step_id)
+        if entry is None or entry["finished_at"] is not None:
+            return
+        start = self._build_timer_starts.pop(step_id, None)
+        if start is not None:
+            entry["duration_seconds"] = max(0.0, _monotonic() - start)
+        entry["finished_at"] = _now()
+        entry["outcome"] = outcome
+        self.write_status("running")
+
+    @_synchronized
     def mark_step_retry(self, step_id: str, attempts: int, error: str) -> None:
         """Record an intermediate retryable failure; it is not a terminal failure."""
         self.step_attempts[step_id] = {"attempts": attempts, "last_error": self.redact(str(error))}
@@ -295,6 +325,7 @@ class PipelineContext:
                 "skipped_steps": list(self.skipped_steps),
                 "step_decisions": dict(self.step_decisions),
                 "step_attempts": {step_id: dict(entry) for step_id, entry in self.step_attempts.items()},
+                "build_timings": {step_id: dict(entry) for step_id, entry in self.build_timings.items()},
                 "failed_step": self.failed_step,
                 "error": self.error,
                 "running_steps": list(self.running_steps),
@@ -331,6 +362,10 @@ class PipelineContext:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _monotonic() -> float:
+    return time.monotonic()
 
 
 def _snapshot_name(path: Path) -> str:
