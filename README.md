@@ -273,4 +273,6 @@ Hooks run from the project root as `python3 <script>` and must stay inside the p
 
 ## Contributing and security
 
+Planned P1 work is coordinated in the [P1 backlog roadmap](docs/plans/p1-backlog-roadmap.md); several of its directions are demand-driven and stay deferred until a concrete need is confirmed.
+
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development checks and pull request guidance. Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md). CDT is available under the [MIT License](LICENSE).
