@@ -22,6 +22,17 @@ def _visible_text(output: str) -> str:
     return ANSI_RE.sub("", output)
 
 
+def _portable_error_text(output: str) -> str:
+    """Error text without ANSI styles and Rich panel borders.
+
+    Rich wraps long error messages at panel width, so wrapped lines carry
+    their own ANSI sequences and border characters between words. Removing
+    them makes message assertions independent of the terminal width.
+    """
+    without_borders = re.sub(r"[│╭╮╰╯─]+", " ", _visible_text(output))
+    return " ".join(without_borders.split())
+
+
 def test_pipeline_plan_input_option_and_invalid_inputs(tmp_path, monkeypatch):
     help_result = runner.invoke(app, ["pipeline", "plan", "--help"])
     assert help_result.exit_code == 0
@@ -559,7 +570,7 @@ def test_capture_output_requires_explicit_production_confirmation(tmp_path, monk
 
     for result in (unconfirmed, wrong):
         assert result.exit_code != 0
-        assert "--confirm demo" in " ".join(result.output.split())
+        assert "--confirm demo" in _portable_error_text(result.output)
     assert not (tmp_path / ".cdt" / "runs").exists()
 
     accepted = runner.invoke(app, ["run", "demo", "--capture-output", "--confirm", "demo"])
