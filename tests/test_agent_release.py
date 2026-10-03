@@ -357,3 +357,68 @@ def test_agent_release_status_includes_inputs(tmp_path, monkeypatch):
 
     assert result.exit_code == 0
     assert payload["inputs"] == {"version": "0.5.2"}
+
+
+def test_release_status_passes_build_timings_through_and_stays_optional(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cdt_dir = tmp_path / ".cdt"
+    cdt_dir.mkdir()
+    (cdt_dir / "agent-release-test.exit").write_text("0\n", encoding="utf-8")
+    timings = {
+        "1": {
+            "name": "ios.flutter_build_ipa",
+            "started_at": "2026-10-03T10:00:00+00:00",
+            "finished_at": "2026-10-03T10:05:00+00:00",
+            "duration_seconds": 300.0,
+            "outcome": "success",
+        }
+    }
+    (cdt_dir / "agent-release-test.status.json").write_text(
+        json.dumps({"status": "success", "build_timings": timings}),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["agent-release", "status", "test", "--json"])
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0
+    assert payload["build_timings"] == timings
+    assert "ios.flutter_build_ipa" in runner.invoke(app, ["agent-release", "status", "test"]).output
+
+    # Old status files without the field keep working: the key stays absent.
+    (cdt_dir / "agent-release-test.status.json").write_text(json.dumps({"status": "success"}), encoding="utf-8")
+    legacy = json.loads(runner.invoke(app, ["agent-release", "status", "test", "--json"]).output)
+    assert "build_timings" not in legacy
+
+
+def test_capture_child_reuses_record_without_competing_for_supervisor_files(tmp_path, monkeypatch):
+    import sys
+
+    from cdt.runs import create_run
+
+    for module_name in ("cdt_steps", "cdt_steps.demo"):
+        sys.modules.pop(module_name, None)
+    package = tmp_path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "demo.py").write_text(
+        "from cdt.sdk import step\n\n@step('demo.ok')\ndef ok(ctx):\n    pass\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\nplugins:\n  - cdt_steps.demo\npipelines:\n  test:\n    steps:\n      - demo.ok\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    paths = create_run(tmp_path, "test", run_id="capture-child-run", detached=False, capture_output=True)
+    paths.pid.write_text("supervisor-pid\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["run", "test", "--run-id", "capture-child-run", "--capture-child"])
+
+    assert result.exit_code == 0, result.output
+    assert "Run:" not in result.output
+    assert paths.pid.read_text(encoding="utf-8").strip() == "supervisor-pid"
+    assert not paths.exit.exists()
+    status = json.loads(paths.status.read_text(encoding="utf-8"))
+    assert status["status"] == "success"

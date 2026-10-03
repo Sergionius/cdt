@@ -175,6 +175,7 @@ def release_status(pipeline: str | None = None, *, run_id: str | None = None) ->
         "parallel_failed",
         "failed_step",
         "error",
+        "build_timings",
         "artifacts",
         "inputs",
         "old_version",

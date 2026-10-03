@@ -1253,3 +1253,121 @@ def test_fresh_rerun_with_changed_track_is_blocked_by_unfinished_operation(tmp_p
     assert "blocksapublicationwithchangedparameters" in normalized
     assert client.calls[calls_after_first_run:] == []
     assert client.tracks == {}
+
+
+def test_capture_output_run_supports_skip_completed_resume(tmp_path, monkeypatch):
+    _write_project(
+        tmp_path,
+        "\n".join(
+            [
+                "      - demo.touch: {output: skipped.txt}",
+                "      - demo.touch: {output: ran.txt}",
+            ]
+        )
+        + "\n",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    resume_status = tmp_path / "input.json"
+    resume_status.write_text(json.dumps({"completed_steps": ["0"], "artifacts": []}), encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        ["run", "demo", "--capture-output", "--resume-status-file", str(resume_status), "--skip-completed"],
+    )
+    runs = list_runs(tmp_path)
+
+    assert result.exit_code == 0, result.output
+    assert len(runs) == 1
+    assert runs[0]["status"] == "success"
+    assert result.output.count("Run: ") == 1
+    assert not (tmp_path / "skipped.txt").exists()
+    assert (tmp_path / "ran.txt").exists()
+    status = read_json(run_paths(tmp_path, runs[0]["run_id"]).status)
+    assert status["status"] == "success"
+
+
+def _write_build_resume_project(tmp_path) -> None:
+    package = tmp_path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "resume.py").write_text(
+        "\n".join(
+            [
+                "from cdt.sdk import step",
+                "",
+                "@step('demo.build_touch', risk='build')",
+                "def touch(ctx, output: str):",
+                "    count = ctx.cwd / 'count.txt'",
+                "    value = int(count.read_text(encoding='utf-8')) if count.exists() else 0",
+                "    count.write_text(str(value + 1), encoding='utf-8')",
+                "    path = ctx.cwd / output",
+                "    path.write_text('ran', encoding='utf-8')",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\nplugins:\n  - cdt_steps.resume\npipelines:\n  demo:\n    steps:\n"
+        "      - step: demo.build_touch\n        with: {output: ran.txt}\n",
+        encoding="utf-8",
+    )
+
+
+def test_completed_resume_keeps_no_old_or_new_build_timings(tmp_path, monkeypatch):
+    _write_build_resume_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    first_status = tmp_path / "first.json"
+    output = tmp_path / "out.json"
+
+    result = runner.invoke(app, ["run", "demo", "--status-file", str(first_status)])
+
+    assert result.exit_code == 0, result.output
+    first = json.loads(first_status.read_text(encoding="utf-8"))
+    assert set(first["build_timings"]) == {"0"}
+    assert first["build_timings"]["0"]["outcome"] == "success"
+    assert first["build_timings"]["0"]["finished_at"] is not None
+
+    # An old status file without the new field stays readable for resume.
+    prior = tmp_path / "prior.json"
+    prior.write_text(json.dumps({"completed_steps": ["0"], "artifacts": []}), encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        ["run", "demo", "--resume-status-file", str(prior), "--skip-completed", "--status-file", str(output)],
+    )
+
+    assert result.exit_code == 0, result.output
+    status = json.loads(output.read_text(encoding="utf-8"))
+    assert status["status"] == "success"
+    assert status["completed_steps"] == ["0"]
+    # Skipped completed leaves get no new measurements and old timers are not restored.
+    assert status["build_timings"] == {}
+    assert (tmp_path / "count.txt").read_text(encoding="utf-8") == "1"
+
+
+def test_conditional_skip_resume_creates_no_build_timings(tmp_path, monkeypatch):
+    _write_build_resume_project(tmp_path)
+    config = tmp_path / "cdt.yaml"
+    config.write_text(config.read_text().replace("    steps:\n", "    inputs: {deploy: {}}\n    steps:\n", 1))
+    steps_line = "      - step: demo.build_touch\n"
+    config.write_text(
+        config.read_text().replace(
+            steps_line,
+            steps_line + "        when: {input: deploy, present: true}\n",
+        )
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    output = tmp_path / "out.json"
+
+    result = runner.invoke(app, ["run", "demo", "--status-file", str(output)])
+
+    assert result.exit_code == 0, result.output
+    status = json.loads(output.read_text(encoding="utf-8"))
+    assert status["status"] == "success"
+    assert status["skipped_steps"] == ["0"]
+    assert status["build_timings"] == {}
+    assert not (tmp_path / "count.txt").exists()

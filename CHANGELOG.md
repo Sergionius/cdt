@@ -2,7 +2,10 @@
 
 ## Unreleased
 
-- Nothing yet.
+- Added `cdt run <pipeline> --capture-output`: an opt-in POSIX foreground supervisor that runs the pipeline in one supervised child CDT process (no shell, no PTY, `stdin=DEVNULL`, verbose transport in the child only), streams the merged stdout/stderr through incremental UTF-8 decoding and secret redaction into the run record's owner-only `output.log` and the terminal at the same time, owns the live PID and final exit code, and records a safe failure instead of a fake success when the child dies without a terminal status or when the capture itself was incomplete. Ordinary direct and detached executions keep their existing behavior; interrupted capture tears down the child process group with bounded SIGINT→TERM→KILL escalation, unsupported platforms reject the flag before any run record or step exists, and a capture log/terminal failure stops the child with the same bounded escalation instead of leaving it running unobserved.
+- Added `build_timings` to run status, `cdt status`, and `agent-release status`: every executed build leaf (`risk: "build"`) is measured around its whole call — including option resolution, retries, and retry delays — with `name`, UTC `started_at`/`finished_at`, monotonic `duration_seconds`, and a `success`/`failed`/`cancelled` outcome. Skipped and completed-resume leaves get no measurements, killed processes leave unfinished entries without invented durations, and each run record keeps only its own run's measurements. This is telemetry only: build steps still invoke their build tool on every execution, and CDT still has no up-to-date check or cache.
+- Documented [build performance measurement](docs/build-performance.md) and the explicit decision not to implement CDT-level caching without a measured repeated cost and a complete invalidation model covering sources, dependencies, tool versions, build parameters, and signing; old release artifacts are never reused by default.
+- Closed the two remaining P2 backlog items: direct-run output capture is delivered as the opt-in `--capture-output` functionality, and build up-to-date checks are resolved by the timing measurements plus the documented no-cache decision; removed `docs/backlog/p2-direct-run-output-capture.md` and `docs/backlog/p2-build-up-to-date-checks.md`.
 
 ## v0.7.0 - 2026-10-03
 

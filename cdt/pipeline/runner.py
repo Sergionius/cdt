@@ -11,6 +11,7 @@ from ..artifacts import BuildArtifact
 from ..redaction import SecretRedactor
 from ..runner import CommandRunner
 from ..runs import RunOutputRecorder, ensure_run, write_exit_code, write_text_atomic
+from ..runs import run_paths as run_paths_for_id
 from .builtins import register_builtin_steps
 from .config import configured_steps, load_pipeline_config, load_plugins, validate_pipeline_inputs
 from .context import PipelineContext
@@ -31,8 +32,11 @@ def run_configured_pipeline(
     run_id: str | None = None,
     detached: bool = False,
     record_run: bool = True,
+    capture_child: bool = False,
     inputs: dict[str, str] | None = None,
 ) -> str | None:
+    if capture_child and run_id is None:
+        raise typer.BadParameter("Foreground capture child runs require an existing run id")
     config = load_pipeline_config(cwd)
     register_builtin_steps()
     load_plugins(config.plugins)
@@ -55,22 +59,32 @@ def run_configured_pipeline(
             command.extend(["--input", f"{input_name}={input_value}"])
         for task_id in ids or []:
             command.extend(["--id", task_id])
-        run_paths = ensure_run(
-            cwd,
-            name,
-            ids=ids,
-            run_id=run_id,
-            command=command,
-            detached=detached,
-            inputs=inputs,
-            env=env,
-        )
-    if run_paths is not None and not detached:
+        if capture_child:
+            # The supervised child must reuse the record created by the capture
+            # supervisor, never create a second one for the same run.
+            paths = run_paths_for_id(cwd, run_id)
+            if not paths.root.exists():
+                raise typer.BadParameter(f"Foreground capture child requires an existing run record: {run_id}")
+            run_paths = paths
+        else:
+            run_paths = ensure_run(
+                cwd,
+                name,
+                ids=ids,
+                run_id=run_id,
+                command=command,
+                detached=detached,
+                inputs=inputs,
+                env=env,
+            )
+    if run_paths is not None and not detached and not capture_child:
         write_text_atomic(run_paths.pid, f"{os.getpid()}\n")
     # Direct runs tee CDT-owned output into the run log. Detached workers already
-    # capture the combined subprocess stream, so no recorder is installed there.
+    # capture the combined subprocess stream, and the supervised capture child is
+    # streamed by its foreground supervisor, so no recorder is installed there:
+    # recorder, pid and exit files belong to the caller that owns the process.
     recorder: RunOutputRecorder | None = None
-    if run_paths is not None and not detached:
+    if run_paths is not None and not detached and not capture_child:
         recorder = RunOutputRecorder(run_paths.log, SecretRedactor.from_env(env))
         recorder.install()
     primary_status = run_paths.status if run_paths is not None else status_file
@@ -97,14 +111,14 @@ def run_configured_pipeline(
             # older status files need neither field.
             PipelineExecutor().run(steps, ctx, resume_from=resume_step_id)
         except BaseException as exc:
-            if run_paths is not None:
+            if run_paths is not None and not capture_child:
                 write_exit_code(run_paths.exit, 1)
             if recorder is not None:
                 recorder.record_line(_terminal_failure_summary(exc))
             _rollback_release_files(ctx)
             raise
         else:
-            if run_paths is not None:
+            if run_paths is not None and not capture_child:
                 write_exit_code(run_paths.exit, 0)
     finally:
         if recorder is not None:

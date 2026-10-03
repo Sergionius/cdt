@@ -2,6 +2,7 @@ import json
 import sys
 import threading
 import time
+from datetime import datetime
 
 import pytest
 import typer
@@ -43,6 +44,250 @@ def _register_flaky_step(calls, *, fail_times, error="transient", name="demo.fla
             raise RetryableStepError(error)
 
     return flaky
+
+
+def _register_build_step(name, callback, *, retry_safe=False):
+    """SDK fixture with risk="build": the only risk measured by build_timings."""
+
+    @sdk_step(name, risk="build", retry_safe=retry_safe)
+    def build_step(ctx):
+        callback(ctx)
+
+    return build_step
+
+
+class _FakeClock:
+    """Deterministic monotonic clock substituting cdt.pipeline.context._monotonic."""
+
+    def __init__(self, start=100.0):
+        self.now = start
+
+    def __call__(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += seconds
+
+
+def _assert_utc(value):
+    assert value is not None
+    parsed = datetime.fromisoformat(value)
+    assert parsed.utcoffset() is not None
+
+
+def test_build_leaf_timing_records_success_with_fake_clock(tmp_path, monkeypatch):
+    clock = _FakeClock()
+    monkeypatch.setattr("cdt.pipeline.context._monotonic", clock)
+    events = []
+
+    def body(ctx):
+        events.append("run")
+        clock.advance(0.5)
+
+    _register_build_step("demo.build_ok", body)
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner())
+    leaf = ConfiguredStep("demo.build_ok", {}, "0")
+
+    PipelineExecutor().run([leaf], ctx)
+
+    assert events == ["run"]
+    timing = ctx.build_timings["0"]
+    assert timing["name"] == "demo.build_ok"
+    assert timing["outcome"] == "success"
+    assert timing["duration_seconds"] == 0.5
+    assert timing["finished_at"] is not None
+    _assert_utc(timing["started_at"])
+    _assert_utc(timing["finished_at"])
+
+
+def test_build_leaf_timing_start_record_serializes_without_final_fields(tmp_path):
+    status = tmp_path / "status.json"
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner(), status_file=status)
+
+    ctx.begin_build_timing("0", "demo.build_ok")
+
+    payload = json.loads(status.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 1
+    assert payload["build_timings"] == {
+        "0": {
+            "name": "demo.build_ok",
+            "started_at": ctx.build_timings["0"]["started_at"],
+            "finished_at": None,
+            "duration_seconds": None,
+            "outcome": None,
+        }
+    }
+    # Monotonic starts are process memory only and never serialized.
+    assert "_build_timer_starts" not in payload
+    ctx.finish_build_timing("0", "success")
+    finished = json.loads(status.read_text(encoding="utf-8"))["build_timings"]["0"]
+    assert finished["outcome"] == "success"
+    assert finished["duration_seconds"] >= 0.0
+    assert finished["finished_at"] is not None
+
+
+def test_build_leaf_timing_records_failure_without_changing_the_error(tmp_path, monkeypatch):
+    clock = _FakeClock()
+    monkeypatch.setattr("cdt.pipeline.context._monotonic", clock)
+
+    @sdk_step("demo.build_broken", risk="build")
+    def broken(ctx):
+        clock.advance(0.25)
+        raise ValueError("boom")
+
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner())
+    leaf = ConfiguredStep("demo.build_broken", {}, "0")
+
+    with pytest.raises(ValueError, match="boom"):
+        PipelineExecutor().run([leaf], ctx)
+
+    timing = ctx.build_timings["0"]
+    assert timing["outcome"] == "failed"
+    assert timing["duration_seconds"] == 0.25
+    assert ctx.failed_step == "0"
+    assert "boom" in ctx.error
+
+
+def test_build_leaf_timing_records_cancellation(tmp_path, monkeypatch):
+    clock = _FakeClock()
+    monkeypatch.setattr("cdt.pipeline.context._monotonic", clock)
+
+    @sdk_step("demo.build_interrupt", risk="build")
+    def interrupt(ctx):
+        clock.advance(1.5)
+        raise KeyboardInterrupt
+
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner())
+    leaf = ConfiguredStep("demo.build_interrupt", {}, "0")
+
+    with pytest.raises(KeyboardInterrupt):
+        PipelineExecutor().run([leaf], ctx)
+
+    timing = ctx.build_timings["0"]
+    assert timing["outcome"] == "cancelled"
+    assert timing["duration_seconds"] == 1.5
+    assert timing["finished_at"] is not None
+    assert ctx.failed_step is None
+
+
+def test_build_leaf_timing_covers_retries_and_delays_in_one_record(tmp_path, monkeypatch):
+    clock = _FakeClock()
+    monkeypatch.setattr("cdt.pipeline.context._monotonic", clock)
+
+    def fake_sleep(seconds):
+        clock.advance(seconds)
+
+    monkeypatch.setattr("cdt.pipeline.config.time.sleep", fake_sleep)
+    calls = []
+
+    def body(ctx):
+        calls.append("run")
+        clock.advance(0.25)
+        if len(calls) < 2:
+            raise RetryableStepError("transient")
+
+    _register_build_step("demo.build_flaky", body, retry_safe=True)
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner())
+    leaf = ConfiguredStep("demo.build_flaky", {}, "0", None, RetryPolicy(max_attempts=3, delay_seconds=2.0))
+
+    PipelineExecutor().run([leaf], ctx)
+
+    assert calls == ["run", "run"]
+    assert ctx.step_attempts == {"0": {"attempts": 1, "last_error": "transient"}}
+    # One record around the whole leaf: two attempts (0.5s) plus one delay (2.0s).
+    assert list(ctx.build_timings) == ["0"]
+    assert ctx.build_timings["0"]["duration_seconds"] == pytest.approx(2.5)
+    assert ctx.build_timings["0"]["outcome"] == "success"
+
+
+def test_parallel_build_leaves_get_independent_timings(tmp_path, monkeypatch):
+    clock = _FakeClock()
+    monkeypatch.setattr("cdt.pipeline.context._monotonic", clock)
+    barrier = threading.Barrier(2)
+
+    def make_body(amount):
+        def body(ctx):
+            barrier.wait(timeout=2)
+            clock.advance(amount)
+
+        return body
+
+    _register_build_step("demo.build_left", make_body(0.5))
+    _register_build_step("demo.build_right", make_body(0.5))
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner())
+    group = ParallelStepGroup(
+        [
+            ConfiguredStep("demo.build_left", {}, "0/0"),
+            ConfiguredStep("demo.build_right", {}, "0/1"),
+        ],
+        "0",
+    )
+
+    PipelineExecutor().run([group], ctx)
+
+    # Leaf entries only, keyed by stable step ids; the group id is never timed.
+    assert sorted(ctx.build_timings) == ["0/0", "0/1"]
+    assert ctx.build_timings["0/0"]["name"] == "demo.build_left"
+    assert ctx.build_timings["0/1"]["name"] == "demo.build_right"
+    assert all(entry["outcome"] == "success" for entry in ctx.build_timings.values())
+    assert all(0.5 <= entry["duration_seconds"] <= 1.0 for entry in ctx.build_timings.values())
+
+
+def test_conditional_skip_and_non_build_leaf_create_no_timings(tmp_path):
+    events = []
+    _register_build_step("demo.build_maybe", lambda ctx: events.append("build"))
+
+    @sdk_step("demo.custom")
+    def custom(ctx):
+        events.append("custom")
+
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner(), inputs={})
+    skipped = ConfiguredStep("demo.build_maybe", {}, "0", {"input": "deploy", "present": True})
+    plain = ConfiguredStep("demo.custom", {}, "1")
+
+    PipelineExecutor().run([skipped, plain], ctx)
+
+    assert events == ["custom"]
+    assert ctx.skipped_steps == ["0"]
+    assert ctx.build_timings == {}
+
+
+def test_build_step_reruns_runner_and_retimes_despite_existing_artifact(tmp_path):
+    counter = tmp_path / "build-count.txt"
+
+    def body(ctx):
+        value = int(counter.read_text(encoding="utf-8")) if counter.exists() else 0
+        counter.write_text(str(value + 1), encoding="utf-8")
+        path = tmp_path / "app.aab"
+        path.write_text("artifact", encoding="utf-8")
+        ctx.register_artifact("app", BuildArtifact(ArtifactKind.AAB, path, "App"))
+
+    _register_build_step("demo.build_artifact", body)
+
+    first = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner())
+    PipelineExecutor().run([ConfiguredStep("demo.build_artifact", {}, "0")], first)
+    second = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner())
+    PipelineExecutor().run([ConfiguredStep("demo.build_artifact", {}, "0")], second)
+
+    # New telemetry never introduces a cache hit or up-to-date shortcut.
+    assert counter.read_text(encoding="utf-8") == "2"
+    assert list(first.build_timings) == ["0"]
+    assert list(second.build_timings) == ["0"]
+    assert second.build_timings["0"]["started_at"] >= first.build_timings["0"]["started_at"]
+    assert all(entry["outcome"] == "success" for entry in {**first.build_timings, **second.build_timings}.values())
+
+
+def test_non_build_leaf_is_not_timed_even_inside_parallel_group(tmp_path):
+    @sdk_step("demo.plain")
+    def plain(ctx):
+        pass
+
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner())
+    group = ParallelStepGroup([ConfiguredStep("demo.plain", {}, "0/0")], "0")
+
+    PipelineExecutor().run([group], ctx)
+
+    assert ctx.build_timings == {}
 
 
 def test_retry_safe_step_retries_until_success(tmp_path, monkeypatch):

@@ -96,3 +96,23 @@ def test_no_osc_with_redirected_output(monkeypatch):
     monkeypatch.setattr(orca_status.sys, "stdout", type("Pipe", (), {"isatty": lambda self: False})())
     monkeypatch.setattr(orca_status.os, "write", lambda *_: (_ for _ in ()).throw(AssertionError("wrote OSC")))
     orca_status.report("working", "test")
+
+
+def test_capture_output_emits_single_lifecycle_and_no_osc(tmp_path, monkeypatch):
+    from cdt.runs import list_runs, run_paths
+
+    _write_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    events = []
+    monkeypatch.setattr(cli, "report_orca_status", lambda *args, **kwargs: events.append((args, kwargs)))
+
+    result = runner.invoke(app, ["run", "test", "--capture-output"])
+    runs = list_runs(tmp_path)
+    saved = run_paths(tmp_path, runs[0]["run_id"]).log.read_text(encoding="utf-8")
+
+    assert result.exit_code == 0, result.output
+    assert len(runs) == 1
+    assert [args[0] for args, _ in events] == ["working", "done"]
+    assert "\x1b]9999;" not in saved
+    assert "\x1b]9999;" not in result.output

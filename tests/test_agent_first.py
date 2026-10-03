@@ -1398,11 +1398,17 @@ def test_existing_testflight_pipeline_external_actions_unchanged_without_submit_
         lambda env, changelog, new_version: completions.append(new_version) or 0,
     )
 
-    result = runner.invoke(app, ["run", "iosapp"])
+    result = runner.invoke(app, ["run", "iosapp", "--status-file", str(tmp_path / "status.json")])
 
     assert result.exit_code == 0, result.output
     assert uploads == [("dev build", "1.2.3+5")]  # exactly one upload, same build number
     assert completions == ["1.2.3+5"]
+    # Only the real build leaf is measured; upload/complete leaves are not.
+    status = json.loads((tmp_path / "status.json").read_text(encoding="utf-8"))
+    assert set(status["build_timings"]) == {"1"}
+    assert status["build_timings"]["1"]["name"] == "ios.xcode_build_ipa"
+    assert status["build_timings"]["1"]["outcome"] == "success"
+    assert status["build_timings"]["1"]["duration_seconds"] >= 0.0
     # No App Review activity: no ASC API call, no submission message, no review checkpoint.
     assert "Submitted for App Store review" not in result.output
     assert not (tmp_path / ".cdt" / "appstore" / "operations").exists()
@@ -1483,6 +1489,8 @@ def test_resume_skips_finished_upload_and_reruns_only_testflight_completion(tmp_
     assert status["status"] == "success"
     assert status["completed_steps"] == ["0", "1", "2"]
     assert status["new_version"] == "1.2.3+5"
+    # The completed build/upload leaves are skipped; no new or restored timings.
+    assert status["build_timings"] == {}
 
 
 def _release_workflow_config():
@@ -1704,3 +1712,22 @@ def test_detached_execution_propagates_inputs(tmp_path):
     assert (tmp_path / "message.txt").read_text(encoding="utf-8") == "0.5.2"
     status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
     assert status["inputs"] == {"version": "0.5.2"}
+
+
+def test_capture_output_run_is_direct_for_stop_api_and_manifest(tmp_path, monkeypatch):
+    _write_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    result = runner.invoke(app, ["run", "test", "--capture-output"])
+    runs = list_runs(tmp_path)
+
+    assert result.exit_code == 0, result.output
+    assert len(runs) == 1
+    assert runs[0]["status"] == "success"
+    paths = run_paths(tmp_path, runs[0]["run_id"])
+    manifest = read_json(paths.manifest)
+    assert manifest["detached"] is False
+    assert manifest["capture_output"] is True
+    payload = stop_release(run_id=runs[0]["run_id"])
+    assert payload["stop_result"] == "not_detached"

@@ -1,3 +1,4 @@
+import codecs
 import io
 import json
 import os
@@ -129,6 +130,24 @@ def test_streaming_redactor_fails_closed_for_oversized_lines():
     assert "discarded" not in output
     assert "CDT redacted oversized output line" in output
     assert "still visible" in output
+
+
+def test_incremental_decode_feeds_streaming_redactor_across_byte_boundaries():
+    """The foreground-capture pipeline: tiny byte chunks through decode + redact."""
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    stream = StreamingRedactor(SecretRedactor.from_env({"API_TOKEN": "byte-split-secret"}))
+    payload = "ünicode ✓ bearer goodtoken123 byte-split-secret tail\nlast line \u2764 without newline".encode("utf-8")
+
+    output = ""
+    for start in range(0, len(payload), 3):
+        output += stream.feed(decoder.decode(payload[start : start + 3]))
+    output += stream.feed(decoder.decode(b"", final=True), final=True)
+
+    assert "byte-split-secret" not in output
+    assert "goodtoken123" not in output
+    assert "Bearer ***" in output
+    assert "ünicode ✓" in output
+    assert "last line \u2764 without newline" in output
 
 
 def test_pipeline_status_errors_are_redacted(tmp_path):
