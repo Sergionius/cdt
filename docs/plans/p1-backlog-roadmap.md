@@ -1,157 +1,24 @@
-# Roadmap задач P1 из backlog
+# P1 backlog: historical map of results
 
-## Назначение
+## What this document was
 
-Этот документ координирует отдельные небольшие изменения по задачам `docs/backlog/p1-*.md`. Это управляющий roadmap, а не единый исполняемый план всех возможностей: каждая задача выполняется как самостоятельное изменение со своими границами, дизайном и проверками. Roadmap фиксирует этапы, готовность и условия перехода, но не реализует перечисленные возможности сам.
+Until October 2026 this file coordinated eight P1 directions from `docs/backlog/p1-*.md` as a demand-driven roadmap: each direction carried its own design or demand gate and none of them was an obligation by itself. All eight directions are now implemented by the execution plan [`2026-10-03-p1-backlog-implementation.md`](2026-10-03-p1-backlog-implementation.md), and the eight backlog source files were removed after their acceptance criteria were met. This document remains as a short historical map of what was delivered; it makes no promises about future designs and introduces no new obligations.
 
-## Карта покрытия
+## Results of the eight directions
 
-Все восемь источников P1 из `docs/backlog/`:
+| Direction | Delivered result | Documented in |
+| --- | --- | --- |
+| Documenting existing capabilities | `firebase.ensure_cli` and `firebase.deploy` documented as they really behave, including the explicit absence of a `web.deploy` step; terminal sound behavior and its environment limits documented | [Firebase deploy](../pipelines.md#firebase-deploy), [Terminal sounds](../pipelines.md#terminal-sounds) |
+| iOS signing recipe | Repeatable local and CI signing path (certificate with private key, provisioning profile, temporary keychain, cleanup); code signing explicitly separated from ASC API authentication | [iOS code signing](../ios-signing.md) |
+| Conditional steps | `when` with exactly one of `equals` / `not_equals` / `present` over a declared input; decisions are frozen before execution, visible in plan and status, and never bypass production confirmation | [Conditional steps](../pipelines.md#conditional-steps) |
+| Safe step retries and timeouts | Opt-in `retry` only for steps that declare `retry_safe: true` and raise `RetryableStepError`; capability-based `timeout_seconds`; uploads, publications, webhooks and hooks gained no automatic retries | [Step retries](../pipelines.md#step-retries), [Step timeouts](../pipelines.md#step-timeouts) |
+| Parallel step safety | Branch-local `values` snapshots with an atomic, conflict-checking merge; checkpointed resume that neither loses branch state nor repeats completed side effects | [Steps and parallel groups](../pipelines.md#steps-and-parallel-groups), [Parallel values checkpoints](../runs.md#parallel-values-checkpoints) |
+| Generic notifications | `notify.webhook`: one HTTPS POST of an explicitly declared payload, 2xx-only success, no redirects, no automatic retries, destination and credentials never logged | [Generic webhook](../pipelines.md#generic-webhook) |
+| App Store metadata | `appstore.update_metadata`: four verified text fields of existing localizations of an existing version in `PREPARE_FOR_SUBMISSION`; read-back verification, no submission on review, production confirmation required | [App Store metadata updates](../pipelines.md#app-store-metadata-updates) |
+| Plugin discovery | Minimal solution on the existing SDK: ordinary Python packages imported through explicit `plugins:`; deliberately no entry points, discovery, registry, or installation machinery | [Reusable Python step plugins](../plugins.md) |
 
-| Источник | Исходный `worth` | Блок roadmap | Текущая готовность | Условие перехода к следующему этапу |
-| --- | --- | --- | --- | --- |
-| [`p1-document-existing-steps.md`](../backlog/p1-document-existing-steps.md) | `yes` | Документирование существующих возможностей | Готово к отдельной реализации документации | Переход разрешён сразу: задача не требует дизайна или подтверждения спроса |
-| [`p1-ios-signing-recipe.md`](../backlog/p1-ios-signing-recipe.md) | `yes` | Документирование существующих возможностей | Готово: тот же документационный этап | Переход разрешён сразу вместе с задачей документации шагов |
-| [`p1-conditional-steps.md`](../backlog/p1-conditional-steps.md) | `yes` | Conditional steps | Готово к отдельному проектированию | Начало реализации — только после отдельного законченного дизайна условий |
-| [`p1-safe-step-retries.md`](../backlog/p1-safe-step-retries.md) | `yes` | Retries и timeouts | Готово к отдельному проектированию безопасности | Начало реализации — только после дизайна идемпотентности, отмены и неоднозначных результатов |
-| [`p1-parallel-step-safety.md`](../backlog/p1-parallel-step-safety.md) | `later` | Parallel safety | Отложено до конкретного проблемного pipeline | Исследование открывается при появлении воспроизводимого проблемного pipeline |
-| [`p1-generic-notifications.md`](../backlog/p1-generic-notifications.md) | `yes` | Generic notifications | Ожидает подтверждения потребности | Конкретный получатель и требуемый payload; generic webhook рассматривается первым |
-| [`p1-app-store-metadata.md`](../backlog/p1-app-store-metadata.md) | `yes` | App Store metadata | Ожидает подтверждения потребности | Перечень реально нужных полей и локалей от команды, использующей App Store |
-| [`p1-plugin-discovery.md`](../backlog/p1-plugin-discovery.md) | `later` | Plugin discovery | Отложено до подтверждения межпроектного распространения | Доказанная недостаточность явных Python imports для нескольких проектов |
+## Notes
 
-## Этапы
-
-Каждый этап ниже описан одинаковым набором полей: источники, текущий статус, условие начала, границы изменения, зависимости, результат, критерии завершения, существующие точки реализации и проверки. Будущие работы описаны обычным текстом и таблицами; исполняемых чекбоксов будущих работ roadmap не содержит — запуск этапа оформляется отдельным изменением со своими чекбоксами и проверками.
-
-### Документирование существующих возможностей
-
-Первое самостоятельное изменение roadmap; объединяет discoverability существующих шагов и рецепт local/CI iOS signing.
-
-| Поле | Содержание |
-| --- | --- |
-| Источники | [`p1-document-existing-steps.md`](../backlog/p1-document-existing-steps.md), [`p1-ios-signing-recipe.md`](../backlog/p1-ios-signing-recipe.md) |
-| Текущий статус | Готово к отдельной реализации документации |
-| Условие начала | Переход разрешён сразу: этап не требует дизайна или подтверждения спроса |
-| Границы изменения | Только документация (`README.md`, `docs/pipelines.md`); без изменений runtime, без Ruby-зависимости и без нового signing manager |
-| Зависимости | Нет; этап независим и не ждёт других этапов roadmap |
-| Результат | Документация, описывающая реально существующие шаги и повторяемый безопасный путь подписи для local и CI |
-| Критерии завершения | Описаны реальные Firebase-шаги (`firebase.deploy`, `firebase.ensure_cli`) и звуковое поведение; signing-рецепт охватывает certificates, profiles, keychain и безопасное хранение credentials; signing не смешивается с ASC API authentication; нет вымышленного `web.deploy`, Ruby-зависимости или нового signing manager |
-| Существующие точки реализации и проверки | Код: `cdt/steps/firebase.py`, `cdt/sounds.py`, `cdt/platforms/ios_flutter.py`, `cdt/platforms/ios_xcode.py`; документация: `README.md`, `docs/pipelines.md`; тесты: `tests/test_examples.py`, `tests/test_steps_firebase.py`, `tests/test_sounds.py`, `tests/test_ios_flutter.py`, `tests/test_ios_xcode.py` |
-
-### Conditional steps
-
-| Поле | Содержание |
-| --- | --- |
-| Источники | [`p1-conditional-steps.md`](../backlog/p1-conditional-steps.md) |
-| Текущий статус | Готово к отдельному проектированию; публичного синтаксиса условий не существует, и предполагаемый `when` не выдаётся за действующий контракт |
-| Условие начала | Реализация начинается только после отдельного законченного дизайна условий: источники условий, момент вычисления, поведение при ошибках, отображение пропущенных шагов, resume и доступность условно произведённых артефактов |
-| Границы изменения | Схема, планирование, валидация и исполнение pipeline; без matrix expansion и без обмена mutable значениями между ветками; существующие явные `sequence`/`parallel` ветки не заменяются неявными условиями |
-| Зависимости | Независимый этап с собственным design gate; от других этапов roadmap не зависит |
-| Результат | Согласованные schema, planner, executor и status для явных условных шагов |
-| Критерии завершения | Согласованы schema, planner, executor и status; существующие pipeline без условий сохраняют поведение; нет matrix expansion или обмена mutable values между ветками |
-| Существующие точки реализации и проверки | Код: `cdt/pipeline/config.py`, `cdt/pipeline/planning.py`, `cdt/pipeline/validation.py`, `cdt/pipeline/executor.py`, `cdt/schema.py`, `cdt/cdt.schema.json` |
-
-### Retries и timeouts
-
-| Поле | Содержание |
-| --- | --- |
-| Источники | [`p1-safe-step-retries.md`](../backlog/p1-safe-step-retries.md) |
-| Текущий статус | Готово к отдельному проектированию безопасности; общей per-step политики повторов нет, у ASC-запросов есть собственные ограниченные retries |
-| Условие начала | Реализации предшествует дизайн идемпотентности, неоднозначных результатов, отмены и жизненного цикла subprocess; остановленный по таймауту поток не считается остановившим свой subprocess |
-| Границы изменения | Общая per-step retry/timeout политика; автоматическое повторение upload, push или publication после неоднозначного сбоя запрещено; явный resume сохраняется; существующие ограниченные retries ASC не подменяются |
-| Зависимости | Независимый этап с собственным design gate; общая retry policy не является предварительным условием существующих store publishing возможностей |
-| Результат | Безопасные повторы и таймауты с предсказуемыми побочными эффектами и сохранённым явным resume |
-| Критерии завершения | Дизайн фиксирует идемпотентность, обработку неоднозначных результатов и семантику отмены; небезопасные автоповторы побочных публикаций исключены политикой; явный resume работает как раньше |
-| Существующие точки реализации и проверки | Код: `cdt/pipeline/executor.py`, `cdt/runner.py`, `cdt/pipeline/context.py`; документация: `docs/runs.md` |
-
-### Parallel safety
-
-| Поле | Содержание |
-| --- | --- |
-| Источники | [`p1-parallel-step-safety.md`](../backlog/p1-parallel-step-safety.md) |
-| Текущий статус | Отложено до конкретного проблемного pipeline |
-| Условие начала | Появление воспроизводимого проблемного pipeline; без него выполняется только исследование ограничений, уже описанных в `docs/pipelines.md` |
-| Границы изменения | Только исследование по конкретному случаю; заранее не обещать cancellation, расширение вложенности групп или изменение `ctx.values`; сохраняются branch-local параметры и границы артефактов, без matrix builds |
-| Зависимости | Независимый demand-driven этап; не является продолжением retries/timeouts и не блокирует другие этапы |
-| Результат | Обоснованные конкретным случаем границы безопасности parallel-веток — либо подтверждённая достаточность текущих ограничений |
-| Критерии завершения | Проблемный pipeline воспроизведён и задокументирован; любые изменения семантики обоснованы этим случаем; документированное поведение sibling branches, вложенности и `ctx.values` остаётся источником истины до реального изменения |
-| Существующие точки реализации и проверки | Код: `cdt/pipeline/executor.py`, `cdt/runner.py`, `cdt/pipeline/context.py`; документация: `docs/pipelines.md`, `docs/runs.md` |
-
-### Generic notifications
-
-| Поле | Содержание |
-| --- | --- |
-| Источники | [`p1-generic-notifications.md`](../backlog/p1-generic-notifications.md) |
-| Текущий статус | Ожидает подтверждения потребности: `worth: yes`, но спрос на доставку за пределами текущих интеграций Telegram/Pachca не подтверждён |
-| Условие начала | Конкретный получатель и требуемый payload; generic webhook рассматривается первым |
-| Границы изменения | Destination, secrets и редактирование логов входят в обязательный дизайн; Slack-специфичное форматирование без запроса не включается; существующие интеграции не переписываются без нужды |
-| Зависимости | Независимый demand-driven этап; не блокирует и не ждёт другие этапы |
-| Результат | Настраиваемый notification destination с явной обработкой секретов и логов |
-| Критерии завершения | Допуск к реализации — зафиксированный сценарий и ограниченный контракт, а не наличие имени `p1`; секреты не утекают через payload или сохранённые логи; redaction покрывает новые поля |
-| Существующие точки реализации и проверки | Код: `cdt/services/notify.py`, `cdt/redaction.py`, `cdt/runs.py` (редактирование логов) |
-
-### App Store metadata
-
-| Поле | Содержание |
-| --- | --- |
-| Источники | [`p1-app-store-metadata.md`](../backlog/p1-app-store-metadata.md) |
-| Текущий статус | Ожидает подтверждения потребности: `worth: yes`, но спрос production iOS-команд не подтверждён; TestFlight changelog не является управлением листингом |
-| Условие начала | Перечень реально нужных полей и локалей от команды, использующей App Store |
-| Границы изменения | Существующий localized `whats_new` в `appstore.submit_review` явно отделён от descriptions, screenshots и управления карточкой; шаг не расширяется автоматически до аналога всего `deliver` |
-| Зависимости | Независимый demand-driven этап; не блокирует и не ждёт другие этапы |
-| Результат | Управление зафиксированным перечнем полей карточки App Store отдельно от отправки на review |
-| Критерии завершения | Допуск к реализации — зафиксированный сценарий и ограниченный контракт, а не наличие имени `p1`; существующая отправка на review и localized `whats_new` не регрессируют |
-| Существующие точки реализации и проверки | Код: `cdt/steps/appstore.py`, `cdt/services/appstore.py`, `cdt/services/appstore_review.py` |
-
-### Plugin discovery
-
-| Поле | Содержание |
-| --- | --- |
-| Источники | [`p1-plugin-discovery.md`](../backlog/p1-plugin-discovery.md) |
-| Текущий статус | Отложено до подтверждения межпроектного распространения |
-| Условие начала | Доказанная недостаточность явных Python imports как минимум для нескольких проектов; сначала демонстрируется проблема, потом выбирается решение |
-| Границы изменения | Документированный рецепт существующего SDK — предпочтительный минимальный результат; entry points, установка и registry не являются обязательными и не добавляются без потребности |
-| Зависимости | Независимый demand-driven этап |
-| Результат | Подтверждённый способ повторного использования Python-шагов между проектами; минимально — рецепт на существующем SDK |
-| Критерии завершения | Недостаточность явных imports продемонстрирована на конкретных проектах; выбранное решение минимально; registry-инфраструктура не вводится без подтверждённой потребности |
-| Существующие точки реализации и проверки | Код: `cdt/pipeline/registry.py`, `cdt/sdk.py`, `cdt/pipeline/config.py` (загрузка явно объявленных модулей) |
-
-## Граф зависимостей
-
-Текстовая схема; входные условия в квадратных скобках:
-
-```text
-Документирование существующих возможностей ── самостоятельное изменение, старт разрешён сразу
-Conditional steps     [законченный дизайн условий]       ──▶ реализация
-Retries и timeouts    [дизайн идемпотентности и отмены]  ──▶ реализация
-Parallel safety       [воспроизводимый проблемный pipeline] ──▶ исследование
-Generic notifications [получатель + требуемый payload]   ──▶ дизайн ──▶ реализация
-App Store metadata    [перечень нужных полей и локалей]  ──▶ дизайн ──▶ реализация
-Plugin discovery      [доказанная недостаточность imports] ──▶ рецепт SDK или дизайн
-```
-
-Документация начинается независимо; conditional steps и retries/timeouts имеют собственные design gates; parallel safety, notifications, metadata и plugins открываются только по своим входным условиям. Искусственная линейная зависимость между всеми этапами не создаётся: ни один этап не ждёт завершения другого — кроме собственных условий начала, зафиксированных в таблицах выше.
-
-## Карта существующих проверок
-
-Регрессионная основа для будущих изменений по направлениям:
-
-| Направление | Существующие тесты |
-| --- | --- |
-| Документация | `tests/test_examples.py`, `tests/test_steps_firebase.py`, `tests/test_sounds.py`, `tests/test_ios_flutter.py`, `tests/test_ios_xcode.py` |
-| Conditional steps и безопасность выполнения (retries, timeouts, parallel) | `tests/test_pipeline_config.py`, `tests/test_pipeline_plan.py`, `tests/test_pipeline_executor.py`, `tests/test_pipeline_context.py`, `tests/test_pipeline_resume.py`, `tests/test_pipeline_status_file.py`, `tests/test_runner.py` |
-| Интеграции (notifications, App Store metadata) | `tests/test_services_notify.py`, `tests/test_redaction.py`, `tests/test_services_appstore.py`, `tests/test_services_appstore_review.py` |
-| Plugin discovery | `tests/test_pipeline_registry.py`, `tests/test_examples.py` |
-
-Существующие тесты — регрессионная основа: они подтверждают неизменность текущего поведения, но не являются доказательством поддержки будущих функций. Общие команды для будущих реализаций — `pytest` и `pytest --cov=cdt --cov-report=term`.
-
-## Правила сопровождения
-
-- `worth: yes` не означает обязательство реализации: это исходная оценка ценности в backlog, а не принятая работа.
-- Отсутствие подтверждённой потребности оставляет задачу отложенной; demand-driven блоки не открываются без своих входных условий.
-- Исходные backlog-файлы сохраняются до выполнения соответствующей задачи; roadmap не заменяет и не переопределяет их.
-- Реализация каждой задачи оформляется отдельным изменением со своими проверками; этот документ не содержит исполняемых чекбоксов будущих работ.
-
-## Исторический контекст
-
-[`2026-07-21-agent-first-cdt-roadmap.md`](2026-07-21-agent-first-cdt-roadmap.md) — предыдущий roadmap agent-first направления. Он приведён как исторический контекст: его нереализованные пункты (например, discovery плагинов) перешли в backlog как demand-driven, но этот документ не превращает их обратно в список заново обязательных работ.
+- The plugin discovery direction was closed with the minimal option the roadmap itself named as preferable: a documented recipe for reusing installable Python packages across projects. Entry points and registry infrastructure were not added and are not promised for the future.
+- The original demand-driven gates (design first, evidence before infrastructure, no speculative abstractions) shaped the delivered scope and remain visible in the documented limits of each capability above.
+- New work continues through ordinary backlog and plan proposals; this document is historical and is not a roadmap of upcoming changes.

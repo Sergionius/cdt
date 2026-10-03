@@ -279,8 +279,17 @@ Hooks run from the project root as `python3 <script>` and must stay inside the p
 
 To share steps across projects, package them as an ordinary Python package and list the module under `plugins:` in `cdt.yaml`. See [Reusable Python step plugins](docs/plugins.md) and the runnable [`examples/reusable-plugin/`](examples/reusable-plugin/cdt.yaml) example.
 
-## Contributing and security
+## Implemented pipeline capabilities and their limits
 
-Planned P1 work is coordinated in the [P1 backlog roadmap](docs/plans/p1-backlog-roadmap.md); several of its directions are demand-driven and stay deferred until a concrete need is confirmed.
+The eight P1 backlog directions are implemented; a historical map with the original sources lives in [P1 backlog roadmap: historical map](docs/plans/p1-backlog-roadmap.md). Current capabilities and their documented limits:
+
+- [Conditional steps](docs/pipelines.md#conditional-steps) run or skip leaves from declared pipeline inputs; decisions are frozen before execution and never bypass production confirmation.
+- [Step retries](docs/pipelines.md#step-retries) and [step timeouts](docs/pipelines.md#step-timeouts) are opt-in and capability-based: only explicitly `retry_safe` steps may retry, and uploads, publications, webhooks and hooks gain no automatic retries.
+- Parallel branches receive isolated `values` snapshots with an atomic merge ([steps and parallel groups](docs/pipelines.md#steps-and-parallel-groups)); other context fields, the filesystem and external services are not transactional.
+- [Generic webhook](docs/pipelines.md#generic-webhook) sends one HTTPS POST with strict secret handling: only 2xx is success, redirects and automatic retries are never followed or performed, and the destination is never logged.
+- [App Store metadata updates](docs/pipelines.md#app-store-metadata-updates) change four verified text fields of existing localizations of an existing version; screenshots, pricing and a full `deliver` replacement stay out of scope.
+- Existing Firebase steps, [terminal sounds](docs/pipelines.md#terminal-sounds), the [iOS code signing recipe](docs/ios-signing.md), and [reusable Python step plugins](docs/plugins.md) are documented on the current interfaces — including the deliberate absence of plugin entry points, discovery, or installation machinery.
+
+## Contributing and security
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development checks and pull request guidance. Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md). CDT is available under the [MIT License](LICENSE).

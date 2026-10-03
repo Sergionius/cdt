@@ -176,14 +176,14 @@ def test_resume_skips_completed_retry_step_without_new_attempts(tmp_path, monkey
 
 def setup_function():
     _clear_steps_for_tests()
-    for module in ("cdt_steps.resume", "cdt_steps.play", "cdt_steps.notify"):
+    for module in ("cdt_steps.resume", "cdt_steps.resume_hook", "cdt_steps.play", "cdt_steps.notify"):
         sys.modules.pop(module, None)
     sys.modules.pop("cdt_steps", None)
 
 
 def teardown_function():
     _clear_steps_for_tests()
-    for module in ("cdt_steps.resume", "cdt_steps.play", "cdt_steps.notify"):
+    for module in ("cdt_steps.resume", "cdt_steps.resume_hook", "cdt_steps.play", "cdt_steps.notify"):
         sys.modules.pop(module, None)
     sys.modules.pop("cdt_steps", None)
 
@@ -418,6 +418,104 @@ def test_parallel_values_resume_restores_leaf_checkpoints_without_sibling_leaks(
     assert restored.values == {"local": "preserved", "done": "yes", "sibling": "yes"}
     assert calls == ["produce", "sibling"] or calls == ["sibling", "produce"]
     assert json.loads(status.read_text())["values_state"]["groups"] == {}
+
+
+def test_resume_preserves_branch_values_and_does_not_resend_completed_webhook(tmp_path, monkeypatch):
+    """Resume skips completed leaves: the webhook is not sent twice and the
+    completed sibling leaf keeps its branch state for the next leaf."""
+
+    from cdt.services import webhook as webhook_module
+
+    package = tmp_path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "resume_hook.py").write_text(
+        "\n".join(
+            [
+                "from cdt.sdk import step",
+                "",
+                "@step('demo.produce')",
+                "def produce(ctx):",
+                "    ctx.values['branch'] = 'kept'",
+                "    log = ctx.cwd / 'produce-log.txt'",
+                "    prior = log.read_text(encoding='utf-8') if log.exists() else ''",
+                "    log.write_text(prior + 'ran\\n', encoding='utf-8')",
+                "",
+                "@step('demo.consume')",
+                "def consume(ctx):",
+                "    assert ctx.values.get('branch') == 'kept', 'completed leaf lost its branch values'",
+                "    if not (ctx.cwd / 'allow-resume').exists():",
+                "        raise RuntimeError('planned first-run failure')",
+                "",
+                "@step('demo.after')",
+                "def after(ctx):",
+                "    assert ctx.values.get('branch') == 'kept', 'merged branch values were lost'",
+                "    (ctx.cwd / 'after-log.txt').write_text('ran', encoding='utf-8')",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "plugins:",
+                "  - cdt_steps.resume_hook",
+                "pipelines:",
+                "  demo:",
+                "    steps:",
+                "      - parallel:",
+                "          steps:",
+                "            - sequence:",
+                "                steps:",
+                "                  - demo.produce",
+                "                  - demo.consume",
+                "            - step: notify.webhook",
+                "              with:",
+                "                url_env: WEBHOOK_URL",
+                "                payload:",
+                "                  text: released-1.0",
+                "      - demo.after",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    sent = []
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_open(request, timeout):
+        sent.append(request)
+        return FakeResponse()
+
+    monkeypatch.setattr(webhook_module, "_open_webhook_response", fake_open)
+    monkeypatch.setenv("WEBHOOK_URL", "https://hooks.example/abc123")
+
+    status_file = tmp_path / "resume.json"
+    first = runner.invoke(app, ["run", "demo", "--status-file", str(status_file)])
+    assert first.exit_code != 0
+    assert len(sent) == 1
+    assert (tmp_path / "produce-log.txt").read_text(encoding="utf-8") == "ran\n"
+    saved = json.loads(status_file.read_text(encoding="utf-8"))
+    assert saved["values_state"]["groups"]["0"]["branches"]["0/0"] == {"branch": "kept"}
+
+    (tmp_path / "allow-resume").write_text("go", encoding="utf-8")
+    second = runner.invoke(app, ["run", "demo", "--resume-status-file", str(status_file), "--skip-completed"])
+
+    assert second.exit_code == 0, second.output
+    assert len(sent) == 1, "completed webhook leaf must not be sent again"
+    assert (tmp_path / "produce-log.txt").read_text(encoding="utf-8") == "ran\n"
+    assert (tmp_path / "after-log.txt").exists()
 
 
 def test_partial_resume_keeps_unfinished_delta_private_until_remaining_branches_finish(tmp_path):

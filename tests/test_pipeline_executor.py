@@ -1,10 +1,14 @@
 import json
+import sys
 import threading
 import time
 
 import pytest
+import typer
+from typer.testing import CliRunner
 
 from cdt.artifacts import ArtifactKind, BuildArtifact
+from cdt.cli import app
 from cdt.pipeline import ParallelStepGroup, PipelineContext, PipelineExecutor, SequentialStepGroup
 from cdt.pipeline.config import ConfiguredStep
 from cdt.pipeline.executor import PipelineExecutionError
@@ -12,14 +16,21 @@ from cdt.pipeline.policy import RetryableStepError, RetryPolicy
 from cdt.pipeline.registry import StepMetadata, _clear_steps_for_tests, register_step
 from cdt.runner import CommandExecutionError, CommandRunner
 from cdt.sdk import step as sdk_step
+from cdt.services import webhook
+
+runner = CliRunner()
 
 
 def setup_function():
     _clear_steps_for_tests()
+    sys.modules.pop("cdt_steps.demo", None)
+    sys.modules.pop("cdt_steps", None)
 
 
 def teardown_function():
     _clear_steps_for_tests()
+    sys.modules.pop("cdt_steps.demo", None)
+    sys.modules.pop("cdt_steps", None)
 
 
 def _register_flaky_step(calls, *, fail_times, error="transient", name="demo.flaky"):
@@ -722,3 +733,141 @@ def test_parallel_group_writes_child_runtime_status(tmp_path):
     assert payload["running_steps"] == []
     assert sorted(payload["parallel_completed"]) == ["android", "ios"]
     assert payload["parallel_failed"] == []
+
+
+def test_failed_branch_leaves_root_values_without_partial_merge(tmp_path):
+    """A failed branch discards every branch delta: the root keeps its base values."""
+
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner(), values={"key": "old"})
+
+    def left(ctx):
+        ctx.values["fresh"] = "private"
+        raise typer.BadParameter("offline")
+
+    steps = [
+        ParallelStepGroup(
+            [
+                CallbackStep("0/0", left),
+                CallbackStep("0/1", lambda ctx: ctx.values.update({"sibling": "yes"})),
+            ],
+            "0",
+        )
+    ]
+    with pytest.raises(PipelineExecutionError, match="Pipeline failed at step"):
+        PipelineExecutor().run(steps, ctx)
+    assert ctx.values == {"key": "old"}
+    assert "0" not in ctx.completed_steps
+
+
+def test_end_to_end_offline_inputs_conditions_parallel_values_retry_webhook(tmp_path, monkeypatch):
+    """One offline scenario wiring inputs, conditional leaves, parallel sequences,
+    isolated values, a safe retry, and a mocked webhook through the real config
+    and CLI path."""
+
+    package = tmp_path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "demo.py").write_text(
+        "\n".join(
+            [
+                "from cdt.pipeline.policy import RetryableStepError",
+                "from cdt.sdk import step",
+                "",
+                "calls = []",
+                "",
+                "@step('demo.flaky', retry_safe=True)",
+                "def flaky(ctx):",
+                "    calls.append('flaky')",
+                "    if len(calls) == 1:",
+                "        raise RetryableStepError('transient')",
+                "    ctx.values['left'] = 'yes'",
+                "",
+                "@step('demo.skipped_check')",
+                "def skipped_check(ctx):",
+                "    calls.append('skipped_check')",
+                "",
+                "@step('demo.sibling')",
+                "def sibling(ctx):",
+                "    assert 'left' not in ctx.values, 'sibling must not see branch values'",
+                "    ctx.values['right'] = 'yes'",
+                "",
+                "@step('demo.finish')",
+                "def finish(ctx):",
+                "    assert ctx.values.get('left') == 'yes' and ctx.values.get('right') == 'yes'",
+                "    calls.append('finish')",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "plugins:",
+                "  - cdt_steps.demo",
+                "pipelines:",
+                "  demo:",
+                "    inputs:",
+                "      deploy: {}",
+                "    steps:",
+                "      - parallel:",
+                "          steps:",
+                "            - sequence:",
+                "                steps:",
+                "                  - step: demo.flaky",
+                "                    retry: {max_attempts: 3, delay_seconds: 0}",
+                "                  - step: demo.skipped_check",
+                "                    when: {input: deploy, equals: 'no'}",
+                "            - sequence:",
+                "                steps:",
+                "                  - demo.sibling",
+                "                  - step: notify.webhook",
+                "                    when: {input: deploy, equals: 'yes'}",
+                "                    with:",
+                "                      url_env: WEBHOOK_URL",
+                "                      payload:",
+                '                        text: "released ${inputs.deploy}"',
+                "      - demo.finish",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    sent = []
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_open(request, timeout):
+        sent.append(request)
+        return FakeResponse()
+
+    monkeypatch.setattr(webhook, "_open_webhook_response", fake_open)
+    monkeypatch.setenv("WEBHOOK_URL", "https://hooks.example/abc123")
+
+    status_file = tmp_path / "status.json"
+    result = runner.invoke(app, ["run", "demo", "--input", "deploy=yes", "--status-file", str(status_file)])
+
+    assert result.exit_code == 0, result.output
+    demo = sys.modules["cdt_steps.demo"]
+    assert demo.calls.count("flaky") == 2  # one retryable failure, then success
+    assert demo.calls[-1] == "finish"  # ran after the group merged branch values
+    assert "skipped_check" not in demo.calls  # conditional leaf was skipped before running
+    assert len(sent) == 1
+    assert sent[0].full_url == "https://hooks.example/abc123"
+    assert json.loads(sent[0].data) == {"text": "released yes"}
+
+    status = json.loads(status_file.read_text(encoding="utf-8"))
+    assert status["status"] == "success"
+    assert status["skipped_steps"] == ["0/0/1"]
+    assert status["step_decisions"]["0/0/1"] == "skip"
+    assert status["step_decisions"]["0/1/1"] == "run"
+    assert sorted(status["completed_steps"]) == ["0", "0/0", "0/0/0", "0/1", "0/1/0", "0/1/1", "1"]

@@ -16,7 +16,9 @@ import cdt.steps.google_play as google_play_step
 from cdt.agent_release import release_status, stop_release
 from cdt.cli import app
 from cdt.pipeline.builtins import register_builtin_steps
+from cdt.pipeline.config import load_pipeline_config, load_plugins
 from cdt.pipeline.registry import _clear_steps_for_tests, list_step_metadata
+from cdt.pipeline.validation import validate_pipeline
 from cdt.runs import create_run, list_runs, read_json, run_paths, write_exit_code
 from cdt.schema import bundled_schema_path, schema_payload
 from cdt.services.appstore_state import load_upload_record, save_upload_record
@@ -171,16 +173,18 @@ def test_plan_flags_retry_without_capability(tmp_path, monkeypatch):
 
 def setup_function():
     _clear_steps_for_tests()
-    sys.modules.pop("cdt_steps.demo", None)
-    sys.modules.pop("cdt_steps.play", None)
+    for module in ("cdt_steps.demo", "cdt_steps.play", "cdt_steps.offline", "mix_steps.demo"):
+        sys.modules.pop(module, None)
     sys.modules.pop("cdt_steps", None)
+    sys.modules.pop("mix_steps", None)
 
 
 def teardown_function():
     _clear_steps_for_tests()
-    sys.modules.pop("cdt_steps.demo", None)
-    sys.modules.pop("cdt_steps.play", None)
+    for module in ("cdt_steps.demo", "cdt_steps.play", "cdt_steps.offline", "mix_steps.demo"):
+        sys.modules.pop(module, None)
     sys.modules.pop("cdt_steps", None)
+    sys.modules.pop("mix_steps", None)
 
 
 def _write_project(path: Path, *, risk: str = "standard") -> None:
@@ -830,6 +834,176 @@ def test_schema_exposes_appstore_update_metadata_required_options():
     serialized = json.dumps(payload)
     assert "appstore.update_metadata" in serialized
     assert payload == json.loads(bundled_schema_path().read_text(encoding="utf-8"))
+
+
+def _write_metadata_project(path: Path) -> None:
+    """Production metadata update nested in parallel and guarded by an input condition."""
+
+    (path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  meta:",
+                "    inputs:",
+                "      update:",
+                "        required: false",
+                "    steps:",
+                "      - parallel:",
+                "          steps:",
+                "            - sequence:",
+                "                steps:",
+                "                  - step: appstore.update_metadata",
+                "                    with:",
+                '                      version: "1.2.3"',
+                "                      localizations:",
+                "                        ru:",
+                "                          whats_new: Исправления и улучшения",
+                "                    when:",
+                "                      input: update",
+                '                      equals: "yes"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (path / ".env").write_text("IOS_BUNDLE_ID=com.example.app\n", encoding="utf-8")
+
+
+def test_metadata_step_confirmation_survives_condition_nesting_and_detached_start(tmp_path, monkeypatch):
+    """A conditionally skipped nested metadata leaf still needs production risk,
+    the exact confirmation, and it cannot be reached around it via detached start."""
+
+    _write_metadata_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    def fail(method, path, client, payload=None, retry_ambiguous=True):
+        raise AssertionError("Apple must not be contacted before the exact production confirmation")
+
+    monkeypatch.setattr(appstore_service, "_asc_request", fail)
+
+    # Nested sequence inside parallel plus a condition: still a production step.
+    planned = runner.invoke(app, ["pipeline", "plan", "meta", "--json"])
+    assert planned.exit_code != 0
+    errors = json.loads(planned.output)["errors"]
+    assert any(e["code"] == "production_risk_required" for e in errors)
+
+    # Even an explicitly skipped decision never bypasses the risk requirement.
+    skipped = runner.invoke(app, ["pipeline", "plan", "meta", "--json", "--input", "update="])
+    assert skipped.exit_code != 0
+    assert any(e["code"] == "production_risk_required" for e in json.loads(skipped.output)["errors"])
+
+    wrong = runner.invoke(app, ["run", "meta", "--confirm", "wrong"])
+    assert wrong.exit_code != 0
+    assert not (tmp_path / ".cdt" / "runs").exists()
+
+    # With the declared production risk, detached start demands the exact
+    # confirmation before it creates any run record.
+    config = tmp_path / "cdt.yaml"
+    config.write_text(
+        config.read_text(encoding="utf-8").replace("  meta:\n", "  meta:\n    risk: production\n", 1),
+        encoding="utf-8",
+    )
+    for command in (
+        ["agent-release", "start", "meta", "--json"],
+        ["agent-release", "start", "meta", "--confirm", "wrong", "--json"],
+    ):
+        rejected = runner.invoke(app, command)
+        payload = json.loads(rejected.output)
+        assert rejected.exit_code == 2
+        assert payload["status"] == "confirmation_required"
+        assert payload["required_confirmation"] == "meta"
+    assert not (tmp_path / ".cdt" / "runs").exists()
+
+    # The exact confirmation lets the step run; it then fails at the missing
+    # ASC credentials, offline of Apple.
+    started = runner.invoke(
+        app,
+        ["agent-release", "start", "meta", "--input", "update=yes", "--confirm", "meta", "--json"],
+    )
+    payload = json.loads(started.output)
+    assert started.exit_code == 0, started.output
+    run_id = payload["run_id"]
+    paths = run_paths(tmp_path, run_id)
+    deadline = time.time() + 60
+    while not paths.exit.exists() and time.time() < deadline:
+        time.sleep(0.1)
+    assert paths.exit.exists(), "detached metadata worker did not finish"
+
+    status = read_json(paths.status)
+    assert status["status"] == "failed"
+    assert "Missing ASC credentials" in status["error"]
+
+
+def test_documentation_syntax_schema_and_plan_payloads_stay_consistent(tmp_path, monkeypatch):
+    """Integration check: bundled schema equals the generated schema, the legacy
+    example pipeline still parses, and text and JSON plans agree on decisions."""
+
+    assert json.loads(bundled_schema_path().read_text(encoding="utf-8")) == schema_payload()
+
+    # The pre-P1 example (legacy string steps, single-key form) still validates.
+    examples = ROOT / "examples"
+    monkeypatch.syspath_prepend(str(examples))
+    config = load_pipeline_config(examples)
+    register_builtin_steps()
+    load_plugins(config.plugins)
+    assert validate_pipeline(config) == []
+
+    # A mixed pipeline (legacy single-key form, extended when form) plans
+    # with unknown decisions without inputs; explicit inputs resolve them.
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "plugins:",
+                "  - mix_steps.demo",
+                "pipelines:",
+                "  demo:",
+                "    inputs:",
+                "      deploy: {}",
+                "    steps:",
+                "      - demo.legacy",
+                "      - step: demo.conditional",
+                "        when: {input: deploy, equals: 'yes'}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    package = tmp_path / "mix_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "demo.py").write_text(
+        "\n".join(
+            [
+                "from cdt.sdk import step",
+                "",
+                "@step('demo.legacy')",
+                "def legacy(ctx):",
+                "    pass",
+                "",
+                "@step('demo.conditional')",
+                "def conditional(ctx):",
+                "    pass",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    static_plan = runner.invoke(app, ["pipeline", "plan", "demo", "--json"])
+    assert static_plan.exit_code == 0, static_plan.output
+    static_json = json.loads(static_plan.output)
+    assert [node["decision"] for node in static_json["steps"]] == ["run", "unknown"]
+    static_text = runner.invoke(app, ["pipeline", "plan", "demo"]).output
+    assert "demo.legacy" in static_text and "unknown" in static_text
+
+    resolved_plan = runner.invoke(app, ["pipeline", "plan", "demo", "--json", "--input", "deploy=yes"])
+    assert resolved_plan.exit_code == 0, resolved_plan.output
+    resolved_json = json.loads(resolved_plan.output)
+    assert [node["decision"] for node in resolved_json["steps"]] == ["run", "run"]
+    resolved_text = runner.invoke(app, ["pipeline", "plan", "demo", "--input", "deploy=yes"]).output
+    assert "run" in resolved_text and "unknown" not in resolved_text
 
 
 def test_release_summary_includes_release_results_without_reading_the_log(tmp_path, monkeypatch):
