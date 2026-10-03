@@ -325,6 +325,8 @@ Important built-ins include:
 - `appstore.upload_testflight_ipa`
 - `appstore.complete_testflight`
 - `appstore.update_metadata`
+- `firebase.ensure_cli`
+- `firebase.deploy`
 - `google_play.upload_aab`
 - `artifact.copy_to_downloads`
 - `hook.python_script`
@@ -333,6 +335,10 @@ Important built-ins include:
 - `notify.webhook`
 
 Build steps use `profile` for CDT presets (`prod` adds `ENV=prod`). Flutter `flavor` is separate and optional. Build steps default to `no_pub: true` and do not increment versions; add explicit `flutter.increment_build_number` and `flutter.pub_get` steps when needed.
+
+iOS builds are signed by your Xcode/Flutter project configuration, not by CDT; see the [iOS code signing recipe](ios-signing.md) for a local and CI setup on the existing interfaces.
+
+Custom steps come from ordinary Python plugin modules listed in `plugins:`; see [Reusable Python step plugins](plugins.md) and `examples/reusable-plugin/`.
 
 `artifact.copy_to_downloads` copies a named file artifact to `~/Downloads` by default.
 
@@ -707,6 +713,35 @@ Every publication writes a versioned checkpoint under `.cdt/google-play/operatio
 The lock file `.cdt/google-play/locks/<package>.lock` serializes publications of one package within this checkout only. It does not coordinate other machines, other checkouts, CI runners, or manual Play Console work: if the remote state changed elsewhere, CDT stops on the mismatch instead of overwriting it.
 
 See [Run records → Google Play publication checkpoints](runs.md#google-play-publication-checkpoints) for how checkpoints interact with run status and resume.
+
+## Firebase deploy
+
+`firebase.ensure_cli` and `firebase.deploy` cover Firebase project deployments with the Firebase CLI. Both take no options.
+
+`firebase.ensure_cli` is a cheap guard step: it runs `firebase --version` and fails early with an installation hint when the CLI is missing or broken. Put it first in a deploy pipeline so a missing tool fails before any build or upload work.
+
+`firebase.deploy` runs `firebase deploy` in the project root with the `firebase` binary from `PATH`. Targets, hosting, rules and functions are defined by the project's own Firebase configuration (`firebase.json`, `.firebaserc`) — the step does not duplicate them in `cdt.yaml`. The step is registered with `risk: deploy`; when the CLI exits non-zero, CDT plays the fail sound (if configured, see [Terminal sounds](#terminal-sounds)) and fails the pipeline.
+
+```yaml
+- firebase.ensure_cli
+- firebase.deploy
+```
+
+There is no `web.deploy` step. Web artifacts are built with `web.build`, optionally rewritten with `web.cache_bust` and placed with `web.copy`; hosting upload happens through `firebase.deploy` or your own tooling.
+
+## Terminal sounds
+
+Several built-in build, upload and deploy steps play a short fail sound when they fail (Flutter/iOS/Android builds, `firebase.deploy`, `firebase.upload_app_distribution`, `google_play.upload_aab`, App Store steps, `git.commit_push`, web steps). The legacy `cdt` flows also play a success sound when the whole flow completes.
+
+Sounds are opt-in and configured through environment variables (the project `.env` works as everywhere else):
+
+| Variable | Meaning |
+|---|---|
+| `SUCCESS_SOUND` / `FAIL_SOUND` | `macos` enables the sound; unset or empty keeps the terminal silent. Any other value prints a warning. |
+| `SUCCESS_SOUND_FILE` / `FAIL_SOUND_FILE` | Optional custom sound file, absolute or relative to the project root. Defaults: the system `Glass.aiff` / `Basso.aiff`. |
+| `SOUND_VOLUME` | Playback volume `0.0`–`1.0`; non-numeric values fall back to `0.3`, out-of-range values are clamped. |
+
+Playback uses the macOS `afplay` tool and reports every problem only as a warning: a missing `afplay`, a missing custom file or a failed playback never changes the pipeline result. Do not rely on sounds in headless CI — nothing plays unless a mac with `afplay` explicitly opts in through these variables.
 
 ## Python hook
 

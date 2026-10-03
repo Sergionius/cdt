@@ -1,0 +1,13 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cdt-example-steps"
+version = "0.1.0"
+description = "Example reusable CDT pipeline steps package"
+requires-python = ">=3.10"
+dependencies = ["cdt-release"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cdt_example_steps"]

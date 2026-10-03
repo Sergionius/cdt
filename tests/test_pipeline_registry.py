@@ -1,3 +1,6 @@
+import importlib.util
+from pathlib import Path
+
 import pytest
 import typer
 
@@ -233,6 +236,33 @@ def test_unknown_step_error_lists_available_steps():
 
     with pytest.raises(typer.BadParameter, match="Unknown pipeline step: missing.step"):
         get_step_factory("missing.step")
+
+
+def test_reusable_plugin_example_registers_metadata_and_conflicts_loudly():
+    """The example plugin registers explicit metadata and cannot silently
+    override an existing registration: the step registry is global per
+    process and duplicate names fail loudly."""
+    module_path = (
+        Path(__file__).resolve().parents[1]
+        / "examples"
+        / "reusable-plugin"
+        / "src"
+        / "cdt_example_steps"
+        / "__init__.py"
+    )
+    spec = importlib.util.spec_from_file_location("cdt_example_steps", module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    metadata = get_step_metadata("example.check_file")
+    assert metadata.plugin is True
+    assert metadata.retry_safe is True
+    assert metadata.category == "example"
+    assert metadata.risk == "safe"
+    assert metadata.description.startswith("Read-only probe")
+
+    with pytest.raises(typer.BadParameter, match="already registered"):
+        register_step("example.check_file", DummyStep)
 
 
 def test_sdk_step_accepts_keyword_metadata():
