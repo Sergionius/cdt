@@ -45,6 +45,55 @@ cdt agent-release status --run <run-id> --wait --json
 
 `agent-release` is a process-management adapter, not a separate pipeline implementation.
 
+See [Execution modes](#execution-modes) for how the three start modes differ and what each one records.
+
+## Execution modes
+
+Every real execution creates exactly one run record under `.cdt/runs/<run-id>/`. The three start modes differ in who owns the process and how output is captured; status, artifacts, and reading commands are the same.
+
+| | Ordinary direct run | Foreground capture | Detached execution |
+| --- | --- | --- | --- |
+| Start command | `cdt run <pipeline>` | `cdt run <pipeline> --capture-output` | `cdt agent-release start <pipeline> --json` |
+| Runs in | the caller's terminal, in the foreground | the caller's terminal, supervised by one parent `cdt` process | a detached background worker |
+| Terminal output | CDT's own output, unredacted | redacted combined stream (the saved copy and the terminal copy are identical) | none; read the log afterwards |
+| `output.log` | CDT-owned diagnostics only | redacted combined stdout/stderr of the whole run | redacted combined output of the run |
+| Manifest | `detached: false` | `detached: false`, `capture_output: true` | `detached: true` |
+| `pid` / `exit-code` | written by the run itself | owned by the supervisor parent | owned by the detached worker |
+| Production pipelines | prompt for `--confirm <pipeline>` when omitted | prompt is impossible: pass `--confirm <pipeline>` explicitly | pass `--confirm <pipeline>` to `agent-release start` |
+
+Run and read the record:
+
+```bash
+cdt run test --capture-output          # foreground capture of this run
+cdt agent-release start test --json    # detached execution
+cdt status                             # newest run, human-readable (YAML-like)
+cdt status --json                      # machine-readable payload
+cdt logs --tail 120                    # redacted log of the newest run
+cdt history --pipeline test --status failed
+```
+
+### Foreground capture limits
+
+`--capture-output` is a POSIX feature (Linux/macOS). On a platform without the required process-group primitives CDT rejects the flag before creating a run record or executing any step.
+
+The child run gets `stdin=DEVNULL`: no input, no prompts, no PTY, no terminal resize handling. Production pipelines therefore require the exact `--confirm <pipeline>` up front — a captured run cannot ask for it interactively. stdout and stderr of the child are merged into one stream; CDT does not promise a global ordering of lines produced by different processes, because interleaving is decided by the operating system when each process writes.
+
+The child run is forced into the verbose transport (`CDT_UI=verbose` in the child environment only), so external build commands inherit the run's stdout/stderr instead of writing pretty per-command temp logs. The parent's own UI mode is unchanged.
+
+### What capture shows
+
+Capture shows the redacted stream. Unlike an ordinary direct run — where the terminal keeps its normal interactive output and only the saved copy is redacted — the terminal copy and `output.log` receive the same redacted data. Known credentials are replaced with `***` before anything is written or displayed.
+
+Steps cannot read input, so interactive prompts of external tools do not work. Third-party CLIs may buffer their own output internally: CDT disables the child Python's buffering, but it cannot disable a third-party tool's buffering, so such output can be delayed until the tool flushes or exits. Output that never reaches the run's stdout/stderr is not captured: private files a tool writes on its own, logs a tool suppresses, and processes that deliberately redirected their own descriptors are outside the guarantee.
+
+### Capture redaction, permissions, and retention
+
+The capture stream passes the same redaction as every saved run log before it is written to `output.log` and before it is shown: credential-like environment keys, keys named by `CDT_REDACT_KEYS`, Bearer credentials, authorization headers, password/token assignments, and JWT-looking values become `***`. The capture log is created with owner-only permissions (`0600`).
+
+Log completeness is bounded by the existing oversized-line protection: a single line beyond the limit is discarded behind a visible replacement marker instead of being stored raw or buffered without bound. Redaction cannot classify every possible secret format, so unknown secrets remain a residual risk — continue treating `.cdt/runs/` as sensitive project data. For the same reason, do not enable secret-bearing debug modes of external CLIs (for example `firebase --debug`): their verbose output can include credential material that CDT's redactor cannot guarantee to classify.
+
+Retention stays manual, exactly as for every other run record: CDT never deletes previous records, and the capture log is part of the record, not a separate rotation stream. See [Retention](#retention).
+
 ## Manifest
 
 `manifest.json` records schema version, run ID, pipeline, task IDs, CDT version, project path, Git revision, start time, command (including `--input KEY=VALUE` pipeline inputs), and whether execution was detached. It never stores environment variable values. Pipeline inputs are also written to `status.json` after defense-in-depth redaction; they are non-secret operational values by contract, never credentials.
@@ -72,6 +121,22 @@ Older statuses may omit these optional fields.
 attempt and its redacted error message. Intermediate retryable failures are not
 terminal failures; the leaf is completed only after a successful attempt, and
 the field is absent for steps that never retried. Older statuses may omit it.
+
+`build_timings` records a measurement for every build leaf that actually
+started, indexed by the existing leaf step ID. Each entry has `name`,
+`started_at`, `finished_at`, `duration_seconds`, and `outcome`. A just-started
+entry contains only the step name and the UTC `started_at`; the other fields
+stay `null` until the leaf finishes. The final `outcome` is `success`, `failed`,
+or `cancelled`. `duration_seconds` is computed from a monotonic clock and covers
+the whole leaf call — option resolution, retries, retry delays, and artifact
+registration — not CPU time or pure compiler time. If the process is killed, an
+unfinished entry remains without a final duration instead of inventing data.
+Conditionally skipped leaves and leaves already completed in an earlier run
+create no measurements, and a new run record contains only the measurements of
+the current run; old durations are not restored or added up. Parallel build
+leaves get independent entries. Older statuses may omit the field. See
+[Build step timing](pipelines.md#build-step-timing) and
+[Comparing repeated builds](build-performance.md) for the format's use.
 
 A status command may report `stale` when a detached PID disappeared without a terminal status or exit code. `timeout` is a wait result, not a pipeline terminal state.
 
@@ -123,7 +188,7 @@ Exact run IDs are preferred for automation.
 
 ## Logs and secret redaction
 
-Both direct and detached executions save diagnostics in `output.log`. Detached execution captures the full combined output of the run. Direct `cdt run` tees the CDT-owned stdout/stderr into `output.log` while it is produced, so ASC retries, step progress, and the terminal error summary of a failed run remain inspectable afterwards; output that CDT does not own, such as raw third-party subprocess streaming on the interactive terminal, is not intercepted. Before writing either log, CDT replaces known values from credential-like environment keys, additional keys named by `CDT_REDACT_KEYS`, Bearer credentials, authorization headers, password/token assignments, and JWT-looking values with `***`. The redactor is applied only to the saved copy — the direct terminal keeps its normal interactive output. Status errors and worker startup diagnostics use the same redactor. `cdt logs` redacts again when displaying a record as defense in depth for older logs.
+Both direct and detached executions save diagnostics in `output.log`. Detached execution captures the full combined output of the run. Direct `cdt run` tees the CDT-owned stdout/stderr into `output.log` while it is produced, so ASC retries, step progress, and the terminal error summary of a failed run remain inspectable afterwards; output that CDT does not own, such as raw third-party subprocess streaming on the interactive terminal, is not intercepted. When the full combined output of a direct run is needed — including output of external commands that bypass CDT — use the opt-in [foreground capture](#execution-modes) mode instead. Before writing either log, CDT replaces known values from credential-like environment keys, additional keys named by `CDT_REDACT_KEYS`, Bearer credentials, authorization headers, password/token assignments, and JWT-looking values with `***`. For ordinary direct runs the redactor is applied only to the saved copy — the direct terminal keeps its normal interactive output; in foreground capture mode the terminal copy is redacted too. Status errors and worker startup diagnostics use the same redactor. `cdt logs` redacts again when displaying a record as defense in depth for older logs.
 
 `CDT_REDACT_KEYS` is a comma-separated list of environment key names, not secret values:
 

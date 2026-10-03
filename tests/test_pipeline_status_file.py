@@ -87,12 +87,14 @@ def test_status_separates_skipped_leaves_from_completed(tmp_path, monkeypatch):
 def setup_function():
     _clear_steps_for_tests()
     sys.modules.pop("cdt_steps.demo", None)
+    sys.modules.pop("cdt_steps.flaky", None)
     sys.modules.pop("cdt_steps", None)
 
 
 def teardown_function():
     _clear_steps_for_tests()
     sys.modules.pop("cdt_steps.demo", None)
+    sys.modules.pop("cdt_steps.flaky", None)
     sys.modules.pop("cdt_steps", None)
 
 
@@ -549,3 +551,70 @@ def test_status_file_records_build_timings_only_for_build_leaves(tmp_path, monke
     assert timing["outcome"] == "success"
     assert timing["started_at"] and timing["finished_at"]
     assert timing["duration_seconds"] >= 0.0
+
+
+def test_failed_build_leaf_resume_starts_a_fresh_measurement(tmp_path, monkeypatch):
+    package = tmp_path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "flaky.py").write_text(
+        "\n".join(
+            [
+                "import os",
+                "from pathlib import Path",
+                "",
+                "from cdt.sdk import step",
+                "",
+                "@step('flaky.build', risk='build')",
+                "def build(ctx):",
+                "    marker = Path(os.environ['FLAKY_MARKER'])",
+                "    count = int(marker.read_text(encoding='utf-8')) if marker.exists() else 0",
+                "    marker.write_text(str(count + 1), encoding='utf-8')",
+                "    if os.environ.get('FLAKY_FAIL') == '1':",
+                "        raise RuntimeError('flaky build failed on purpose')",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\nplugins:\n  - cdt_steps.flaky\npipelines:\n  demo:\n    steps:\n      - flaky.build\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv("FLAKY_MARKER", str(tmp_path / "starts.txt"))
+    monkeypatch.setenv("FLAKY_FAIL", "1")
+    status_file = tmp_path / "status.json"
+
+    failed = runner.invoke(app, ["run", "demo", "--status-file", str(status_file)])
+    failed_payload = json.loads(status_file.read_text(encoding="utf-8"))
+
+    assert failed.exit_code != 0
+    assert failed_payload["status"] == "failed"
+    assert failed_payload["build_timings"]["0"]["outcome"] == "failed"
+    assert failed_payload["completed_steps"] == []
+
+    monkeypatch.setenv("FLAKY_FAIL", "0")
+    resumed = runner.invoke(
+        app,
+        [
+            "run",
+            "demo",
+            "--resume-status-file",
+            str(status_file),
+            "--skip-completed",
+            "--status-file",
+            str(status_file),
+        ],
+    )
+    resumed_payload = json.loads(status_file.read_text(encoding="utf-8"))
+
+    assert resumed.exit_code == 0, resumed.output
+    # The unfinished leaf ran again exactly once and got a new, successful measurement.
+    assert (tmp_path / "starts.txt").read_text(encoding="utf-8") == "2"
+    assert resumed_payload["status"] == "success"
+    assert set(resumed_payload["build_timings"]) == {"0"}
+    fresh = resumed_payload["build_timings"]["0"]
+    assert fresh["outcome"] == "success"
+    assert fresh["started_at"] > failed_payload["build_timings"]["0"]["started_at"]

@@ -1,6 +1,7 @@
 """Tests for the foreground capture supervisor (cdt.foreground_run)."""
 
 import io
+import json
 import os
 import signal
 import stat
@@ -11,7 +12,9 @@ import time
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
+from cdt.cli import app
 from cdt.foreground_run import (
     ForegroundCaptureError,
     ForegroundCaptureResult,
@@ -19,10 +22,18 @@ from cdt.foreground_run import (
     build_child_command,
     run_captured_child,
 )
+from cdt.pipeline.registry import _clear_steps_for_tests
 from cdt.redaction import SecretRedactor
+from cdt.runs import list_runs, read_json, run_paths
 
 _SECRET = "capture-pipeline-secret"
 _TOKEN_ENV = "CAPTURE_TOKEN"
+
+
+def teardown_function():
+    # Keep the shared cdt_steps package namespace clean for other test modules.
+    sys.modules.pop("cdt_steps.timed", None)
+    sys.modules.pop("cdt_steps", None)
 
 
 def _child_env(**extra: str) -> dict[str, str]:
@@ -422,3 +433,141 @@ def test_require_posix_capture_rejects_windows(monkeypatch):
 
     with pytest.raises(ForegroundCaptureError, match="POSIX"):
         require_posix_capture()
+
+
+# -- Integration: capture of a build-marked SDK leaf -------------------------------
+
+_TIMED_SECRET = "timed-build-token-4kq"
+_cli = CliRunner()
+
+
+def _write_timed_build_project(tmp_path: Path) -> None:
+    """Plugin with one risk="build" leaf: emits secret lines, counts starts, can fail."""
+    for module_name in ("cdt_steps", "cdt_steps.timed"):
+        sys.modules.pop(module_name, None)
+    _clear_steps_for_tests()
+    package = tmp_path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "timed.py").write_text(
+        "\n".join(
+            [
+                "import os",
+                "import subprocess",
+                "import sys",
+                "from pathlib import Path",
+                "",
+                "from cdt.sdk import step",
+                "",
+                "@step('timed.build', risk='build')",
+                "def build(ctx):",
+                "    secret = os.environ['TIMED_TOKEN']",
+                "    print('python-line value=' + secret, flush=True)",
+                "    os.write(1, b'os-write-line value=' + secret.encode() + b'\\n')",
+                "    code = \"print('subprocess-line value=' + __import__('os').environ['TIMED_TOKEN'])\"",
+                "    subprocess.run([sys.executable, '-c', code], check=False)",
+                "    marker = Path(os.environ['TIMED_MARKER'])",
+                "    count = int(marker.read_text(encoding='utf-8')) if marker.exists() else 0",
+                "    marker.write_text(str(count + 1), encoding='utf-8')",
+                "    if os.environ.get('TIMED_FAIL') == '1':",
+                "        raise RuntimeError('timed build failed on purpose')",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\nplugins:\n  - cdt_steps.timed\npipelines:\n  demo:\n    steps:\n      - timed.build\n",
+        encoding="utf-8",
+    )
+
+
+def _timed_project(tmp_path, monkeypatch) -> Path:
+    _write_timed_build_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv("TIMED_TOKEN", _TIMED_SECRET)
+    monkeypatch.setenv("TIMED_MARKER", str(tmp_path / "starts.txt"))
+    return tmp_path
+
+
+def test_capture_build_run_keeps_output_status_and_timing_in_one_record(tmp_path, monkeypatch):
+    _timed_project(tmp_path, monkeypatch)
+
+    result = _cli.invoke(app, ["run", "demo", "--capture-output"])
+    runs = list_runs(tmp_path)
+
+    assert result.exit_code == 0, result.output
+    # Exactly one run record owns the redacted output, the terminal status, and the timing.
+    assert len(runs) == 1
+    assert runs[0]["status"] == "success"
+    paths = run_paths(tmp_path, runs[0]["run_id"])
+    saved = paths.log.read_text(encoding="utf-8")
+    for line in ("python-line value=***", "os-write-line value=***", "subprocess-line value=***"):
+        assert line in saved
+        assert line in result.output
+    assert _TIMED_SECRET not in saved
+    assert _TIMED_SECRET not in result.output
+    status = read_json(paths.status)
+    assert status["status"] == "success"
+    assert paths.exit.read_text(encoding="utf-8").strip() == "0"
+    timing = status["build_timings"]["0"]
+    assert timing["name"] == "timed.build"
+    assert timing["outcome"] == "success"
+    assert timing["started_at"] and timing["finished_at"]
+    assert timing["duration_seconds"] >= 0.0
+
+
+def test_capture_failed_build_leaf_records_failed_timing_and_exit(tmp_path, monkeypatch):
+    _timed_project(tmp_path, monkeypatch)
+    monkeypatch.setenv("TIMED_FAIL", "1")
+
+    result = _cli.invoke(app, ["run", "demo", "--capture-output"])
+    runs = list_runs(tmp_path)
+
+    assert result.exit_code != 0
+    assert len(runs) == 1
+    assert runs[0]["status"] == "failed"
+    paths = run_paths(tmp_path, runs[0]["run_id"])
+    status = read_json(paths.status)
+    assert status["status"] == "failed"
+    assert paths.exit.read_text(encoding="utf-8").strip() != "0"
+    timing = status["build_timings"]["0"]
+    assert timing["outcome"] == "failed"
+    assert timing["finished_at"] and timing["duration_seconds"] >= 0.0
+    # The failed leaf actually started: the measurement exists, the marker proves the start.
+    assert (tmp_path / "starts.txt").read_text(encoding="utf-8") == "1"
+
+
+def test_capture_resume_skips_completed_build_leaf_without_new_timing(tmp_path, monkeypatch):
+    _timed_project(tmp_path, monkeypatch)
+
+    first = _cli.invoke(app, ["run", "demo", "--capture-output"])
+    assert first.exit_code == 0, first.output
+    first_run = list_runs(tmp_path)[0]
+    first_status = tmp_path / ".cdt" / "runs" / first_run["run_id"] / "status.json"
+    assert json.loads(first_status.read_text(encoding="utf-8"))["build_timings"]["0"]["outcome"] == "success"
+
+    second = _cli.invoke(
+        app,
+        [
+            "run",
+            "demo",
+            "--capture-output",
+            "--resume-status-file",
+            str(first_status),
+            "--skip-completed",
+        ],
+    )
+    runs = list_runs(tmp_path)
+
+    assert second.exit_code == 0, second.output
+    assert len(runs) == 2
+    # The completed build leaf did not execute again.
+    assert (tmp_path / "starts.txt").read_text(encoding="utf-8") == "1"
+    second_record = next(record for record in runs if record["run_id"] != first_run["run_id"])
+    assert second_record["status"] == "success"
+    status = read_json(run_paths(tmp_path, second_record["run_id"]).status)
+    # The new run record contains only its own measurements: the skipped leaf has none.
+    assert status["build_timings"] == {}
+    assert status["completed_steps"] == ["0"]

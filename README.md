@@ -65,6 +65,7 @@ cdt --version
 cdt init
 cdt run <pipeline>
 cdt run <pipeline> --dry-run
+cdt run <pipeline> --capture-output   # POSIX: show and save the redacted combined output
 cdt history
 cdt history --pipeline test --status failed
 cdt status                         # newest run globally
@@ -85,7 +86,7 @@ cdt self-update --json --check
 
 Static planning commands (`cdt pipeline plan <pipeline>` and `cdt run <pipeline> --dry-run`) show the step tree, risk, warnings, and artifact flow without executing steps.
 
-Every real run is recorded under `.cdt/runs/<run-id>/` with an atomic status file, manifest, exit code, and log location. Human operators can continue to use `cdt run test` directly. `cdt status` and `cdt logs` resolve the newest run automatically, while `--pipeline` selects the newest run for one pipeline. Direct and detached runs save a redacted `output.log` (direct runs tee CDT diagnostics while streaming to the terminal; detached runs record the redacted combined output), and persisted status errors redact known environment secrets and common credential forms before they are written; `cdt logs` applies the same protection again when reading older records. See [Run records](docs/runs.md) for lifecycle, redaction limitations, concurrency, retention, and recovery.
+Every real run is recorded under `.cdt/runs/<run-id>/` with an atomic status file, manifest, exit code, and log location. Human operators can continue to use `cdt run test` directly. `cdt status` and `cdt logs` resolve the newest run automatically, while `--pipeline` selects the newest run for one pipeline. Direct and detached runs save a redacted `output.log` (direct runs tee CDT diagnostics while streaming to the terminal; detached runs record the redacted combined output), and persisted status errors redact known environment secrets and common credential forms before they are written; `cdt logs` applies the same protection again when reading older records. For an opt-in full capture of a direct run — including the output of external commands — use `cdt run <pipeline> --capture-output` on Linux/macOS: it shows and saves the same redacted combined stream and creates one foreground run record. See [Run records](docs/runs.md) for the three execution modes, capture limits, redaction limitations, concurrency, retention, and recovery.
 
 Experimental Orca sidebar status (opt-in once per user, across all CDT projects):
 
@@ -289,6 +290,7 @@ The eight P1 backlog directions are implemented; a historical map with the origi
 - [Generic webhook](docs/pipelines.md#generic-webhook) sends one HTTPS POST with strict secret handling: only 2xx is success, redirects and automatic retries are never followed or performed, and the destination is never logged.
 - [App Store metadata updates](docs/pipelines.md#app-store-metadata-updates) change four verified text fields of existing localizations of an existing version; screenshots, pricing and a full `deliver` replacement stay out of scope.
 - Existing Firebase steps, [terminal sounds](docs/pipelines.md#terminal-sounds), the [iOS code signing recipe](docs/ios-signing.md), and [reusable Python step plugins](docs/plugins.md) are documented on the current interfaces — including the deliberate absence of plugin entry points, discovery, or installation machinery.
+- Build steps record [per-leaf timings](docs/pipelines.md#build-step-timing) in the run status for comparing repeated builds, and [foreground `--capture-output`](docs/runs.md#execution-modes) opt-in captures the redacted combined stream of a direct run. CDT implements no build cache and never skips a build — see [Build performance](docs/build-performance.md) for the measurement recipe and the no-cache decision.
 
 ## Contributing and security
 

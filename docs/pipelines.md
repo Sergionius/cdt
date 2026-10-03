@@ -215,6 +215,33 @@ instead of being hidden behind the timeout error.
 `cdt pipeline plan` and `cdt pipeline inspect` show each leaf's
 `timeout_seconds`, and plans include `timeout_option` in the step metadata.
 
+## Build step timing
+
+Leaves whose step metadata declares `risk: "build"` — the built-in Android
+AAB/APK, Flutter IPA, Xcode IPA, web build, and Python distribution build steps
+— are measured around the whole leaf call. One entry is written to the
+`build_timings` status field, indexed by the leaf step ID, with `name`,
+`started_at`, `finished_at`, `duration_seconds`, and `outcome` (`success`,
+`failed`, or `cancelled`). The measurement starts when the leaf actually starts
+and includes option resolution, retries, retry delays, and artifact
+registration; it is elapsed wall time from a monotonic clock, not CPU time or
+pure compiler time. A running entry serializes only `name` and UTC
+`started_at` with the remaining fields `null`; if the process is killed, the
+entry stays unfinished instead of inventing a duration.
+
+The field is telemetry only. Build steps always invoke their build tool on
+every execution, even when the output artifact already exists: CDT has no
+up-to-date check, no fingerprinting, and no cache that could skip a build (see
+[Build performance: comparing repeated builds](build-performance.md) for the
+deliberate decision and how to measure). Conditionally skipped leaves and
+leaves completed in an earlier run get no new measurements, and each run record
+contains only the timings of its own run.
+
+`cdt status --json`, human-readable `cdt status`, and `agent-release status`
+surface `build_timings`; older status payloads without the field stay readable.
+See [Run records: status lifecycle](runs.md#status-lifecycle) for the exact
+serialization rules.
+
 ## CDT self-release pipeline
 
 The CDT repository uses its own `cdt.yaml` production pipeline named `release` for its own releases. The version is always explicit:
