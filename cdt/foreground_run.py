@@ -196,6 +196,16 @@ class _CaptureSink:
     def ok(self) -> bool:
         return not self.errors
 
+    @property
+    def exhausted(self) -> bool:
+        """True when no destination can receive output anymore.
+
+        Once both the capture log and the terminal copy have failed, nothing
+        is being captured: the supervisor must stop the run instead of
+        letting the child continue unobserved and unbounded.
+        """
+        return not self._log_enabled and not self._terminal_enabled
+
     def emit(self, text: str, *, final: bool = False) -> None:
         if not text and not final:
             return
@@ -239,10 +249,18 @@ def _pump_output(
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
     stream = StreamingRedactor(redactor)
     child_exited_at: float | None = None
+    teardown_started = False
     try:
         while True:
             now = time.monotonic()
             if state.count:
+                escalation.start(now)
+            if sink.exhausted and not teardown_started:
+                # Both destinations are gone: capture is impossible, so the
+                # child must not keep running unobserved. Reuse the same
+                # bounded SIGINT -> TERM -> KILL escalation as an interrupt.
+                teardown_started = True
+                errors.append("both capture destinations failed; stopping the captured run")
                 escalation.start(now)
             escalation.tick(now)
             if child_exited_at is None and process.poll() is not None:
@@ -250,8 +268,9 @@ def _pump_output(
             if child_exited_at is not None and now - child_exited_at >= eof_grace:
                 # A grandchild inheriting the pipe must not hang the supervisor
                 # forever; the leftover group is cleaned up by the caller.
-                errors.append("child kept the capture stream open after exiting; "
-                              "stopped draining after the bounded grace")
+                errors.append(
+                    "child kept the capture stream open after exiting; stopped draining after the bounded grace"
+                )
                 break
             try:
                 ready, _, _ = select.select([stream_fd], [], [], _POLL_INTERVAL_SECONDS)

@@ -584,6 +584,53 @@ def test_capture_output_records_safe_error_when_child_skips_terminal_status(tmp_
     assert paths.exit.read_text(encoding="utf-8").strip() == "1"
 
 
+def test_finalize_captured_run_marks_incomplete_capture_as_failure(tmp_path):
+    paths = create_run(tmp_path, "demo", run_id="capture-problem")
+    payload = read_json(paths.status)
+    payload.update(
+        {
+            "status": "success",
+            "completed_steps": ["0"],
+            "artifacts": [{"name": "aab", "path": "build/app.aab"}],
+        }
+    )
+    write_json_atomic(paths.status, payload)
+
+    from cdt.cli import _finalize_captured_run
+
+    problems = ("terminal output failed; live copy stopped: broken",)
+    exit_code = _finalize_captured_run({}, paths, "demo", None, 0, None, capture_problems=problems)
+
+    assert exit_code == 1
+    saved = read_json(paths.status)
+    assert saved["status"] == "failed"
+    assert "Foreground capture was incomplete" in saved["error"]
+    assert "terminal output failed" in saved["error"]
+    # Child progress is preserved, never rewritten as a clean success.
+    assert saved["completed_steps"] == ["0"]
+    assert saved["artifacts"] == [{"name": "aab", "path": "build/app.aab"}]
+    assert paths.exit.read_text(encoding="utf-8").strip() == "1"
+
+
+def test_finalize_captured_run_keeps_child_failure_with_capture_problems(tmp_path):
+    paths = create_run(tmp_path, "demo", run_id="capture-problem-failed")
+    payload = read_json(paths.status)
+    payload.update({"status": "failed", "error": "Pipeline failed at step 0", "completed_steps": []})
+    write_json_atomic(paths.status, payload)
+
+    from cdt.cli import _finalize_captured_run
+
+    exit_code = _finalize_captured_run(
+        {}, paths, "demo", None, 1, None, capture_problems=("capture log write failed; saved copy stopped",)
+    )
+
+    assert exit_code == 1
+    saved = read_json(paths.status)
+    # The child's own failure and message stay authoritative; no fake rewrite.
+    assert saved["status"] == "failed"
+    assert saved["error"] == "Pipeline failed at step 0"
+
+
 def test_finalize_captured_run_preserves_progress_and_marks_failure(tmp_path):
     paths = create_run(tmp_path, "demo", run_id="finalize-run")
     payload = read_json(paths.status)

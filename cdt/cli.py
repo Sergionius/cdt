@@ -1,5 +1,6 @@
 import json
 import os
+from collections.abc import Sequence
 from pathlib import Path
 
 import typer
@@ -274,9 +275,7 @@ def run_pipeline(
     config = load_pipeline_config(cwd)
     _validate_inputs(config, name, inputs)
     if capture_output and confirm is None and _confirmation_required(config, name, confirm):
-        raise typer.BadParameter(
-            f"Captured runs cannot prompt: production pipeline '{name}' requires --confirm {name}"
-        )
+        raise typer.BadParameter(f"Captured runs cannot prompt: production pipeline '{name}' requires --confirm {name}")
     _confirm_pipeline_risk(config, name, confirm)
     env = _load_project_env(cwd)
     _set_ui_mode(env)
@@ -417,10 +416,14 @@ def _run_capture_output(
             exit_code = _finalize_captured_run(env, paths, name, status_file, 1, str(exc))
             typer.echo(f"Run: {paths.run_id}")
             return exit_code
-        exit_code = _finalize_captured_run(env, paths, name, status_file, _terminal_exit_code(result), None)
+        # An incomplete capture never counts as a clean success: the whole
+        # point of --capture-output is the saved, redacted combined output.
+        exit_code = _finalize_captured_run(
+            env, paths, name, status_file, _terminal_exit_code(result), None, capture_problems=result.capture_errors
+        )
         if not result.capture_ok:
             typer.echo(
-                "Warning: foreground capture was incomplete; the terminal copy and the saved log may be partial",
+                "Warning: foreground capture was incomplete; the run is not reported as a success",
                 err=True,
             )
         failed = exit_code != 0
@@ -510,6 +513,7 @@ def _finalize_captured_run(
     status_file: Path | None,
     exit_code: int,
     startup_error: str | None,
+    capture_problems: Sequence[str] = (),
 ) -> int:
     """Record a safe terminal outcome once the child can no longer write the files.
 
@@ -517,9 +521,30 @@ def _finalize_captured_run(
     or the user's mirror status file. A missing terminal status is recorded as
     a failure with a readable error instead of a fake success; already saved
     artifacts, completed steps and checkpoints are preserved untouched.
+
+    ``capture_problems`` are the supervisor's capture-side failures. They never
+    upgrade an existing failure and never let a child success stand: an
+    incomplete capture fails the run with a safe error while keeping the
+    child's progress, artifacts and non-success status untouched.
     """
     payload = read_json(paths.status) or {}
-    if payload.get("status") not in _TERMINAL_RUN_STATUSES:
+    if capture_problems:
+        if exit_code == 0:
+            exit_code = 1
+        if payload.get("status") == "success":
+            payload.update(
+                {
+                    "status": "failed",
+                    "error": "Foreground capture was incomplete: " + "; ".join(capture_problems),
+                    "finished_at": now(),
+                    "updated_at": now(),
+                }
+            )
+            sanitized = SecretRedactor.from_env(env).redact_data(payload)
+            write_json_atomic(paths.status, sanitized)
+            if status_file is not None and status_file != paths.status:
+                write_json_atomic(status_file, sanitized)
+    elif payload.get("status") not in _TERMINAL_RUN_STATUSES:
         if startup_error:
             message = startup_error
         elif exit_code == 0:

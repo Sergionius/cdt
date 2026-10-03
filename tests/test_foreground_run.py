@@ -383,6 +383,60 @@ _CHILD_SPAWNING_SCRIPT = textwrap.dedent(
 )
 
 
+class _FailingDestination(io.StringIO):
+    """Destination that fails on the first write, simulating a dead output."""
+
+    def write(self, text: str) -> int:
+        raise OSError(28, "simulated destination failure")
+
+    def flush(self) -> None:
+        return None
+
+
+def test_capture_stops_child_when_both_destinations_fail(tmp_path, monkeypatch):
+    """Regression: once nothing can be captured, the child must be stopped.
+
+    With the capture log and the terminal both dead, continuing to read the
+    pipe would leave the child running unobserved and potentially forever.
+    The supervisor must reuse the bounded SIGINT -> TERM -> KILL escalation
+    and report the forced, incomplete capture.
+    """
+    monkeypatch.setattr("cdt.foreground_run._open_capture_log", lambda path: _FailingDestination(), raising=True)
+    marker = tmp_path / "child-ready"
+    later = tmp_path / "later-action"
+    script = """
+        import os, signal, time
+        from pathlib import Path
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        Path({marker!r}).write_text("ready")
+        print("child-ready", flush=True)
+        time.sleep(30)
+        Path({later!r}).write_text("should never run")
+        """.format(marker=str(marker), later=str(later))
+    started = time.monotonic()
+
+    result = _run(_child_argv(script), tmp_path, terminal=_FailingDestination(), interrupt_grace=0.05, eof_grace=0.05)
+
+    elapsed = time.monotonic() - started
+    assert elapsed < 10, "capture teardown after both destinations failed was not bounded"
+    assert marker.exists()  # the child started
+    assert not later.exists(), "child kept executing after capture became impossible"
+    assert result.exit_code == -signal.SIGKILL
+    assert not result.capture_ok
+    assert any("both capture destinations failed" in error for error in result.capture_errors)
+
+
+def test_capture_survives_terminal_only_failure_and_keeps_log(tmp_path):
+    """Only the terminal copy dying must not stop the run: the log still captures."""
+    terminal = _FailingDestination()
+    result = _run(_child_argv("print('kept for the log')"), tmp_path, terminal=terminal)
+
+    assert result.exit_code == 0
+    assert not result.capture_ok
+    assert "kept for the log" in _log_path(tmp_path).read_text(encoding="utf-8")
+
+
 def test_capture_bounds_wait_for_grandchild_holding_pipe(tmp_path):
     """Regression: a grandchild inheriting the pipe must not hang the supervisor.
 

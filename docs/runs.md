@@ -86,6 +86,12 @@ Capture shows the redacted stream. Unlike an ordinary direct run — where the t
 
 Steps cannot read input, so interactive prompts of external tools do not work. Third-party CLIs may buffer their own output internally: CDT disables the child Python's buffering, but it cannot disable a third-party tool's buffering, so such output can be delayed until the tool flushes or exits. Output that never reaches the run's stdout/stderr is not captured: private files a tool writes on its own, logs a tool suppresses, and processes that deliberately redirected their own descriptors are outside the guarantee.
 
+### Capture failure is a failed run
+
+An incomplete capture never counts as a success. If a capture-side failure occurs — the saved log or the terminal copy fails, the child kept the stream open past the bounded grace, or processes survived the teardown — the run record is finalized as `failed` with a safe error, the exit code is non-zero, and the child's already saved progress, artifacts, and non-success status stay untouched. The child's own genuine failure is never rewritten; only a child `success` is downgraded, because the whole point of `--capture-output` is the complete redacted combined output.
+
+Once both destinations are dead — nothing can be saved or shown anymore — the supervisor stops the child with the same bounded SIGINT→TERM→KILL escalation used for interrupts instead of letting it continue unobserved. A child that produced no output at all cannot trigger this: the failure is detected at the first output attempt after a destination died, and the run is still reported as an incomplete capture at the end.
+
 ### Capture redaction, permissions, and retention
 
 The capture stream passes the same redaction as every saved run log before it is written to `output.log` and before it is shown: credential-like environment keys, keys named by `CDT_REDACT_KEYS`, Bearer credentials, authorization headers, password/token assignments, and JWT-looking values become `***`. The capture log is created with owner-only permissions (`0600`).
