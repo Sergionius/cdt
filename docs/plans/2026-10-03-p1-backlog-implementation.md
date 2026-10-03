@@ -280,17 +280,17 @@ timeout_seconds: 30
 - Modify: `tests/test_agent_first.py`
 - Modify: `docs/pipelines.md`
 
-- [ ] Реализовать согласованный `notify.webhook` и регистрацию с `retry_safe: false`, `timeout_option: timeout_seconds`.
-- [ ] Проверять имена env keys, непустой JSON-object payload, положительный конечный timeout и boolean `fail_on_error`.
-- [ ] Разрешать обычную интерполяцию явно заданных payload полей, но не добавлять env, inputs, artifacts или context автоматически.
-- [ ] Получать destination и Authorization только по явно указанным env keys; принимать HTTPS URL с host, без userinfo и fragment.
-- [ ] Выполнять один POST через стандартную библиотеку с проверкой TLS и запретом redirects; не читать и не выводить тело ответа.
-- [ ] Считать успешным только 2xx; сетевые ошибки, timeout и другие статусы превращать в безопасную ошибку либо предупреждение согласно `fail_on_error`.
-- [ ] Не включать URL, Authorization, payload или сырое исключение transport в сообщения. Отражать только безопасную категорию ошибки и HTTP status при наличии.
-- [ ] Проверять payload на присутствие известных секретов context, destination и Authorization; отклонять такой payload до отправки, не подменяя секрет на `***` незаметно для пользователя.
-- [ ] На preflight проверять наличие динамически выбранных env keys без отправки запроса; plan/inspect оставлять без чтения credentials и сетевых действий.
-- [ ] Проверить default strict mode, warning mode, HTTP ошибки, redirects, timeout, отсутствие retries и утечек в status/output.log на mocked transport.
-- [ ] Сохранить Telegram/Pachca и прежнюю семантику `notify.success`; обновить schema, документацию и выполнить применимые проверки.
+- [x] Реализовать согласованный `notify.webhook` и регистрацию с `retry_safe: false`, `timeout_option: timeout_seconds`.
+- [x] Проверять имена env keys, непустой JSON-object payload, положительный конечный timeout и boolean `fail_on_error`.
+- [x] Разрешать обычную интерполяцию явно заданных payload полей, но не добавлять env, inputs, artifacts или context автоматически.
+- [x] Получать destination и Authorization только по явно указанным env keys; принимать HTTPS URL с host, без userinfo и fragment.
+- [x] Выполнять один POST через стандартную библиотеку с проверкой TLS и запретом redirects; не читать и не выводить тело ответа.
+- [x] Считать успешным только 2xx; сетевые ошибки, timeout и другие статусы превращать в безопасную ошибку либо предупреждение согласно `fail_on_error`.
+- [x] Не включать URL, Authorization, payload или сырое исключение transport в сообщения. Отражать только безопасную категорию ошибки и HTTP status при наличии.
+- [x] Проверять payload на присутствие известных секретов context, destination и Authorization; отклонять такой payload до отправки, не подменяя секрет на `***` незаметно для пользователя.
+- [x] На preflight проверять наличие динамически выбранных env keys без отправки запроса; plan/inspect оставлять без чтения credentials и сетевых действий.
+- [x] Проверить default strict mode, warning mode, HTTP ошибки, redirects, timeout, отсутствие retries и утечек в status/output.log на mocked transport.
+- [x] Сохранить Telegram/Pachca и прежнюю семантику `notify.success`; обновить schema, документацию и выполнить применимые проверки.
 
 ### Task 6: Добавить обновление локализованных текстов App Store
 
@@ -481,4 +481,16 @@ python -m build
 - Legacy hook syntax is preserved: single-key `timeout` stays a constructor option, default 30 seconds, `timeout: null` disables it; legacy platform behavior (only the direct child stops) is documented. `docs/pipelines.md` gains a "Step timeouts" section distinguishing native operation timeouts from the hard envelope deadline and documenting process-group guarantees and limits.
 - Regression coverage: metadata normalization/serialization and both SDK paths, builtin capability ownership, envelope parsing bounds, three validation error codes, runtime injection/defense, plan/inspect exposure, schema `timeoutSeconds` definition with bundled-schema equality, scripted helper tests (exit codes, TERM→KILL→reap, failed cleanup, interrupt cleanup, platform rejection), and a real POSIX hung-hook-with-child test using marker files and guaranteed `finally` cleanup (`test_pipeline_registry.py`, `test_pipeline_config.py`, `test_runner.py`, `test_steps_hook.py`, `test_agent_first.py`).
 - Validation: the listed runtime command passed, **332 tests**; the subprocess command passed, **34 tests**; full `pytest` passed **1084 tests**; `ruff check .` passed; changed files were formatted with Ruff; `python -m build` produced wheel and sdist with the regenerated bundled schema. No production pipelines, uploads, publication, or service credential checks were performed.
+
+### Task 5
+
+- Implemented only Task 5; Tasks 6–8 and backlog files are unchanged.
+- `cdt/services/webhook.py` implements the safe delivery: `send_webhook` performs exactly one HTTPS POST of the explicitly serialized JSON payload via the standard library with a verified-TLS context and a `_NoRedirectHandler` (a 3xx surfaces as an HTTP status failure); only 2xx is success regardless of transport-specific error behaviour; the response body is never read; `WebhookError` carries only a safe category (`network_error`, `timeout`, `ssl_error`, `http_error`) plus the HTTP status when the server answered, and transport exceptions are re-raised with `from None` so the URL never enters a saved traceback.
+- Option validation lives in the service and the step constructor: plain env variable names (no interpolation/whitespace/punctuation) for `url_env`/`authorization_env`, non-empty JSON-object payload, positive finite `timeout_seconds` (booleans rejected), boolean `fail_on_error`. Destination must be an HTTPS URL with a host, without userinfo or fragment; invalid ports are rejected before sending. Configuration errors always fail the step even with `fail_on_error: false`; only delivery failures (network, timeout, non-2xx) downgrade to warnings in warning mode.
+- Payload fields go through the ordinary `${inputs.*}`/`${values.*}` interpolation of extended step options; nothing from env, inputs, artifacts or context is added automatically. A pre-send scan rejects the payload with a clear error (never a silent `***` substitution) when it contains the destination URL, the authorization value, or a known context secret; `SecretRedactor.find_secrets` was added to `cdt/redaction.py` as the detection helper, and the rejection message names only the matched categories.
+- `NotifyWebhookStep` (`cdt/steps/notify.py`) is registered as `notify.webhook` with `retry_safe: false` and `timeout_option: timeout_seconds` (category `notify`, risk `upload`, produces `notification`); the generated and bundled schema were regenerated together (`url_env`/`payload` required). `tests/test_pipeline_registry.py::test_builtin_timeout_capability_belongs_to_hook_only` was updated to the two-capability contract (`hook.python_script` + `notify.webhook`) — a direct consequence of the planned registration.
+- `cdt/pipeline/preflight.py` statically checks presence of the dynamically selected env keys (literal `url_env`/`authorization_env` names only; interpolated names are validated at run time) without sending anything; plan/inspect show option names only and perform no network actions or credential reads.
+- Telegram/Pachca services and `notify.success`/`notify.prod_user_agent` semantics are untouched; `docs/pipelines.md` gains a "Generic webhook" section and lists the new built-in.
+- Regression coverage: option validation, URL rules, single POST/no retries, full Authorization value, 2xx-only, safe transport categories (including timeout and TLS errors), redirect rejection, unread response body, opener TLS/no-redirect construction, payload secret rejection for destination/authorization/context secrets without echoing values, non-serializable payload, strict/warning modes, configuration errors never downgraded, metadata/no-retries/envelope-timeout validation, preflight dynamic keys, plan/inspect name-only output, and end-to-end leak checks in status/output.log on a mocked transport (`test_services_webhook.py`, `test_steps_notify.py`, `test_redaction.py`, `test_agent_first.py`).
+- Validation: the new-integrations command passed, **73 tests**; the listed runtime command passed, **333 tests**; full `pytest` passed **1133 tests**; `ruff check .` passed; changed files were formatted with Ruff; bundled schema equals `schema_payload()` (asserted by the passing `tests/test_agent_first.py` schema tests). No production pipelines, uploads, publication, or service credential checks were performed.
 

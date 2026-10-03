@@ -743,6 +743,31 @@ def test_schema_exposes_github_wait_release_step_options():
     assert wait_metadata.risk == "safe"
 
 
+def test_schema_exposes_notify_webhook_step_options_and_metadata():
+    register_builtin_steps()
+    payload = schema_payload()
+    step_schemas = [obj for obj in payload["$defs"]["step"]["oneOf"] if isinstance(obj, dict) and obj.get("properties")]
+    options_by_name = {next(iter(obj["properties"])): next(iter(obj["properties"].values())) for obj in step_schemas}
+
+    webhook_options = options_by_name["notify.webhook"]
+    assert webhook_options["required"] == ["url_env", "payload"]
+    assert sorted(webhook_options["properties"]) == [
+        "authorization_env",
+        "fail_on_error",
+        "payload",
+        "timeout_seconds",
+        "url_env",
+    ]
+    assert webhook_options["properties"]["fail_on_error"] == {"type": "boolean"}
+    assert webhook_options["properties"]["timeout_seconds"] == {"type": "number"}
+    assert webhook_options["properties"]["payload"]["type"] == "object"
+
+    webhook_metadata = next(metadata for metadata in list_step_metadata() if metadata.name == "notify.webhook")
+    assert webhook_metadata.retry_safe is False
+    assert webhook_metadata.timeout_option == "timeout_seconds"
+    assert webhook_metadata.risk == "upload"
+
+
 def test_schema_exposes_google_play_upload_aab_required_options():
     payload = schema_payload()
     step_schemas = [obj for obj in payload["$defs"]["step"]["oneOf"] if isinstance(obj, dict) and obj.get("properties")]

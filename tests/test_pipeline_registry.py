@@ -170,11 +170,11 @@ def test_step_metadata_timeout_option_defaults_to_none_and_normalizes():
         StepMetadata(name="demo.bad", timeout_option=5)
 
 
-def test_builtin_timeout_capability_belongs_to_hook_only():
+def test_builtin_timeout_capabilities_belong_to_hook_and_webhook_only():
     from cdt.pipeline.builtins import _BUILTIN_METADATA
 
     timed = {name: metadata.timeout_option for name, metadata in _BUILTIN_METADATA.items() if metadata.timeout_option}
-    assert timed == {"hook.python_script": "timeout"}
+    assert timed == {"hook.python_script": "timeout", "notify.webhook": "timeout_seconds"}
 
 
 def test_step_metadata_defaults_to_not_retry_safe_and_normalizes_to_bool():

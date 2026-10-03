@@ -329,12 +329,15 @@ Important built-ins include:
 - `hook.python_script`
 - `notify.prod_user_agent`
 - `notify.success`
+- `notify.webhook`
 
 Build steps use `profile` for CDT presets (`prod` adds `ENV=prod`). Flutter `flavor` is separate and optional. Build steps default to `no_pub: true` and do not increment versions; add explicit `flutter.increment_build_number` and `flutter.pub_get` steps when needed.
 
 `artifact.copy_to_downloads` copies a named file artifact to `~/Downloads` by default.
 
 `notify.prod_user_agent` is separate from `notify.success`. When `NOTIFY_PROVIDER=pachca`, it sends production user-agent details using `PACHCA_USER_AGENT_WEBHOOK_URL` and `UA_APP_NAME`; optional formatting variables are `UA_TITLE`, `UA_IOS_DEVICE`, and `UA_ANDROID_DEVICE`. With another provider the step is a no-op.
+
+`notify.webhook` is the generic, provider-agnostic notification step described in "Generic webhook" below. Telegram/Pachca behaviour of `notify.success` is unchanged.
 
 ## TestFlight upload and completion
 
@@ -662,3 +665,31 @@ See [Run records → Google Play publication checkpoints](runs.md#google-play-pu
 The script must exist inside the project root and runs as `python3 <script> [args...]` from the project root. Environment values come from `.env` plus the shell, with shell values taking priority. With `strict_outputs: true`, CDT checks tracked changes via `git diff --name-only` and permits only files listed in `outputs`.
 
 The legacy `timeout` option defaults to 30 seconds; `timeout: null` disables it. On POSIX the hook runs in its own process group, and the timeout terminates the whole group (TERM, bounded grace, KILL, guaranteed reap of the direct process). On platforms without POSIX process groups only the direct child process is guaranteed to stop. The extended-record envelope `timeout_seconds` (see "Step timeouts") requires POSIX process groups and is rejected elsewhere.
+
+## Generic webhook
+
+`notify.webhook` delivers one explicitly configured JSON payload to an HTTPS endpoint:
+
+```yaml
+- step: notify.webhook
+  with:
+    url_env: RELEASE_WEBHOOK_URL          # required: env variable holding the HTTPS destination
+    authorization_env: RELEASE_WEBHOOK_AUTH # optional: env variable holding the full Authorization header value
+    payload:                              # required, non-empty JSON object, sent as-is
+      text: "Release ${inputs.version} is out"
+    timeout_seconds: 30                   # optional, default 30; also settable as the envelope timeout_seconds
+    fail_on_error: true                   # optional, default true
+```
+
+Hard safety rules:
+
+- The destination URL and the full `Authorization` header value are read only from the environment variables named by `url_env` and `authorization_env`; both must be plain variable names. The destination must be an HTTPS URL with a host, without userinfo or fragment; otherwise the step fails before sending.
+- Exactly one POST via the standard library with verified TLS. Redirects are never followed and automatic retries never happen (the step is not `retry_safe`); a 3xx answer is a failure with its HTTP status.
+- Only `2xx` responses count as successful. Network errors, timeouts and other statuses become a safe step error, or a warning when `fail_on_error: false`.
+- The payload is exactly the configured object: its string fields support ordinary `${inputs.*}`/`${values.*}` interpolation, and nothing from env, inputs, artifacts or context is added automatically.
+- If the payload contains the destination URL, the authorization value, or a known context secret (credential-like `.env` values), the step rejects it before sending instead of silently masking it - remove the secret from the payload explicitly.
+- The destination URL, the authorization value and the response body are never read into messages or saved logs; failures report only a safe category (`network_error`, `timeout`, `ssl_error`, `http_error`) plus the HTTP status when the server answered.
+
+Static preflight checks that the named env variables are present (literal names only; interpolated names are checked when the step runs). `cdt pipeline plan` and `cdt pipeline inspect` show option names, never credential values, and perform no network actions.
+
+`notify.webhook` complements but does not replace `notify.success`: Telegram/Pachca behaviour and the provider selection via `NOTIFY_PROVIDER` are unchanged.

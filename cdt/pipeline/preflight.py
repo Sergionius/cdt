@@ -4,9 +4,25 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from ..services.webhook import ENV_KEY_RE
 from .config import ParallelSpec, PipelineConfig, PipelineItemSpec, SequenceSpec
 from .registry import get_step_metadata
 from .validation import pipeline_names, validate_pipeline
+
+
+def _webhook_env_keys(options: dict[str, Any]) -> set[str]:
+    """Dynamically selected env keys of a ``notify.webhook`` leaf.
+
+    Only literal names are statically checkable: interpolated env key names
+    are validated and resolved when the step runs. Names only - the values are
+    never read here and no request is sent.
+    """
+    keys: set[str] = set()
+    for option in ("url_env", "authorization_env"):
+        value = options.get(option)
+        if isinstance(value, str) and ENV_KEY_RE.fullmatch(value.strip()) is not None:
+            keys.add(value.strip())
+    return keys
 
 
 def preflight_payload(
@@ -26,6 +42,8 @@ def preflight_payload(
             tools.update(metadata.external_tools)
             if step.name != "notify.prod_user_agent" or env.get("NOTIFY_PROVIDER", "").strip().lower() == "pachca":
                 env_keys.update(metadata.requires_env)
+            if step.name == "notify.webhook":
+                env_keys.update(_webhook_env_keys(step.options))
             if step.name == "firebase.upload_app_distribution":
                 firebase_auth_required = True
             if step.name == "google_play.upload_aab":

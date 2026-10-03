@@ -960,6 +960,51 @@
           "if": {
             "properties": {
               "step": {
+                "const": "notify.webhook"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "with": {
+                "additionalProperties": false,
+                "properties": {
+                  "authorization_env": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "fail_on_error": {
+                    "type": "boolean"
+                  },
+                  "payload": {
+                    "additionalProperties": {},
+                    "type": "object"
+                  },
+                  "timeout_seconds": {
+                    "type": "number"
+                  },
+                  "url_env": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "url_env",
+                  "payload"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
                 "const": "python.build_distribution"
               }
             }
@@ -1342,6 +1387,7 @@
             "ios.xcode_build_ipa",
             "notify.prod_user_agent",
             "notify.success",
+            "notify.webhook",
             "python.build_distribution",
             "python.prepare_release",
             "python.pytest",
@@ -2163,6 +2209,47 @@
           },
           "required": [
             "notify.success"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "notify.webhook": {
+              "additionalProperties": false,
+              "properties": {
+                "authorization_env": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "fail_on_error": {
+                  "type": "boolean"
+                },
+                "payload": {
+                  "additionalProperties": {},
+                  "type": "object"
+                },
+                "timeout_seconds": {
+                  "type": "number"
+                },
+                "url_env": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "url_env",
+                "payload"
+              ],
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "notify.webhook"
           ],
           "type": "object"
         },
@@ -2619,6 +2706,7 @@
             "ios.xcode_build_ipa",
             "notify.prod_user_agent",
             "notify.success",
+            "notify.webhook",
             "python.build_distribution",
             "python.prepare_release",
             "python.pytest",
@@ -3440,6 +3528,47 @@
           },
           "required": [
             "notify.success"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "notify.webhook": {
+              "additionalProperties": false,
+              "properties": {
+                "authorization_env": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "fail_on_error": {
+                  "type": "boolean"
+                },
+                "payload": {
+                  "additionalProperties": {},
+                  "type": "object"
+                },
+                "timeout_seconds": {
+                  "type": "number"
+                },
+                "url_env": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "url_env",
+                "payload"
+              ],
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "notify.webhook"
           ],
           "type": "object"
         },
