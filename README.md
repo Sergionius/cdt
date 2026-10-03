@@ -203,6 +203,8 @@ Use `cdt pipeline steps` for the complete list. Common built-ins:
 - `appstore.upload_testflight_ipa`
 - `appstore.complete_testflight`
 - `appstore.submit_review`
+- `firebase.ensure_cli`
+- `firebase.deploy`
 - `google_play.upload_aab`
 - `artifact.copy_to_downloads`
 - `hook.python_script`
@@ -213,6 +215,8 @@ Build steps use `profile` for CDT presets (`profile: prod` adds `--dart-define=E
 
 `appstore.upload_testflight` keeps the full upload cycle in one step and remains supported. New pipelines should prefer the resumable pair `appstore.upload_testflight_ipa` (iTMSTransporter upload only) followed by `appstore.complete_testflight` (find the uploaded build, wait for processing, set the changelog), so a failed completion can resume without re-uploading the IPA. See [Pipelines](docs/pipelines.md) for details.
 
+iOS builds are signed by your Xcode/Flutter project configuration, not by CDT. See the [iOS code signing recipe](docs/ios-signing.md) for a repeatable local and CI setup — certificates, provisioning profiles, a temporary keychain, and how signing differs from App Store Connect API authentication.
+
 ## App Store review submission
 
 `appstore.submit_review` sends the completed TestFlight build for App Store review: it creates or reuses the App Store version, binds the exact verified build, fills localized "What's new" text, sets the release mode and phased release, and submits through the ASC `reviewSubmissions` flow with durable checkpoints and safe recovery. The app comes from `IOS_BUNDLE_ID`; the build is taken from the current pipeline version context or the last recorded TestFlight completion — never an arbitrary latest Apple build. Required options: `whats_new` (locale → text mapping), `release_mode` (`manual`/`automatic` release after Apple approval), and `phased_release` (a real boolean for Apple's standard seven-day rollout).
@@ -222,6 +226,8 @@ Every pipeline containing the step requires `risk: production` and the exact CLI
 ## Firebase App Distribution
 
 `firebase.upload_app_distribution` supports either the existing `FIREBASE_TOKEN` or a Google service account JSON key. For service-account uploads, grant the account the **Firebase App Distribution Admin** IAM role (`roles/firebaseappdistro.admin`) on each Firebase project it must access. One service account can be shared across multiple Firebase projects; grant it the role separately in every project.
+
+For Firebase project deployments (hosting, rules, functions), use `firebase.ensure_cli` (an early CLI availability check) and `firebase.deploy` (runs `firebase deploy` from the project root with no options). There is no `web.deploy` step; see [Firebase deploy](docs/pipelines.md#firebase-deploy) for details.
 
 Create and manage the service account and key in Google Cloud Console. Keep the JSON key outside the repository and do not commit it. Set `GOOGLE_APPLICATION_CREDENTIALS` to its path, either in the project's `.env` file:
 
@@ -270,6 +276,19 @@ CDT stops instead of guessing when the target track holds an unfinished release 
 ```
 
 Hooks run from the project root as `python3 <script>` and must stay inside the project root.
+
+To share steps across projects, package them as an ordinary Python package and list the module under `plugins:` in `cdt.yaml`. See [Reusable Python step plugins](docs/plugins.md) and the runnable [`examples/reusable-plugin/`](examples/reusable-plugin/cdt.yaml) example.
+
+## Implemented pipeline capabilities and their limits
+
+The eight P1 backlog directions are implemented; a historical map with the original sources lives in [P1 backlog roadmap: historical map](docs/plans/p1-backlog-roadmap.md). Current capabilities and their documented limits:
+
+- [Conditional steps](docs/pipelines.md#conditional-steps) run or skip leaves from declared pipeline inputs; decisions are frozen before execution and never bypass production confirmation.
+- [Step retries](docs/pipelines.md#step-retries) and [step timeouts](docs/pipelines.md#step-timeouts) are opt-in and capability-based: only explicitly `retry_safe` steps may retry, and uploads, publications, webhooks and hooks gain no automatic retries.
+- Parallel branches receive isolated `values` snapshots with an atomic merge ([steps and parallel groups](docs/pipelines.md#steps-and-parallel-groups)); other context fields, the filesystem and external services are not transactional.
+- [Generic webhook](docs/pipelines.md#generic-webhook) sends one HTTPS POST with strict secret handling: only 2xx is success, redirects and automatic retries are never followed or performed, and the destination is never logged.
+- [App Store metadata updates](docs/pipelines.md#app-store-metadata-updates) change four verified text fields of existing localizations of an existing version; screenshots, pricing and a full `deliver` replacement stay out of scope.
+- Existing Firebase steps, [terminal sounds](docs/pipelines.md#terminal-sounds), the [iOS code signing recipe](docs/ios-signing.md), and [reusable Python step plugins](docs/plugins.md) are documented on the current interfaces — including the deliberate absence of plugin entry points, discovery, or installation machinery.
 
 ## Contributing and security
 

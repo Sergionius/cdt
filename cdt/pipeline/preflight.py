@@ -4,9 +4,25 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from ..services.webhook import ENV_KEY_RE
 from .config import ParallelSpec, PipelineConfig, PipelineItemSpec, SequenceSpec
 from .registry import get_step_metadata
 from .validation import pipeline_names, validate_pipeline
+
+
+def _webhook_env_keys(options: dict[str, Any]) -> set[str]:
+    """Dynamically selected env keys of a ``notify.webhook`` leaf.
+
+    Only literal names are statically checkable: interpolated env key names
+    are validated and resolved when the step runs. Names only - the values are
+    never read here and no request is sent.
+    """
+    keys: set[str] = set()
+    for option in ("url_env", "authorization_env"):
+        value = options.get(option)
+        if isinstance(value, str) and ENV_KEY_RE.fullmatch(value.strip()) is not None:
+            keys.add(value.strip())
+    return keys
 
 
 def preflight_payload(
@@ -19,31 +35,28 @@ def preflight_payload(
     firebase_auth_required = False
     google_play_adc: str | None = None
     if pipeline is not None and not errors:
+        # Static preflight has no input set: inspect every declared leaf,
+        # including conditional ones. Conditions never waive risk validation.
         for step in _iter_steps(pipeline.steps):
             metadata = get_step_metadata(step.name)
             tools.update(metadata.external_tools)
             if step.name != "notify.prod_user_agent" or env.get("NOTIFY_PROVIDER", "").strip().lower() == "pachca":
                 env_keys.update(metadata.requires_env)
+            if step.name == "notify.webhook":
+                env_keys.update(_webhook_env_keys(step.options))
             if step.name == "firebase.upload_app_distribution":
                 firebase_auth_required = True
             if step.name == "google_play.upload_aab":
                 google_play_adc = (env.get("GOOGLE_APPLICATION_CREDENTIALS") or "").strip()
 
-    tool_checks = [
-        {"name": tool, "available": shutil.which(tool) is not None}
-        for tool in sorted(tools)
-    ]
-    env_checks = [
-        {"name": key, "present": bool(env.get(key, "").strip())}
-        for key in sorted(env_keys)
-    ]
+    tool_checks = [{"name": tool, "available": shutil.which(tool) is not None} for tool in sorted(tools)]
+    env_checks = [{"name": key, "present": bool(env.get(key, "").strip())} for key in sorted(env_keys)]
     if firebase_auth_required:
         env_checks.append(
             {
                 "name": "FIREBASE_TOKEN or GOOGLE_APPLICATION_CREDENTIALS",
                 "present": bool(
-                    env.get("FIREBASE_TOKEN", "").strip()
-                    or env.get("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+                    env.get("FIREBASE_TOKEN", "").strip() or env.get("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
                 ),
             }
         )
@@ -77,6 +90,6 @@ def preflight_payload(
 def _iter_steps(items: list[PipelineItemSpec]):
     for item in items:
         if isinstance(item, (ParallelSpec, SequenceSpec)):
-            yield from item.steps
+            yield from _iter_steps(item.steps)
         else:
             yield item

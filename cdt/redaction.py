@@ -26,11 +26,7 @@ class SecretRedactor:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> SecretRedactor:
-        extra_keys = {
-            key.strip()
-            for key in env.get("CDT_REDACT_KEYS", "").split(",")
-            if key.strip()
-        }
+        extra_keys = {key.strip() for key in env.get("CDT_REDACT_KEYS", "").split(",") if key.strip()}
         values: set[str] = set()
         for key, value in env.items():
             if not isinstance(value, str) or not (_CREDENTIAL_KEY_RE.search(key) is not None or key in extra_keys):
@@ -38,6 +34,14 @@ class SecretRedactor:
             candidates = [value, *value.splitlines()]
             values.update(candidate for candidate in candidates if len(candidate) >= 4)
         return cls(tuple(sorted(values, key=lambda value: (-len(value), value))))
+
+    def find_secrets(self, text: str) -> tuple[str, ...]:
+        """Return the known secret values that appear verbatim in *text*.
+
+        Detection helper for pre-send leak checks: callers must reject or
+        report the finding without echoing the returned values.
+        """
+        return tuple(secret for secret in self.secrets if secret and secret in text)
 
     def redact(self, text: str) -> str:
         result = text

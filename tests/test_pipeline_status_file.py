@@ -1,6 +1,8 @@
 import json
 import sys
 
+import pytest
+import typer
 from typer.testing import CliRunner
 
 from cdt.cli import app
@@ -10,6 +12,76 @@ from cdt.services.appstore_state import save_upload_record
 from tests.test_services_appstore_state import FakeAsc, _stub_client
 
 runner = CliRunner()
+
+
+@pytest.mark.parametrize("secret_key", [False, True])
+def test_values_checkpoint_redaction_blocks_resume(tmp_path, secret_key):
+    from cdt.pipeline import PipelineContext
+    from cdt.pipeline.runner import _restore_resume_status
+    from cdt.runner import CommandRunner
+
+    status = tmp_path / "status.json"
+    secret = "super-sensitive-value"
+    values = {secret: "value"} if secret_key else {"data": secret}
+    ctx = PipelineContext(
+        cwd=tmp_path, env={"API_TOKEN": secret}, runner=CommandRunner(), values=values, status_file=status
+    )
+    ctx.write_status("failed")
+    assert secret not in status.read_text()
+    assert json.loads(status.read_text())["values_state"]["restorable"] is False
+    restored = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner())
+    with pytest.raises(typer.BadParameter, match="not restorable"):
+        _restore_resume_status(restored, status)
+
+
+def test_status_parallel_completion_and_checkpoint_are_one_snapshot(tmp_path):
+    from cdt.pipeline import ParallelStepGroup, PipelineContext, PipelineExecutor
+    from cdt.runner import CommandRunner
+    from tests.test_pipeline_executor import CallbackStep
+
+    status = tmp_path / "status.json"
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner(), status_file=status)
+    snapshots = []
+    original = ctx.write_status
+
+    def capture(state):
+        # Called under the same status lock as mutations.
+        with ctx._status_lock:
+            original(state)
+            snapshots.append(json.loads(status.read_text()))
+
+    ctx.write_status = capture
+    steps = [CallbackStep(f"0/{i}", lambda ctx, i=i: ctx.values.update({str(i): str(i)})) for i in range(12)]
+    PipelineExecutor().run([ParallelStepGroup(steps, "0")], ctx)
+    for snapshot in snapshots:
+        groups = snapshot["values_state"]["groups"]
+        for i in range(12):
+            if f"0/{i}" in snapshot["completed_steps"]:
+                values = groups["0"]["branches"][f"0/{i}"] if groups else snapshot["values_state"]["root"]
+                assert values[str(i)] == str(i)
+    assert len(ctx.values) == 12
+
+
+def test_status_separates_skipped_leaves_from_completed(tmp_path, monkeypatch):
+    _write_demo_project(tmp_path)
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\nplugins: [cdt_steps.demo]\npipelines:\n  demo:\n"
+        "    inputs: {deploy: {}}\n    steps:\n"
+        "      - step: demo.artifact\n        when: {input: deploy, present: true}\n"
+        "      - demo.ok\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    output = tmp_path / "out.json"
+    result = runner.invoke(app, ["run", "demo", "--status-file", str(output)])
+    assert result.exit_code == 0, result.output
+    status = json.loads(output.read_text())
+    assert status["status"] == "success"
+    assert status["skipped_steps"] == ["0"]
+    assert status["completed_steps"] == ["1"]
+    assert status["step_decisions"] == {"0": "skip", "1": "run"}
+    assert status["artifacts"] == []
+    assert not (tmp_path / "build-count.txt").exists()
 
 
 def setup_function():
@@ -111,6 +183,50 @@ def test_run_status_file_records_failure(tmp_path, monkeypatch):
     assert "boom" in payload["error"]
 
 
+def test_run_status_file_records_retry_attempts_with_redacted_last_error(tmp_path, monkeypatch):
+    package = tmp_path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "demo.py").write_text(
+        "\n".join(
+            [
+                "from cdt.sdk import RetryableStepError, step",
+                "",
+                "@step('demo.transient', retry_safe=True)",
+                "def transient(ctx):",
+                "    count = ctx.cwd / 'attempts.txt'",
+                "    value = int(count.read_text(encoding='utf-8')) if count.exists() else 0",
+                "    count.write_text(str(value + 1), encoding='utf-8')",
+                "    if value < 2:",
+                "        raise RetryableStepError('token supersecret123 unavailable')",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\nplugins:\n  - cdt_steps.demo\npipelines:\n  demo:\n    steps:\n"
+        "      - step: demo.transient\n        retry: {max_attempts: 3, delay_seconds: 0}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv("RETRY_SECRET", "supersecret123")
+    status_file = tmp_path / ".cdt" / "status.json"
+
+    result = runner.invoke(app, ["run", "demo", "--status-file", str(status_file)])
+    payload = json.loads(status_file.read_text(encoding="utf-8"))
+
+    assert result.exit_code == 0, result.output
+    assert payload["status"] == "success"
+    assert payload["completed_steps"] == ["0"]
+    assert payload["failed_step"] is None
+    # Attempts count and the redacted intermediate error survive; the retry
+    # itself is never a terminal failure. Two attempts failed, the third ran.
+    assert payload["step_attempts"] == {"0": {"attempts": 2, "last_error": "token *** unavailable"}}
+    assert "supersecret123" not in status_file.read_text(encoding="utf-8")
+
+
 def test_run_status_file_coexists_with_nonempty_run_log(tmp_path, monkeypatch):
     _write_demo_project(tmp_path)
     monkeypatch.chdir(tmp_path)
@@ -201,7 +317,7 @@ def _write_submit_project(tmp_path) -> None:
                 "    steps:",
                 "      - appstore.submit_review:",
                 "          whats_new:",
-                "            ru: \"${inputs.whats_new}\"",
+                '            ru: "${inputs.whats_new}"',
                 "          release_mode: manual",
                 "          phased_release: true",
             ]
@@ -233,8 +349,7 @@ def test_submit_review_status_file_records_result_without_secrets(tmp_path, monk
 
     result = runner.invoke(
         app,
-        ["run", "submit", "--input", "whats_new=Исправления", "--confirm", "submit",
-         "--status-file", str(status_file)],
+        ["run", "submit", "--input", "whats_new=Исправления", "--confirm", "submit", "--status-file", str(status_file)],
     )
 
     assert result.exit_code == 0, result.output

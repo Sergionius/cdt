@@ -54,12 +54,166 @@ pipelines:
 Rules:
 
 - `required: true` fails the run when the input is missing; the optional `pattern` is a regex that the value must fully match.
-- Pass inputs as repeatable `--input KEY=VALUE` options on `cdt run` and `cdt agent-release start`. Unknown, duplicate, malformed (`no '='`), missing required, or pattern-violating inputs are rejected before any step runs.
+- Pass inputs as repeatable `--input KEY=VALUE` options on `cdt run`, `cdt pipeline plan`, and `cdt agent-release start`. Unknown, duplicate, malformed (`no '='`), missing required, or pattern-violating inputs are rejected before any step runs.
 - Step options interpolate inputs with `${inputs.<name>}`; referencing an undeclared input fails with a clear error.
 - Inputs are non-secret by contract: never pass credentials as inputs. They are stored redacted in the run manifest and status and shown by `cdt pipeline inspect` / `cdt pipeline plan` as declarations only (never runtime values).
 - Resume requires the same inputs as the original run; a release cannot be continued with a different version.
 
 Pipelines without `inputs` keep the previous behavior; no migration is needed.
+
+## Conditional steps
+
+Leaf steps also accept an extended form (including leaves inside existing groups):
+
+```yaml
+version: 1
+pipelines:
+  preview:
+    inputs:
+      deploy: {}
+    steps:
+      - step: firebase.deploy
+        with: {}
+        when:
+          input: deploy
+          equals: "yes"
+```
+
+`step` is required; `with` defaults to `{}` and contains only constructor options.
+`when` is optional. Unknown envelope fields are rejected. String and single-key
+step forms are unchanged. Conditions cannot be attached to groups.
+
+A condition names a declared input and exactly one operator:
+
+- `equals: "value"` / `not_equals: "value"`: exact, case-sensitive string comparisons.
+  Quote YAML booleans/numbers when using them as comparison strings.
+- `present: true`: the input exists and is not the empty string; whitespace is nonempty.
+  `present: false` is the inverse.
+- For an absent optional input, `equals` is false and `not_equals` is true.
+
+Conditions are literal: no `${...}` interpolation, env/runtime values, or expressions.
+All decisions are frozen after input validation and before the first step runs.
+Skipped leaves retain their numeric IDs, do not interpolate options or construct a
+runtime step, do not produce artifacts, and are not counted as completed.
+An entirely skipped parallel group does not create a worker pool.
+
+Conditions never bypass configuration validation, production risk requirements,
+or exact production confirmation. Static preflight remains conservative and checks
+all declared leaves, including conditional ones.
+
+## Step retries
+
+Extended leaf records can also declare an opt-in retry policy:
+
+```yaml
+- step: appstore.upload_testflight
+  with: {}
+  retry:
+    max_attempts: 3
+    delay_seconds: 1
+```
+
+`retry` belongs to the envelope, never to `with`: constructor options of the step
+are unchanged. `max_attempts` is an integer from 1 to 5 (default 1);
+`delay_seconds` is a finite number from 0 to 60 seconds (default 0). Unknown
+retry fields, booleans in place of integers, and non-finite numbers are rejected
+before execution.
+
+Retries require an explicit capability from the step author:
+
+- `max_attempts` above 1 is accepted only for steps whose metadata declares
+  `retry_safe: true` (SDK: `@step(..., retry_safe=True)`).
+- The capability is never inferred from `risk: safe` and is never added to
+  built-in steps automatically. Built-ins keep their existing service-level
+  retries: App Store Connect requests, Google Play reads, and other internal
+  retry budgets are unchanged, and no upload, push, publication, webhook, or
+  hook step gained a new automatic retry.
+
+A retryable failure is a special `RetryableStepError` raised by the step itself.
+It means a transient failure after which rerunning the whole step is safe.
+SDK contract: before raising `RetryableStepError`, a step must leave the
+pipeline context and its external effects in a state from which rerunning the
+whole step is safe. Neither the executor nor the retry policy performs any
+generic rollback of partial effects. Ordinary exceptions, validation errors,
+cancellation, and ambiguous mutation results are never retried.
+
+Execution semantics:
+
+- Attempts are bounded by `max_attempts` with a fixed `delay_seconds` pause
+  between attempts; each attempt constructs a fresh runtime step instance.
+- The policy applies identically to sequential and parallel leaves.
+- A leaf is completed only after a successful attempt. Intermediate failures
+  are not terminal failures: the status file records `step_attempts` with the
+  attempt count and the redacted last error per leaf.
+- Retries never start for skipped leaves, and a completed leaf is never
+  re-executed. An explicit resume of an unfinished step starts a new bounded
+  attempt cycle; the saved budget is not carried over.
+
+`cdt pipeline plan` and `cdt pipeline inspect` show each leaf's `retry` policy,
+and plans include `retry_safe` in the step metadata.
+
+### Step timeouts
+
+Extended leaf records can also declare a hard external deadline for the step's
+own process:
+
+```yaml
+- step: hook.python_script
+  with: {script: hooks/slow.py}
+  timeout_seconds: 30
+```
+
+`timeout_seconds` must be a positive finite number of seconds. Like `retry`, it
+belongs to the envelope, never to `with`.
+
+Timeouts require an explicit capability from the step author:
+
+- `timeout_seconds` is accepted only for steps whose metadata declares
+  `timeout_option` (SDK: `@step(..., timeout_option="timeout")`). The capability
+  names an existing native constructor parameter of the step; the envelope value
+  is passed to that parameter, and the step itself implements the actual
+  behaviour.
+- Setting `timeout_seconds` and the same parameter in `with` at the same time is
+  rejected as ambiguous before execution.
+- The envelope timeout is a hard deadline enforced by CDT with process-group
+  termination. On platforms without POSIX process groups CDT rejects the
+  envelope timeout instead of promising a process-tree guarantee it cannot
+  keep.
+
+The capability says nothing about *how* the step times out internally. A native
+operation timeout (for example `ASC_WAIT_TIMEOUT_SEC` for App Store Connect
+waits) is cooperative: the step manages its own requests and reports a clean
+failure. The envelope `timeout_seconds` is fundamentally different: it is a
+hard external deadline after which CDT terminates the step's process tree.
+Plain Python steps run in CDT's own interpreter, so a Python step without a
+declared native timeout parameter has no general deadline and cannot be force-
+stopped; do not use `timeout_seconds` as a substitute for a native timeout.
+
+The first built-in consumer is `hook.python_script`, which declares
+`timeout_option: timeout`:
+
+- The legacy single-key form `- hook.python_script: {timeout: 30}` is unchanged:
+  `timeout` stays a constructor option, `timeout: null` disables the timeout,
+  and the default is 30 seconds.
+- The envelope form above is equivalent to the legacy form plus the managed
+  termination guarantees below.
+- On POSIX the hook runs in its own process group. On timeout CDT sends TERM to
+  the whole group, waits a bounded grace period, then sends KILL, and always
+  reaps the direct process. The same cleanup runs when the wait is interrupted
+  (for example by Ctrl+C). Children that leave the process group on their own
+  are outside this guarantee.
+- On platforms without POSIX process groups, the envelope timeout is rejected;
+  the legacy `timeout` option keeps the historical platform behaviour there
+  (only the direct child process is guaranteed to be stopped).
+
+A timeout failure is an ordinary step failure, never a retryable
+`RetryableStepError`: retries require the separate `retry_safe` capability and
+an explicit `RetryableStepError` from the step. `fail_on_error` and
+`strict_outputs` checks behave as before, and a failed cleanup is reported
+instead of being hidden behind the timeout error.
+
+`cdt pipeline plan` and `cdt pipeline inspect` show each leaf's
+`timeout_seconds`, and plans include `timeout_option` in the step metadata.
 
 ## CDT self-release pipeline
 
@@ -84,7 +238,14 @@ Use `cdt pipeline plan <pipeline>` to show the static step tree, parallel groups
 ```bash
 cdt pipeline plan prod
 cdt pipeline plan prod --json
+cdt pipeline plan preview --input deploy=yes --json
 ```
+
+Plans show each leaf's `when` and `decision` (`run`, `skip`, or `unknown`). With no
+`--input`, conditional decisions are `unknown`. Supplying inputs makes the set
+explicit: omitted optional inputs are absent, not unknown. Dry-run always uses an
+explicit set, even when empty: `cdt run preview --dry-run` skips the example above.
+Input declarations are shown, not the supplied runtime values.
 
 `cdt run <pipeline> --dry-run` uses the same planner and does not call step execution code. It is intended as a safe preflight before real release, upload, deploy, or git-push work. Dry runs do not create run records.
 
@@ -102,6 +263,11 @@ JSON plans include compact step metadata plus `artifact_flow` for each step. `ar
 
 `mode` is `all` when every listed type is required, or `any` when at least one is acceptable. `names` are best-effort artifact names inferred from static string options in `cdt.yaml` (for example, `artifact: ios_ipa`). Dynamic interpolations such as `${values.ios_artifact}` are ignored for static analysis. `artifact_flow.requires_names` and `produces_names` are flattened convenience lists.
 
+`artifact_flow` describes declared capabilities, not proof that a step will run.
+Only `run` producers contribute guaranteed available names; `skip` and `unknown`
+producers do not. Active consumers retain missing-artifact warnings, while skipped
+consumers need no artifacts.
+
 Artifact-flow warnings are preflight hints and do not block execution by themselves. A missing required artifact warning means a step refers to an artifact name that no previous sequential step declares. Parallel branches start together, so a branch cannot consume an artifact produced by a sibling branch; produce the artifact before the parallel group or consume it after the group completes.
 
 ## Steps and parallel groups
@@ -110,6 +276,7 @@ Each item in `steps` is one of:
 
 - Step name string: `- flutter.pub_get`
 - Single-key step mapping: `- android.build_aab: { profile: prod }`
+- Extended leaf mapping: `- step: flutter.pub_get` with optional `with`, `when`, and `retry`
 - Parallel group: `- parallel: { steps: [...] }`
 - Sequential group: `- sequence: { steps: [...] }`
 
@@ -139,8 +306,10 @@ Parallel branches start together, already-started branches are not cancelled on 
 Parallel context limitations:
 
 - `ctx.artifacts` registration is thread-safe.
-- Writing to `ctx.values` from parallel branches is not guaranteed to be thread-safe.
-- Parallel branches should not depend on each other through `ctx.values`; produce values before the parallel group or join via explicit artifacts/steps after it.
+- `ctx.values` is a mutable mapping (ordinary dictionaries are still accepted by the context constructor). Unlike the former shared dictionary, each branch receives an isolated snapshot made before workers start. Steps in one `sequence` see earlier writes in that branch; siblings never see them.
+- After every branch succeeds, CDT atomically merges changed keys, including deletions. Identical final writes or deletions are allowed; different writes or a deletion versus a write conflict. Conflicts report key names and step IDs, not values. Failure or conflict leaves the root values unchanged.
+- Only `values` is isolated. Other context fields, filesystem changes and external service effects are not transactional and are not rolled back by a failed values merge. Registered artifacts remain available even after failure.
+- Keep values non-secret and JSON-compatible (the supported contract is string keys and string values). Successful leaf boundaries are checkpointed for [safe resume](runs.md#parallel-values-checkpoints); a redacted checkpoint cannot be restored.
 - Parallel artifact dependencies follow the same rule: branches can only consume artifacts that existed before the group started, while artifacts produced by branches become available after the group completes.
 
 ## Built-ins
@@ -155,17 +324,27 @@ Important built-ins include:
 - `appstore.upload_testflight`
 - `appstore.upload_testflight_ipa`
 - `appstore.complete_testflight`
+- `appstore.update_metadata`
+- `firebase.ensure_cli`
+- `firebase.deploy`
 - `google_play.upload_aab`
 - `artifact.copy_to_downloads`
 - `hook.python_script`
 - `notify.prod_user_agent`
 - `notify.success`
+- `notify.webhook`
 
 Build steps use `profile` for CDT presets (`prod` adds `ENV=prod`). Flutter `flavor` is separate and optional. Build steps default to `no_pub: true` and do not increment versions; add explicit `flutter.increment_build_number` and `flutter.pub_get` steps when needed.
+
+iOS builds are signed by your Xcode/Flutter project configuration, not by CDT; see the [iOS code signing recipe](ios-signing.md) for a local and CI setup on the existing interfaces.
+
+Custom steps come from ordinary Python plugin modules listed in `plugins:`; see [Reusable Python step plugins](plugins.md) and `examples/reusable-plugin/`.
 
 `artifact.copy_to_downloads` copies a named file artifact to `~/Downloads` by default.
 
 `notify.prod_user_agent` is separate from `notify.success`. When `NOTIFY_PROVIDER=pachca`, it sends production user-agent details using `PACHCA_USER_AGENT_WEBHOOK_URL` and `UA_APP_NAME`; optional formatting variables are `UA_TITLE`, `UA_IOS_DEVICE`, and `UA_ANDROID_DEVICE`. With another provider the step is a no-op.
+
+`notify.webhook` is the generic, provider-agnostic notification step described in "Generic webhook" below. Telegram/Pachca behaviour of `notify.success` is unchanged.
 
 ## TestFlight upload and completion
 
@@ -334,6 +513,68 @@ A successful step means Apple accepted the submission and it left the unsubmitte
 
 See [Run records → App Store review checkpoints](runs.md#app-store-review-checkpoints) for how checkpoints interact with run status and resume.
 
+## App Store metadata updates
+
+`appstore.update_metadata` updates localized App Store metadata texts — `description`, `keywords`, `promotional_text` and `whats_new` — of existing localizations of an existing iOS App Store version. It is independent of `appstore.submit_review`: it never creates a version, a localization or a review submission, never selects a build and never sends anything for review. It also does not upload anything and needs no IPA, Flutter, Xcode or `xcrun` tooling.
+
+```yaml
+  metadata:
+    risk: production
+    inputs:
+      version:
+        required: true
+      whats_new:
+        required: true
+    steps:
+      - step: appstore.update_metadata
+        with:
+          version: "${inputs.version}"
+          localizations:
+            ru:
+              description: "Описание приложения"
+              keywords: "ключевое,слово,приложение"
+              promotional_text: "Промо-текст"
+              whats_new: "${inputs.whats_new}"
+            en-US:
+              whats_new: "Bug fixes and improvements"
+```
+
+```bash
+cdt run metadata --input version=1.2.3 --input whats_new="Исправления ошибок" --confirm metadata
+```
+
+### Required options
+
+| Option | Required | Description |
+|---|---|---|
+| `version` | yes | Non-empty version string of the existing iOS App Store version, for example `"1.2.3"`. Supports the existing `${inputs.*}` interpolation. |
+| `localizations` | yes | Non-empty mapping from locale to a non-empty mapping of fields. Supported fields: `description`, `keywords`, `promotional_text`, `whats_new` (written to the ASC attributes `description`, `keywords`, `promotionalText`, `whatsNew`). |
+
+Field values must be strings: numbers, booleans and `null` are rejected instead of being silently converted to text. An empty string is kept as an explicit clear request and sent to Apple only when App Store Connect accepts empty values for that field. The app is taken from `IOS_BUNDLE_ID`; authentication uses the existing `ASC_KEY_ID`, `ASC_ISSUER_ID`, and `ASC_PRIVATE_KEY_PATH`.
+
+### What the step requires and never does
+
+- The version is looked up exactly (paginated, with client-side verification) and must already exist: a missing version stops the step — CDT never falls back to get-or-create and never uses the last uploaded TestFlight build to guess the version.
+- The version must be in `PREPARE_FOR_SUBMISSION`. Rejected, submitted, awaiting-release and unknown states stop with an explanation; CDT never modifies such versions automatically.
+- Before the first mutation the step verifies that every requested locale already exists as a version localization. One unknown locale fails the whole step without any partial update — CDT does not create partial app cards.
+
+### Minimal, verified updates
+
+The step reads the current localizations first and PATCHes only the values that actually differ from the request; already matching fields are skipped, so a repeated run with an unchanged request performs no mutations at all. Locales are processed in stable sorted order, and every PATCH is issued with ambiguous-retry disabled (`retry_ambiguous=False`).
+
+After every PATCH the step verifies the result by reading the localization back:
+
+- a lost or ambiguous PATCH response is accepted only when the read-back confirms every requested value;
+- an unverifiable or mismatching result fails the step with an explicit "unverified result" message and no further PATCH is sent in that run — verify the localization in App Store Connect instead of retrying blindly.
+
+A partially successful run is not rolled back: locales confirmed before a failure keep their new texts, and the failure message never claims a completed transaction. Nothing is submitted for review and no build is selected, in this or in any later run.
+
+### Production confirmation and limits
+
+Every pipeline containing `appstore.update_metadata` requires `risk: production` — recursively through `sequence` and `parallel`, including conditionally skipped steps — and every real run needs the exact CLI confirmation (`cdt run <pipeline> --confirm <pipeline>`), both direct and detached. Planning commands (`cdt pipeline inspect`, `cdt pipeline plan`, `cdt run --dry-run`) never contact App Store Connect.
+
+The step declares no automatic retries and no envelope `timeout_seconds` capability: App Store Connect requests keep their own bounded retry settings. A successful run registers only safe summary values in the status file (bundle id, version string and the processed locale names) — never credentials and never the metadata texts.
+
 ## Google Play upload (AAB)
 
 `google_play.upload_aab` uploads one named AAB artifact and creates one release on one explicitly chosen Google Play track through the Google Play Android Publisher API. It is unrelated to Firebase App Distribution and does not read Firebase credentials.
@@ -473,6 +714,35 @@ The lock file `.cdt/google-play/locks/<package>.lock` serializes publications of
 
 See [Run records → Google Play publication checkpoints](runs.md#google-play-publication-checkpoints) for how checkpoints interact with run status and resume.
 
+## Firebase deploy
+
+`firebase.ensure_cli` and `firebase.deploy` cover Firebase project deployments with the Firebase CLI. Both take no options.
+
+`firebase.ensure_cli` is a cheap guard step: it runs `firebase --version` and fails early with an installation hint when the CLI is missing or broken. Put it first in a deploy pipeline so a missing tool fails before any build or upload work.
+
+`firebase.deploy` runs `firebase deploy` in the project root with the `firebase` binary from `PATH`. Targets, hosting, rules and functions are defined by the project's own Firebase configuration (`firebase.json`, `.firebaserc`) — the step does not duplicate them in `cdt.yaml`. The step is registered with `risk: deploy`; when the CLI exits non-zero, CDT plays the fail sound (if configured, see [Terminal sounds](#terminal-sounds)) and fails the pipeline.
+
+```yaml
+- firebase.ensure_cli
+- firebase.deploy
+```
+
+There is no `web.deploy` step. Web artifacts are built with `web.build`, optionally rewritten with `web.cache_bust` and placed with `web.copy`; hosting upload happens through `firebase.deploy` or your own tooling.
+
+## Terminal sounds
+
+Several built-in build, upload and deploy steps play a short fail sound when they fail (Flutter/iOS/Android builds, `firebase.deploy`, `firebase.upload_app_distribution`, `google_play.upload_aab`, App Store steps, `git.commit_push`, web steps). The legacy `cdt` flows also play a success sound when the whole flow completes.
+
+Sounds are opt-in and configured through environment variables (the project `.env` works as everywhere else):
+
+| Variable | Meaning |
+|---|---|
+| `SUCCESS_SOUND` / `FAIL_SOUND` | `macos` enables the sound; unset or empty keeps the terminal silent. Any other value prints a warning. |
+| `SUCCESS_SOUND_FILE` / `FAIL_SOUND_FILE` | Optional custom sound file, absolute or relative to the project root. Defaults: the system `Glass.aiff` / `Basso.aiff`. |
+| `SOUND_VOLUME` | Playback volume `0.0`–`1.0`; non-numeric values fall back to `0.3`, out-of-range values are clamped. |
+
+Playback uses the macOS `afplay` tool and reports every problem only as a warning: a missing `afplay`, a missing custom file or a failed playback never changes the pipeline result. Do not rely on sounds in headless CI — nothing plays unless a mac with `afplay` explicitly opts in through these variables.
+
 ## Python hook
 
 ```yaml
@@ -491,3 +761,33 @@ See [Run records → Google Play publication checkpoints](runs.md#google-play-pu
 ```
 
 The script must exist inside the project root and runs as `python3 <script> [args...]` from the project root. Environment values come from `.env` plus the shell, with shell values taking priority. With `strict_outputs: true`, CDT checks tracked changes via `git diff --name-only` and permits only files listed in `outputs`.
+
+The legacy `timeout` option defaults to 30 seconds; `timeout: null` disables it. On POSIX the hook runs in its own process group, and the timeout terminates the whole group (TERM, bounded grace, KILL, guaranteed reap of the direct process). On platforms without POSIX process groups only the direct child process is guaranteed to stop. The extended-record envelope `timeout_seconds` (see "Step timeouts") requires POSIX process groups and is rejected elsewhere.
+
+## Generic webhook
+
+`notify.webhook` delivers one explicitly configured JSON payload to an HTTPS endpoint:
+
+```yaml
+- step: notify.webhook
+  with:
+    url_env: RELEASE_WEBHOOK_URL          # required: env variable holding the HTTPS destination
+    authorization_env: RELEASE_WEBHOOK_AUTH # optional: env variable holding the full Authorization header value
+    payload:                              # required, non-empty JSON object, sent as-is
+      text: "Release ${inputs.version} is out"
+    timeout_seconds: 30                   # optional, default 30; also settable as the envelope timeout_seconds
+    fail_on_error: true                   # optional, default true
+```
+
+Hard safety rules:
+
+- The destination URL and the full `Authorization` header value are read only from the environment variables named by `url_env` and `authorization_env`; both must be plain variable names. The destination must be an HTTPS URL with a host, without userinfo or fragment; otherwise the step fails before sending.
+- Exactly one POST via the standard library with verified TLS. Redirects are never followed and automatic retries never happen (the step is not `retry_safe`); a 3xx answer is a failure with its HTTP status.
+- Only `2xx` responses count as successful. Network errors, timeouts and other statuses become a safe step error, or a warning when `fail_on_error: false`.
+- The payload is exactly the configured object: its string fields support ordinary `${inputs.*}`/`${values.*}` interpolation, and nothing from env, inputs, artifacts or context is added automatically.
+- If the payload contains the destination URL, the authorization value, or a known context secret (credential-like `.env` values), the step rejects it before sending instead of silently masking it - remove the secret from the payload explicitly.
+- The destination URL, the authorization value and the response body are never read into messages or saved logs; failures report only a safe category (`network_error`, `timeout`, `ssl_error`, `http_error`) plus the HTTP status when the server answered.
+
+Static preflight checks that the named env variables are present (literal names only; interpolated names are checked when the step runs). `cdt pipeline plan` and `cdt pipeline inspect` show option names, never credential values, and perform no network actions.
+
+`notify.webhook` complements but does not replace `notify.success`: Telegram/Pachca behaviour and the provider selection via `NOTIFY_PROVIDER` are unchanged.

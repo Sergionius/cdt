@@ -1,3 +1,6 @@
+import importlib.util
+from pathlib import Path
+
 import pytest
 import typer
 
@@ -123,6 +126,7 @@ def test_step_metadata_to_dict_is_structured():
         produces=(ResultProduction("upload_result"),),
         external_tools=("demo",),
         requires_env=("DEMO_TOKEN",),
+        retry_safe=True,
     )
 
     assert metadata.to_dict() == {
@@ -139,7 +143,61 @@ def test_step_metadata_to_dict_is_structured():
         "external_tools": ["demo"],
         "requires_env": ["DEMO_TOKEN"],
         "plugin": False,
+        "retry_safe": True,
+        "timeout_option": None,
     }
+
+
+def test_step_metadata_timeout_option_defaults_to_none_and_normalizes():
+    register_step("demo.plain", DummyStep)
+    register_step(
+        "demo.timed",
+        DummyStep,
+        metadata=StepMetadata(name="demo.timed", timeout_option="timeout"),
+    )
+    register_step(
+        "demo.spaced",
+        DummyStep,
+        metadata=StepMetadata(name="demo.spaced", timeout_option=" timeout "),
+    )
+
+    assert get_step_metadata("demo.plain").timeout_option is None
+    assert get_step_metadata("demo.timed").timeout_option == "timeout"
+    # Registration normalizes into a fresh metadata object and keeps the capability.
+    assert get_step_metadata("demo.spaced").timeout_option == "timeout"
+    assert get_step_metadata("demo.timed").to_dict()["timeout_option"] == "timeout"
+
+    with pytest.raises(ValueError, match="timeout_option must be a non-empty string or None"):
+        StepMetadata(name="demo.bad", timeout_option="")
+    with pytest.raises(ValueError, match="timeout_option must be a non-empty string or None"):
+        StepMetadata(name="demo.bad", timeout_option=5)
+
+
+def test_builtin_timeout_capabilities_belong_to_hook_and_webhook_only():
+    from cdt.pipeline.builtins import _BUILTIN_METADATA
+
+    timed = {name: metadata.timeout_option for name, metadata in _BUILTIN_METADATA.items() if metadata.timeout_option}
+    assert timed == {"hook.python_script": "timeout", "notify.webhook": "timeout_seconds"}
+
+
+def test_step_metadata_defaults_to_not_retry_safe_and_normalizes_to_bool():
+    register_step("demo.plain", DummyStep)
+    register_step("demo.retryable", DummyStep, metadata=StepMetadata(name="demo.retryable", retry_safe=True))
+    register_step("demo.coerced", DummyStep, metadata=StepMetadata(name="demo.coerced", retry_safe="yes"))
+
+    assert get_step_metadata("demo.plain").retry_safe is False
+    assert get_step_metadata("demo.retryable").retry_safe is True
+    assert get_step_metadata("demo.coerced").retry_safe is True
+    # Registration normalizes into a fresh metadata object and keeps the capability.
+    normalized = get_step_metadata("demo.retryable")
+    assert normalized.to_dict()["retry_safe"] is True
+
+
+def test_retryable_step_error_is_exported_from_sdk():
+    from cdt.pipeline.policy import RetryableStepError as PolicyError
+    from cdt.sdk import RetryableStepError as SdkError
+
+    assert SdkError is PolicyError
 
 
 def test_result_requirement_rejects_invalid_mode():
@@ -180,6 +238,33 @@ def test_unknown_step_error_lists_available_steps():
         get_step_factory("missing.step")
 
 
+def test_reusable_plugin_example_registers_metadata_and_conflicts_loudly():
+    """The example plugin registers explicit metadata and cannot silently
+    override an existing registration: the step registry is global per
+    process and duplicate names fail loudly."""
+    module_path = (
+        Path(__file__).resolve().parents[1]
+        / "examples"
+        / "reusable-plugin"
+        / "src"
+        / "cdt_example_steps"
+        / "__init__.py"
+    )
+    spec = importlib.util.spec_from_file_location("cdt_example_steps", module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    metadata = get_step_metadata("example.check_file")
+    assert metadata.plugin is True
+    assert metadata.retry_safe is True
+    assert metadata.category == "example"
+    assert metadata.risk == "safe"
+    assert metadata.description.startswith("Read-only probe")
+
+    with pytest.raises(typer.BadParameter, match="already registered"):
+        register_step("example.check_file", DummyStep)
+
+
 def test_sdk_step_accepts_keyword_metadata():
     @sdk_step(
         "demo.fetch",
@@ -218,6 +303,7 @@ def test_sdk_step_rejects_metadata_with_requires_or_produces():
     given = StepMetadata(name="demo.fetch")
 
     with pytest.raises(TypeError, match="Cannot pass both 'metadata' and 'requires'/'produces'"):
+
         @sdk_step("demo.fetch", metadata=given, requires=[ResultRequirement(("ios_ipa",))])
         def fetch(ctx, output: str) -> None:
             pass
@@ -252,6 +338,48 @@ def test_sdk_step_defaults_category_from_name_and_custom_risk():
     assert metadata.category == "offline"
     assert metadata.risk == "custom"
     assert metadata.plugin is True
+    # The capability is opt-in: the SDK default keeps retries disabled.
+    assert metadata.retry_safe is False
+
+
+def test_sdk_step_accepts_retry_safe_keyword():
+    @sdk_step("demo.transient", retry_safe=True)
+    def fetch(ctx, output: str) -> None:
+        pass
+
+    assert get_step_metadata("demo.transient").retry_safe is True
+
+
+def test_sdk_step_metadata_object_keeps_retry_safe():
+    given = StepMetadata(name="demo.transient", retry_safe=True)
+
+    @sdk_step("demo.transient", metadata=given)
+    def fetch(ctx, output: str) -> None:
+        pass
+
+    metadata = get_step_metadata("demo.transient")
+    assert metadata.plugin is True
+    assert metadata.retry_safe is True
+
+
+def test_sdk_step_accepts_timeout_option_keyword():
+    @sdk_step("demo.timed", timeout_option="timeout")
+    def timed(ctx, timeout=None) -> None:
+        pass
+
+    assert get_step_metadata("demo.timed").timeout_option == "timeout"
+
+
+def test_sdk_step_metadata_object_keeps_timeout_option():
+    given = StepMetadata(name="demo.timed", timeout_option="timeout")
+
+    @sdk_step("demo.timed", metadata=given)
+    def timed(ctx, timeout=None) -> None:
+        pass
+
+    metadata = get_step_metadata("demo.timed")
+    assert metadata.plugin is True
+    assert metadata.timeout_option == "timeout"
 
 
 def test_sdk_step_defaults_custom_category_for_flat_names():

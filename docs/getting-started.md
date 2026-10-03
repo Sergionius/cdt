@@ -108,6 +108,12 @@ For YAML language servers, add this header to `cdt.yaml`:
 # yaml-language-server: $schema=./cdt.schema.json
 ```
 
+## Where to go next
+
+- Reusable Python steps for several projects: package them as a plugin module and list it under `plugins:` in `cdt.yaml`. See [Reusable Python step plugins](plugins.md) and [`examples/reusable-plugin/`](../examples/reusable-plugin/cdt.yaml).
+- Signing iOS builds locally and in CI: [iOS code signing recipe](ios-signing.md) — certificates, provisioning profiles, a temporary keychain, and how code signing differs from App Store Connect authentication.
+- The full step catalogue, retries, timeouts, conditions, parallel groups, and integrations: [CDT pipelines](pipelines.md).
+
 ## Update
 
 ```bash

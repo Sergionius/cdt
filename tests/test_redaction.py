@@ -69,6 +69,25 @@ def test_redactor_handles_overlapping_values_longest_first_and_is_idempotent():
     assert redactor.redact(once) == once
 
 
+def test_find_secrets_reports_verbatim_matches_without_redacting():
+    redactor = SecretRedactor.from_env({"NOTIFY_TOKEN": "super-secret-value", "ORDINARY": "visible-value"})
+
+    found = redactor.find_secrets("payload mentions super-secret-value and visible-value")
+
+    assert found == ("super-secret-value",)
+    assert redactor.find_secrets("nothing here") == ()
+
+
+def test_find_secrets_skips_short_values_and_matches_multiline_fragments():
+    redactor = SecretRedactor.from_env({"API_KEY": "abc", "PRIVATE_KEY": "line-one\nline-two"})
+
+    # Short values (len < 4) are never tracked; multiline keys are tracked
+    # both as a whole and per line.
+    assert redactor.find_secrets("abc") == ()
+    assert redactor.find_secrets("leaked line-one") == ("line-one",)
+    assert redactor.find_secrets("line-one\nline-two") == ("line-one\nline-two", "line-one", "line-two")
+
+
 def test_redactor_masks_common_patterns_without_masking_hashes():
     git_sha = "d747f5c9b2c7af59c6ca6a33112c5c3925cc84c7"
     checksum = "a" * 64

@@ -21,10 +21,11 @@ def schema_payload() -> dict[str, Any]:
             "description": "Project plugin step",
             "minProperties": 1,
             "maxProperties": 1,
-            "propertyNames": {"pattern": r"^(?!parallel$|sequence$)[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+$"},
+            "propertyNames": {"pattern": r"^(?!step$|parallel$|sequence$)[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+$"},
             "additionalProperties": {"type": ["object", "null"]},
         }
     )
+    step_objects.append({"$ref": "#/$defs/extendedStep"})
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": SCHEMA_ID,
@@ -42,6 +43,49 @@ def schema_payload() -> dict[str, Any]:
             },
         },
         "$defs": {
+            "condition": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["input"],
+                "properties": {
+                    "input": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"},
+                    "equals": {"type": "string", "pattern": r"^(?![\s\S]*\$\{)[\s\S]*$"},
+                    "not_equals": {"type": "string", "pattern": r"^(?![\s\S]*\$\{)[\s\S]*$"},
+                    "present": {"type": "boolean"},
+                },
+                "oneOf": [{"required": [operator]} for operator in ("equals", "not_equals", "present")],
+            },
+            "retryPolicy": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "max_attempts": {"type": "integer", "minimum": 1, "maximum": 5, "default": 1},
+                    "delay_seconds": {"type": "number", "minimum": 0, "maximum": 60, "default": 0},
+                },
+            },
+            "timeoutSeconds": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+            },
+            "extendedStep": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["step"],
+                "properties": {
+                    "step": {"type": "string", "minLength": 1, "not": {"enum": ["parallel", "sequence"]}},
+                    "with": {"type": "object"},
+                    "when": {"$ref": "#/$defs/condition"},
+                    "retry": {"$ref": "#/$defs/retryPolicy"},
+                    "timeout_seconds": {"$ref": "#/$defs/timeoutSeconds"},
+                },
+                "allOf": [
+                    {
+                        "if": {"properties": {"step": {"const": name}}},
+                        "then": {"properties": {"with": _step_object_schema(name, factory)["properties"][name]}},
+                    }
+                    for name, factory in sorted(_BUILTINS.items())
+                ],
+            },
             "pipeline": {
                 "type": "object",
                 "additionalProperties": False,

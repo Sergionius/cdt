@@ -1,3 +1,4 @@
+import os
 import sys
 
 import pytest
@@ -6,6 +7,7 @@ import typer
 from cdt.pipeline import PipelineContext, PipelineExecutor
 from cdt.pipeline.builtins import register_builtin_steps
 from cdt.pipeline.config import (
+    ConfiguredStep,
     InputSpec,
     ParallelSpec,
     PipelineSpec,
@@ -16,9 +18,329 @@ from cdt.pipeline.config import (
     parse_pipeline_inputs,
     validate_pipeline_inputs,
 )
+from cdt.pipeline.policy import RetryPolicy
 from cdt.pipeline.registry import _clear_steps_for_tests
 from cdt.pipeline.validation import validate_pipeline
 from cdt.runner import CommandRunner
+from cdt.sdk import step as sdk_step
+
+
+@pytest.mark.parametrize(
+    "when,inputs,expected",
+    [
+        ({"input": "deploy", "equals": "yes"}, {"deploy": "yes"}, "run"),
+        ({"input": "deploy", "equals": "yes"}, {"deploy": "YES"}, "skip"),
+        ({"input": "deploy", "equals": ""}, {}, "skip"),
+        ({"input": "deploy", "equals": ""}, {"deploy": ""}, "run"),
+        ({"input": "deploy", "not_equals": "yes"}, {}, "run"),
+        ({"input": "deploy", "not_equals": "yes"}, {"deploy": "yes"}, "skip"),
+        ({"input": "deploy", "present": True}, {}, "skip"),
+        ({"input": "deploy", "present": True}, {"deploy": ""}, "skip"),
+        ({"input": "deploy", "present": True}, {"deploy": " "}, "run"),
+        ({"input": "deploy", "present": False}, {}, "run"),
+        ({"input": "deploy", "present": False}, {"deploy": "yes"}, "skip"),
+        ({"input": "deploy", "present": False}, None, "unknown"),
+        (None, None, "run"),
+    ],
+)
+def test_condition_evaluation(when, inputs, expected):
+    from cdt.pipeline.config import evaluate_condition
+
+    assert evaluate_condition(when, inputs) == expected
+
+
+@pytest.mark.parametrize(
+    "condition",
+    [
+        "null",
+        "[]",
+        "{input: deploy}",
+        "{equals: yes}",
+        "{input: deploy, equals: 'yes', present: true}",
+        "{input: deploy, equals: true}",
+        "{input: deploy, not_equals: 1}",
+        "{input: deploy, present: 'true'}",
+        "{input: deploy, unknown: 'yes'}",
+        "{input: '${inputs.deploy}', present: true}",
+        "{input: deploy, equals: '${ENV}'}",
+    ],
+)
+def test_invalid_condition_rejected(tmp_path, condition):
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    inputs: {deploy: {}}\n    steps:\n"
+        f"      - step: flutter.pub_get\n        when: {condition}\n"
+    )
+    with pytest.raises(typer.BadParameter, match="when"):
+        load_pipeline_config(tmp_path)
+
+
+def test_extended_step_preserves_legacy_forms_and_ids(tmp_path):
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    inputs: {deploy: {}}\n    steps:\n"
+        "      - flutter.pub_get\n      - flutter.pub_get: {}\n"
+        "      - parallel:\n          steps:\n            - sequence:\n                steps:\n"
+        "                  - step: flutter.pub_get\n                    with: {}\n"
+        "                    when: {input: deploy, present: true}\n"
+    )
+    register_builtin_steps()
+    config = load_pipeline_config(tmp_path)
+    assert validate_pipeline(config) == []
+    steps = configured_steps(config.pipelines["demo"])
+    assert steps[0].options == steps[1].options == {}
+    leaf = steps[2].steps[0].steps[0]
+    assert leaf.step_id == "2/0/0"
+    assert leaf.options == {}
+    assert leaf.when == {"input": "deploy", "present": True}
+
+
+@pytest.mark.parametrize("extra", ["typo: true", "retries: {}"])
+def test_extended_step_rejects_unknown_fields(tmp_path, extra):
+    (tmp_path / "cdt.yaml").write_text(
+        f"version: 1\npipelines:\n  demo:\n    steps:\n      - step: flutter.pub_get\n        {extra}\n"
+    )
+    with pytest.raises(typer.BadParameter, match="unsupported extended"):
+        load_pipeline_config(tmp_path)
+
+
+def test_condition_requires_declared_input_and_keeps_option_validation(tmp_path):
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    steps:\n"
+        "      - step: flutter.pub_get\n        with: {typo: true}\n"
+        "        when: {input: missing, present: false}\n"
+    )
+    register_builtin_steps()
+    errors = validate_pipeline(load_pipeline_config(tmp_path))
+    assert {error["code"] for error in errors} == {"invalid_condition", "unknown_step_option"}
+
+
+def test_extended_step_parses_retry_policy_separately_from_options(tmp_path):
+    @sdk_step("demo.transient", retry_safe=True)
+    def transient(ctx):
+        pass
+
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    steps:\n"
+        "      - step: demo.transient\n        with: {}\n"
+        "        retry: {max_attempts: 3, delay_seconds: 1}\n"
+        "      - parallel:\n          steps:\n            - sequence:\n                steps:\n"
+        "                  - step: demo.transient\n                    retry: {max_attempts: 5, delay_seconds: 60}\n"
+    )
+    config = load_pipeline_config(tmp_path)
+    steps = configured_steps(config.pipelines["demo"])
+    assert steps[0].retry == RetryPolicy(max_attempts=3, delay_seconds=1.0)
+    assert steps[0].options == {}
+    assert steps[1].steps[0].steps[0].retry == RetryPolicy(max_attempts=5, delay_seconds=60.0)
+    assert validate_pipeline(config) == []
+
+
+def test_retry_defaults_keep_single_attempt_and_zero_delay(tmp_path):
+    @sdk_step("demo.transient", retry_safe=True)
+    def transient(ctx):
+        pass
+
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    steps:\n      - step: demo.transient\n        retry: {}\n"
+    )
+    config = load_pipeline_config(tmp_path)
+    leaf = configured_steps(config.pipelines["demo"])[0]
+    assert leaf.retry == RetryPolicy(max_attempts=1, delay_seconds=0.0)
+    assert not leaf.retry.enabled
+    assert validate_pipeline(config) == []
+
+
+@pytest.mark.parametrize(
+    "retry_block",
+    [
+        "{max_attempts: 0}",
+        "{max_attempts: 6}",
+        "{max_attempts: true}",
+        "{max_attempts: '3'}",
+        "{max_attempts: 1.5}",
+        "{delay_seconds: -1}",
+        "{delay_seconds: 61}",
+        "{delay_seconds: true}",
+        "{delay_seconds: '1'}",
+        "{delay_seconds: .inf}",
+        "{delay_seconds: .nan}",
+        "{unknown: 1}",
+        "3",
+    ],
+)
+def test_invalid_retry_rejected(tmp_path, retry_block):
+    (tmp_path / "cdt.yaml").write_text(
+        f"version: 1\npipelines:\n  demo:\n    steps:\n      - step: flutter.pub_get\n        retry: {retry_block}\n"
+    )
+    with pytest.raises(typer.BadParameter, match="retry"):
+        load_pipeline_config(tmp_path)
+
+
+def test_retry_above_single_attempt_requires_explicit_capability(tmp_path):
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    steps:\n      - step: flutter.pub_get\n        retry: {max_attempts: 2}\n"
+    )
+    register_builtin_steps()
+    errors = validate_pipeline(load_pipeline_config(tmp_path))
+    assert {error["code"] for error in errors} == {"retry_requires_capability"}
+    assert "cannot be inferred from risk" in errors[0]["message"]
+
+
+def test_retry_single_attempt_needs_no_capability(tmp_path):
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    steps:\n"
+        "      - step: flutter.pub_get\n        retry: {max_attempts: 1, delay_seconds: 2}\n"
+    )
+    register_builtin_steps()
+    assert validate_pipeline(load_pipeline_config(tmp_path)) == []
+
+
+def test_single_key_form_keeps_retry_out_of_constructor_options(tmp_path):
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    steps:\n      - flutter.pub_get: {retry: {max_attempts: 2}}\n"
+    )
+    register_builtin_steps()
+    config = load_pipeline_config(tmp_path)
+    leaf = configured_steps(config.pipelines["demo"])[0]
+    assert leaf.retry is None
+    assert leaf.options == {"retry": {"max_attempts": 2}}
+    errors = validate_pipeline(config)
+    assert {error["code"] for error in errors} == {"unknown_step_option"}
+
+
+def test_extended_step_parses_timeout_seconds_separately_from_options(tmp_path):
+    register_builtin_steps()
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    steps:\n"
+        "      - step: hook.python_script\n        with: {script: hooks/x.py}\n        timeout_seconds: 12\n"
+        "      - sequence:\n          steps:\n"
+        "            - step: hook.python_script\n              with: {script: hooks/y.py}\n"
+        "              timeout_seconds: 0.5\n"
+    )
+    config = load_pipeline_config(tmp_path)
+    steps = configured_steps(config.pipelines["demo"])
+    assert steps[0].timeout_seconds == 12.0
+    assert steps[0].options == {"script": "hooks/x.py"}
+    assert steps[1].steps[0].timeout_seconds == 0.5
+    assert validate_pipeline(config) == []
+
+
+@pytest.mark.parametrize(
+    "timeout_value",
+    [0, -1, "true", "'3'", ".inf", ".nan", "null", "{}"],
+)
+def test_invalid_timeout_seconds_rejected(tmp_path, timeout_value):
+    register_builtin_steps()
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    steps:\n"
+        f"      - step: hook.python_script\n        timeout_seconds: {timeout_value}\n"
+    )
+    with pytest.raises(typer.BadParameter, match="timeout_seconds"):
+        load_pipeline_config(tmp_path)
+
+
+def test_timeout_seconds_requires_explicit_capability(tmp_path):
+    register_builtin_steps()
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    steps:\n      - step: flutter.pub_get\n        timeout_seconds: 30\n"
+    )
+    errors = validate_pipeline(load_pipeline_config(tmp_path))
+    assert {error["code"] for error in errors} == {"timeout_requires_capability"}
+    assert errors[0]["path"] == "pipelines.demo.steps[0].timeout_seconds"
+
+
+def test_timeout_seconds_with_same_option_is_ambiguous(tmp_path):
+    register_builtin_steps()
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    steps:\n"
+        "      - step: hook.python_script\n        with: {script: hooks/x.py, timeout: 5}\n"
+        "        timeout_seconds: 10\n"
+    )
+    errors = validate_pipeline(load_pipeline_config(tmp_path))
+    assert {error["code"] for error in errors} == {"ambiguous_step_timeout"}
+    assert "remove one" in errors[0]["message"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process groups are required")
+def test_timeout_seconds_supported_for_hook_without_with_timeout(tmp_path):
+    register_builtin_steps()
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    steps:\n"
+        "      - step: hook.python_script\n        with: {script: hooks/x.py}\n        timeout_seconds: 10\n"
+    )
+    assert validate_pipeline(load_pipeline_config(tmp_path)) == []
+
+
+def test_timeout_seconds_rejected_on_platform_without_process_groups(tmp_path, monkeypatch):
+    from cdt.pipeline import validation
+
+    register_builtin_steps()
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    steps:\n      - step: hook.python_script\n        timeout_seconds: 10\n"
+    )
+    monkeypatch.setattr(validation, "supports_process_groups", lambda: False)
+    errors = validate_pipeline(load_pipeline_config(tmp_path))
+    assert {error["code"] for error in errors} == {"timeout_unsupported_platform"}
+
+
+def test_single_key_form_keeps_timeout_in_constructor_options(tmp_path):
+    register_builtin_steps()
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    steps:\n      - hook.python_script: {script: hooks/x.py, timeout: 5}\n"
+    )
+    config = load_pipeline_config(tmp_path)
+    leaf = configured_steps(config.pipelines["demo"])[0]
+    assert leaf.timeout_seconds is None
+    assert leaf.options == {"script": "hooks/x.py", "timeout": 5}
+    assert validate_pipeline(config) == []
+
+
+def _record_timeout_step():
+    received = []
+
+    @sdk_step("demo.timed", timeout_option="timeout")
+    def timed(ctx, timeout=None) -> None:
+        received.append(timeout)
+
+    return received
+
+
+def _make_context(tmp_path):
+    return PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner())
+
+
+def test_configured_step_injects_timeout_into_declared_option(tmp_path):
+    received = _record_timeout_step()
+    leaf = ConfiguredStep("demo.timed", {}, "0", None, None, 7)
+
+    leaf.run(_make_context(tmp_path))
+
+    assert received == [7]
+
+
+def test_configured_step_rejects_timeout_without_capability_at_runtime(tmp_path):
+    @sdk_step("demo.untimed")
+    def untimed(ctx) -> None:
+        pass
+
+    leaf = ConfiguredStep("demo.untimed", {}, "0", None, None, 7)
+    with pytest.raises(typer.BadParameter, match="does not declare a native timeout parameter"):
+        leaf.run(_make_context(tmp_path))
+
+
+def test_configured_step_rejects_ambiguous_timeout_at_runtime(tmp_path):
+    _record_timeout_step()
+    leaf = ConfiguredStep("demo.timed", {"timeout": 5}, "0", None, None, 7)
+    with pytest.raises(typer.BadParameter, match="both timeout_seconds and with.timeout"):
+        leaf.run(_make_context(tmp_path))
+
+
+def test_configured_step_rejects_timeout_on_unsupported_platform_at_runtime(tmp_path, monkeypatch):
+    from cdt.pipeline import config as pipeline_config
+
+    _record_timeout_step()
+    monkeypatch.setattr(pipeline_config, "supports_process_groups", lambda: False)
+    leaf = ConfiguredStep("demo.timed", {}, "0", None, None, 7)
+    with pytest.raises(typer.BadParameter, match="POSIX process groups"):
+        leaf.run(_make_context(tmp_path))
 
 
 def setup_function():
@@ -488,14 +810,7 @@ def test_build_step_env_option_is_rejected_with_profile_hint(tmp_path):
 
 
 def _google_play_pipeline(risk: str, steps_block: str) -> str:
-    return (
-        "version: 1\n"
-        "pipelines:\n"
-        "  play:\n"
-        f"    risk: {risk}\n"
-        "    steps:\n"
-        f"{steps_block}"
-    )
+    return f"version: 1\npipelines:\n  play:\n    risk: {risk}\n    steps:\n{steps_block}"
 
 
 def _play_step_yaml(indent: str = "      ") -> str:
@@ -509,14 +824,7 @@ def _play_step_yaml(indent: str = "      ") -> str:
 
 
 def _submit_review_pipeline(risk: str, steps_block: str) -> str:
-    return (
-        "version: 1\n"
-        "pipelines:\n"
-        "  submit:\n"
-        f"    risk: {risk}\n"
-        "    steps:\n"
-        f"{steps_block}"
-    )
+    return f"version: 1\npipelines:\n  submit:\n    risk: {risk}\n    steps:\n{steps_block}"
 
 
 def _submit_review_step_yaml(indent: str = "      ") -> str:

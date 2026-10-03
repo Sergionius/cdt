@@ -1,5 +1,6 @@
 from ..steps.android import AndroidBuildAabStep, AndroidBuildApkStep
 from ..steps.appstore import (
+    AppStoreUpdateMetadataStep,
     CompleteTestFlightStep,
     SubmitReviewStep,
     UploadTestFlightIpaStep,
@@ -19,7 +20,7 @@ from ..steps.github import WaitReleaseStep
 from ..steps.google_play import GooglePlayUploadAabStep
 from ..steps.hook import PythonScriptHookStep
 from ..steps.ios import IncrementIosBuildNumberStep, IosFlutterBuildIpaStep, IosXcodeBuildIpaStep
-from ..steps.notify import NotifyProdUserAgentPachcaStep, NotifySuccessStep
+from ..steps.notify import NotifyProdUserAgentPachcaStep, NotifySuccessStep, NotifyWebhookStep
 from ..steps.python import BuildDistributionStep, PrepareReleaseStep, PytestStep, RuffCheckStep
 from ..steps.release import RequireVersionAvailableStep
 from ..steps.tracker import TrackerCommentStep
@@ -31,6 +32,7 @@ _BUILTINS: dict[str, type] = {
     "android.build_apk": AndroidBuildApkStep,
     "appstore.complete_testflight": CompleteTestFlightStep,
     "appstore.submit_review": SubmitReviewStep,
+    "appstore.update_metadata": AppStoreUpdateMetadataStep,
     "appstore.upload_testflight": UploadTestFlightStep,
     "appstore.upload_testflight_ipa": UploadTestFlightIpaStep,
     "artifact.copy_to_downloads": CopyArtifactToDownloadsStep,
@@ -52,6 +54,7 @@ _BUILTINS: dict[str, type] = {
     "hook.python_script": PythonScriptHookStep,
     "notify.prod_user_agent": NotifyProdUserAgentPachcaStep,
     "notify.success": NotifySuccessStep,
+    "notify.webhook": NotifyWebhookStep,
     "python.build_distribution": BuildDistributionStep,
     "python.prepare_release": PrepareReleaseStep,
     "python.pytest": PytestStep,
@@ -93,8 +96,7 @@ _BUILTIN_METADATA: dict[str, StepMetadata] = {
     "appstore.upload_testflight_ipa": StepMetadata(
         name="appstore.upload_testflight_ipa",
         description=(
-            "Upload an IPA artifact to TestFlight with iTMSTransporter only, "
-            "without post-upload ASC processing."
+            "Upload an IPA artifact to TestFlight with iTMSTransporter only, without post-upload ASC processing."
         ),
         category="appstore",
         risk="upload",
@@ -126,6 +128,20 @@ _BUILTIN_METADATA: dict[str, StepMetadata] = {
         category="appstore",
         risk="upload",
         produces=(ResultProduction("review_submission"),),
+        requires_env=("ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_PRIVATE_KEY_PATH", "IOS_BUNDLE_ID"),
+    ),
+    "appstore.update_metadata": StepMetadata(
+        name="appstore.update_metadata",
+        description=(
+            "Update localized App Store metadata texts (description, keywords, promotional_text, whats_new) "
+            "of existing localizations of an exactly identified existing iOS version in "
+            "PREPARE_FOR_SUBMISSION. Creates no version, localization, submission or build selection and "
+            "sends nothing for review; every PATCH is verified by a read-back and an unverifiable result "
+            "fails without repeating it. Requires pipeline risk: production and the exact CLI confirmation."
+        ),
+        category="appstore",
+        risk="upload",
+        produces=(ResultProduction("appstore_metadata"),),
         requires_env=("ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_PRIVATE_KEY_PATH", "IOS_BUNDLE_ID"),
     ),
     "artifact.copy_to_downloads": StepMetadata(
@@ -284,6 +300,7 @@ _BUILTIN_METADATA: dict[str, StepMetadata] = {
         category="hook",
         risk="hook",
         external_tools=("python3",),
+        timeout_option="timeout",
     ),
     "notify.prod_user_agent": StepMetadata(
         name="notify.prod_user_agent",
@@ -299,6 +316,26 @@ _BUILTIN_METADATA: dict[str, StepMetadata] = {
         category="notify",
         risk="safe",
         produces=(ResultProduction("notification"),),
+    ),
+    "notify.webhook": StepMetadata(
+        name="notify.webhook",
+        description=(
+            "Send one explicitly configured JSON payload to an HTTPS webhook endpoint with a single "
+            "verified-TLS POST: no redirects, no automatic retries, and only 2xx responses are "
+            "successful. The destination comes from the url_env variable and the full Authorization "
+            "header value from authorization_env; the URL, the authorization value and the response "
+            "body are never printed or saved, and a payload containing a known secret is rejected "
+            "before sending. Payload fields support ordinary ${inputs.*}/${values.*} interpolation; "
+            "nothing from env, inputs, artifacts or context is added automatically."
+        ),
+        category="notify",
+        risk="upload",
+        produces=(ResultProduction("notification"),),
+        # Webhooks are external sends: automatic retries are never allowed and
+        # the envelope timeout is delivered into the native timeout_seconds
+        # constructor option.
+        retry_safe=False,
+        timeout_option="timeout_seconds",
     ),
     "python.build_distribution": StepMetadata(
         name="python.build_distribution",

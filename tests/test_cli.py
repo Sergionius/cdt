@@ -19,6 +19,20 @@ def _visible_text(output: str) -> str:
     return ANSI_RE.sub("", output)
 
 
+def test_pipeline_plan_input_option_and_invalid_inputs(tmp_path, monkeypatch):
+    help_result = runner.invoke(app, ["pipeline", "plan", "--help"])
+    assert help_result.exit_code == 0
+    assert "--input" in _visible_text(help_result.output)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    inputs: {deploy: {}}\n    steps:\n"
+        "      - step: flutter.pub_get\n        when: {input: deploy, present: true}\n"
+    )
+    result = runner.invoke(app, ["pipeline", "plan", "demo", "--json", "--input", "unknown=yes"])
+    assert result.exit_code != 0
+    assert json.loads(result.output)["errors"][0]["code"] == "invalid_pipeline_input"
+
+
 def setup_function():
     _clear_steps_for_tests()
     sys.modules.pop("cdt_steps.offline", None)

@@ -1,5 +1,9 @@
 import json
+import os
+import signal
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -148,6 +152,178 @@ def test_prepare_git_clean_main_reports_failures(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "_run", lambda command, cwd: 1)
     with pytest.raises(typer.BadParameter, match="Not a git repository"):
         runner._prepare_git_clean_main(tmp_path)
+
+
+class ScriptedProc:
+    def __init__(self, pid, waits):
+        self.pid = pid
+        self.waits = list(waits)
+        self.wait_calls = []
+
+    def wait(self, timeout=None):
+        self.wait_calls.append(timeout)
+        outcome = self.waits.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+
+def _patch_popen(monkeypatch, proc):
+    calls = []
+
+    def fake_popen(command, cwd=None, **kwargs):
+        calls.append((command, cwd, kwargs))
+        return proc
+
+    monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
+    return calls
+
+
+def _patch_killpg(monkeypatch, *, group_survives=False):
+    signals = []
+
+    def killpg(pid, sig):
+        if sig == 0:
+            if not group_survives:
+                raise ProcessLookupError
+        else:
+            signals.append((pid, sig))
+
+    monkeypatch.setattr(runner.os, "killpg", killpg)
+    return signals
+
+
+def test_run_managed_subprocess_returns_exit_code_and_uses_process_group(tmp_path, monkeypatch):
+    proc = ScriptedProc(4242, [0])
+    calls = _patch_popen(monkeypatch, proc)
+
+    code = runner.run_managed_subprocess(["hook"], cwd=tmp_path, env={"A": "1"}, timeout=None)
+
+    assert code == 0
+    if runner.supports_process_groups():
+        assert calls == [(["hook"], tmp_path, {"env": {"A": "1"}, "start_new_session": True})]
+    else:
+        assert calls == [(["hook"], tmp_path, {"env": {"A": "1"}})]
+    assert proc.wait_calls == [None]
+
+
+def test_run_managed_subprocess_timeout_terms_group_then_reraises(tmp_path, monkeypatch):
+    timeout_error = subprocess.TimeoutExpired(cmd=["hook"], timeout=3)
+    proc = ScriptedProc(4242, [timeout_error, -15])
+    _patch_popen(monkeypatch, proc)
+    signals = _patch_killpg(monkeypatch)
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        runner.run_managed_subprocess(["hook"], cwd=tmp_path, timeout=3)
+
+    if runner.supports_process_groups():
+        assert signals == [(4242, signal.SIGTERM)]
+        assert proc.wait_calls == [3, runner.PROCESS_GROUP_TERMINATE_GRACE_SECONDS]
+
+
+def test_run_managed_subprocess_kills_group_after_bounded_grace(tmp_path, monkeypatch):
+    timeout_error = subprocess.TimeoutExpired(cmd=["hook"], timeout=3)
+    proc = ScriptedProc(4242, [timeout_error, timeout_error, -9])
+    _patch_popen(monkeypatch, proc)
+    signals = _patch_killpg(monkeypatch)
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        runner.run_managed_subprocess(["hook"], cwd=tmp_path, timeout=3)
+
+    if runner.supports_process_groups():
+        assert signals == [(4242, signal.SIGTERM), (4242, signal.SIGKILL)]
+        assert proc.wait_calls[-1] == runner.PROCESS_GROUP_TERMINATE_GRACE_SECONDS
+
+
+def test_run_managed_subprocess_does_not_hide_failed_cleanup(tmp_path, monkeypatch):
+    timeout_error = subprocess.TimeoutExpired(cmd=["hook"], timeout=3)
+    proc = ScriptedProc(4242, [timeout_error, timeout_error, timeout_error])
+    _patch_popen(monkeypatch, proc)
+    _patch_killpg(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="Failed to reap managed subprocess"):
+        runner.run_managed_subprocess(["hook"], cwd=tmp_path, timeout=3)
+
+
+def test_run_managed_subprocess_cleans_up_group_on_interrupted_wait(tmp_path, monkeypatch):
+    proc = ScriptedProc(4242, [KeyboardInterrupt(), -15])
+    _patch_popen(monkeypatch, proc)
+    signals = _patch_killpg(monkeypatch)
+
+    with pytest.raises(KeyboardInterrupt):
+        runner.run_managed_subprocess(["hook"], cwd=tmp_path, timeout=60)
+
+    if runner.supports_process_groups():
+        assert signals == [(4242, signal.SIGTERM)]
+
+
+@pytest.mark.parametrize("interruption", [subprocess.TimeoutExpired(["hook"], 3), KeyboardInterrupt()])
+def test_cleanup_kills_remaining_group_after_parent_exits(tmp_path, monkeypatch, interruption):
+    proc = ScriptedProc(4242, [interruption, -15, -15])
+    _patch_popen(monkeypatch, proc)
+    signals = _patch_killpg(monkeypatch, group_survives=True)
+    monkeypatch.setattr(runner, "PROCESS_GROUP_TERMINATE_GRACE_SECONDS", 0)
+
+    with pytest.raises(type(interruption)):
+        runner.run_managed_subprocess(["hook"], cwd=tmp_path, timeout=3)
+
+    assert signals == [(4242, signal.SIGTERM), (4242, signal.SIGKILL)]
+    assert proc.wait_calls == [3, 0, 0]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process groups are required")
+def test_managed_timeout_kills_child_ignoring_term_after_parent_exits(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "PROCESS_GROUP_TERMINATE_GRACE_SECONDS", 0.2)
+    child_script = tmp_path / "child.py"
+    child_script.write_text(
+        "import os, signal, time\n"
+        "from pathlib import Path\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "Path('child.pid').write_text(str(os.getpid()))\n"
+        "time.sleep(60)\n"
+    )
+    parent_script = tmp_path / "parent.py"
+    parent_script.write_text(
+        "import os, subprocess, sys, time\n"
+        "from pathlib import Path\n"
+        "Path('parent.pid').write_text(str(os.getpid()))\n"
+        "subprocess.Popen([sys.executable, 'child.py'])\n"
+        "time.sleep(60)\n"
+    )
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            runner.run_managed_subprocess([sys.executable, str(parent_script)], cwd=tmp_path, timeout=2)
+        child_pid = int((tmp_path / "child.pid").read_text())
+        deadline = time.monotonic() + 3
+        while True:
+            # An orphan may briefly remain a zombie until the OS reaps it.
+            state = subprocess.run(
+                ["ps", "-o", "stat=", "-p", str(child_pid)], capture_output=True, text=True, check=False
+            ).stdout.strip()
+            if not state or state.startswith("Z"):
+                break
+            assert time.monotonic() < deadline, "Child survived managed timeout"
+            time.sleep(0.05)
+    finally:
+        pidfile = tmp_path / "parent.pid"
+        if pidfile.exists():
+            try:
+                os.killpg(int(pidfile.read_text()), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+def test_run_managed_subprocess_timeout_requires_process_groups(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "supports_process_groups", lambda: False)
+    calls = _patch_popen(monkeypatch, ScriptedProc(1, [0]))
+
+    with pytest.raises(RuntimeError, match="POSIX process groups"):
+        runner.run_managed_subprocess(["hook"], cwd=tmp_path, timeout=3)
+    assert calls == []
+
+    # Without a timeout the plain legacy path still works on any platform.
+    assert runner.run_managed_subprocess(["hook"], cwd=tmp_path) == 0
+    assert calls[0][2] == {}
 
     responses = iter([0, 1])
     monkeypatch.setattr(runner, "_run", lambda command, cwd: next(responses))

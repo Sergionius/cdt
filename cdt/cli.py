@@ -342,10 +342,11 @@ def pipeline_inspect(
 @pipeline_app.command(name="plan")
 def pipeline_plan(
     name: str = typer.Argument(..., help="Pipeline name from cdt.yaml"),
+    input: list[str] = typer.Option([], "--input", help="Repeatable pipeline input: --input KEY=VALUE"),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
 ):
     """Show the static execution plan without running steps."""
-    _pipeline_plan(Path.cwd(), name, json_output=json_output)
+    _pipeline_plan(Path.cwd(), name, json_output=json_output, inputs=parse_pipeline_inputs(input) if input else None)
 
 
 @pipeline_app.command(name="validate")
@@ -568,7 +569,7 @@ def _pipeline_plan(cwd: Path, name: str, *, json_output: bool, inputs: dict[str,
             errors.extend(_load_plugins_for_json(config.plugins))
             errors.extend(validate_pipeline(config, name))
             _validate_plan_inputs(config, name, inputs, errors)
-            _echo_json(plan_payload(config, name, errors=errors))
+            _echo_json(plan_payload(config, name, errors=errors, inputs=inputs))
         else:
             _echo_json(_error_payload(name, errors))
         if errors:
@@ -580,7 +581,7 @@ def _pipeline_plan(cwd: Path, name: str, *, json_output: bool, inputs: dict[str,
     load_plugins(config.plugins)
     errors = validate_pipeline(config, name)
     _validate_plan_inputs(config, name, inputs, errors)
-    payload = plan_payload(config, name, errors=errors)
+    payload = plan_payload(config, name, errors=errors, inputs=inputs)
     if name not in config.pipelines:
         available = ", ".join(sorted(config.pipelines)) or "none"
         raise typer.BadParameter(f"Unknown pipeline: {name}. Available pipelines: {available}")
@@ -699,7 +700,9 @@ def _echo_plan_tree(nodes: list[dict], indent: int = 1) -> None:
             typer.echo(f"{prefix}- {node.get('step_id', '?')} {node['type']} [{node['risk']}]")
             _echo_plan_tree(node["steps"], indent + 1)
             continue
-        typer.echo(f"{prefix}- {node.get('step_id', '?')} {node['name']} [{node['risk']}]")
+        typer.echo(f"{prefix}- {node.get('step_id', '?')} {node['name']} [{node['risk']}] {node['decision']}")
+        if node.get("when") is not None:
+            typer.echo(f"{prefix}    when: {json.dumps(node['when'], ensure_ascii=False)}")
         if node["options"]:
             for key, value in node["options"].items():
                 typer.echo(f"{prefix}    {key}: {value}")

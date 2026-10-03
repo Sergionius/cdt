@@ -4,6 +4,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+import typer
 from typer.testing import CliRunner
 
 import cdt.services.appstore as appstore_service
@@ -30,16 +32,158 @@ def _compact_visible_text(output: str) -> str:
     return re.sub(r"\s+", "", visible)
 
 
+def test_resume_explicit_skipped_leaf_recomputes_conditions_from_inputs(tmp_path, monkeypatch):
+    _write_project(
+        tmp_path,
+        "      - parallel:\n          steps:\n            - sequence:\n                steps:\n"
+        "                  - step: demo.touch\n                    with: {output: '${MISSING}'}\n"
+        "                    when: {input: deploy, present: true}\n",
+    )
+    config = tmp_path / "cdt.yaml"
+    config.write_text(config.read_text().replace("    steps:\n", "    inputs: {deploy: {}}\n    steps:\n", 1))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    prior = tmp_path / "prior.json"
+    output = tmp_path / "out.json"
+    # A legacy status has no condition fields; stale saved decisions are also ignored.
+    for extra in ({}, {"step_decisions": {"0/0/0": "run"}, "skipped_steps": []}):
+        prior.write_text(json.dumps({"completed_steps": [], "artifacts": [], **extra}))
+        result = runner.invoke(
+            app,
+            ["run", "demo", "--resume-from", "0/0/0", "--resume-status-file", str(prior), "--status-file", str(output)],
+        )
+        assert result.exit_code == 0, result.output
+        status = json.loads(output.read_text())
+        assert status["skipped_steps"] == ["0/0/0"]
+        assert status["completed_steps"] == []
+        assert status["step_decisions"]["0/0/0"] == "skip"
+    mismatch = runner.invoke(
+        app, ["run", "demo", "--skip-completed", "--input", "deploy=yes", "--resume-status-file", str(prior)]
+    )
+    assert mismatch.exit_code != 0
+    assert "Resumeinputsdonotmatch" in _compact_visible_text(mismatch.output)
+
+
+def _write_retry_project(tmp_path) -> None:
+    # Re-import the plugin module fresh: a previous test may have imported a
+    # same-named module from another tmp directory, which would skip decorator
+    # registration and break the run.
+    for module_name in ("cdt_steps", "cdt_steps.flaky"):
+        sys.modules.pop(module_name, None)
+    package = tmp_path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "flaky.py").write_text(
+        "\n".join(
+            [
+                "from cdt.sdk import RetryableStepError, step",
+                "",
+                "@step('demo.flaky', retry_safe=True)",
+                "def flaky(ctx):",
+                "    runs = ctx.cwd / 'flaky-runs.txt'",
+                "    value = int(runs.read_text(encoding='utf-8')) if runs.exists() else 0",
+                "    runs.write_text(str(value + 1), encoding='utf-8')",
+                "    threshold = int((ctx.cwd / 'fail-times.txt').read_text(encoding='utf-8'))",
+                "    if value <= threshold:",
+                "        raise RetryableStepError(f'transient failure {value}')",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\nplugins:\n  - cdt_steps.flaky\npipelines:\n  demo:\n    steps:\n"
+        "      - step: demo.flaky\n        retry: {max_attempts: 2, delay_seconds: 0}\n",
+        encoding="utf-8",
+    )
+
+
+def test_resume_of_unfinished_retry_step_starts_new_bounded_cycle(tmp_path, monkeypatch):
+    _write_retry_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    (tmp_path / "fail-times.txt").write_text("99", encoding="utf-8")
+    first_status = tmp_path / "first.json"
+
+    first = runner.invoke(app, ["run", "demo", "--status-file", str(first_status)])
+
+    assert first.exit_code != 0
+    payload = json.loads(first_status.read_text(encoding="utf-8"))
+    assert payload["status"] == "failed"
+    assert payload["step_attempts"]["0"]["attempts"] == 2
+    assert (tmp_path / "flaky-runs.txt").read_text(encoding="utf-8") == "2"
+
+    # The step now succeeds on its first attempt: resume starts a fresh,
+    # bounded attempt cycle instead of restoring the exhausted budget.
+    (tmp_path / "fail-times.txt").write_text("0", encoding="utf-8")
+    second_status = tmp_path / "second.json"
+    second = runner.invoke(
+        app,
+        [
+            "run",
+            "demo",
+            "--resume-status-file",
+            str(first_status),
+            "--status-file",
+            str(second_status),
+            "--resume-from",
+            "demo.flaky",
+        ],
+    )
+
+    assert second.exit_code == 0, second.output
+    resumed = json.loads(second_status.read_text(encoding="utf-8"))
+    assert resumed["status"] == "success"
+    assert resumed["completed_steps"] == ["0"]
+    assert resumed["step_attempts"] == {}
+    assert (tmp_path / "flaky-runs.txt").read_text(encoding="utf-8") == "3"
+
+
+def test_resume_skips_completed_retry_step_without_new_attempts(tmp_path, monkeypatch):
+    _write_retry_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    (tmp_path / "fail-times.txt").write_text("0", encoding="utf-8")
+    first_status = tmp_path / "first.json"
+
+    first = runner.invoke(app, ["run", "demo", "--status-file", str(first_status)])
+
+    assert first.exit_code == 0, first.output
+    assert (tmp_path / "flaky-runs.txt").read_text(encoding="utf-8") == "2"
+
+    second_status = tmp_path / "second.json"
+    second = runner.invoke(
+        app,
+        [
+            "run",
+            "demo",
+            "--resume-status-file",
+            str(first_status),
+            "--status-file",
+            str(second_status),
+            "--skip-completed",
+        ],
+    )
+
+    assert second.exit_code == 0, second.output
+    resumed = json.loads(second_status.read_text(encoding="utf-8"))
+    assert resumed["status"] == "success"
+    assert resumed["completed_steps"] == ["0"]
+    assert resumed["step_attempts"] == {}
+    # The completed leaf is never re-executed, so no side effect repeats.
+    assert (tmp_path / "flaky-runs.txt").read_text(encoding="utf-8") == "2"
+
+
 def setup_function():
     _clear_steps_for_tests()
-    for module in ("cdt_steps.resume", "cdt_steps.play", "cdt_steps.notify"):
+    for module in ("cdt_steps.resume", "cdt_steps.resume_hook", "cdt_steps.play", "cdt_steps.notify"):
         sys.modules.pop(module, None)
     sys.modules.pop("cdt_steps", None)
 
 
 def teardown_function():
     _clear_steps_for_tests()
-    for module in ("cdt_steps.resume", "cdt_steps.play", "cdt_steps.notify"):
+    for module in ("cdt_steps.resume", "cdt_steps.resume_hook", "cdt_steps.play", "cdt_steps.notify"):
         sys.modules.pop(module, None)
     sys.modules.pop("cdt_steps", None)
 
@@ -185,7 +329,8 @@ def test_resume_from_parallel_child_step_id_runs_only_selected_branch(tmp_path, 
         ["run", "demo", "--resume-status-file", str(status), "--resume-from", "0/1"],
     )
 
-    assert result.exit_code == 0, result.output
+    assert result.exit_code != 0, result.output
+    assert "Complete remaining branches" in result.output
     assert not (tmp_path / "skipped.txt").exists()
     assert (tmp_path / "selected.txt").exists()
 
@@ -216,10 +361,231 @@ def test_resume_from_nested_sequence_step_skips_prior_step_and_sibling_branch(tm
         ["run", "demo", "--resume-status-file", str(status), "--resume-from", "0/1/1"],
     )
 
-    assert result.exit_code == 0, result.output
+    assert result.exit_code != 0, result.output
+    assert "Complete remaining branches" in result.output
     assert not (tmp_path / "ios.txt").exists()
     assert not (tmp_path / "aab.txt").exists()
     assert (tmp_path / "apk.txt").exists()
+
+
+def test_parallel_values_resume_restores_leaf_checkpoints_without_sibling_leaks(tmp_path):
+    from cdt.pipeline import ParallelStepGroup, PipelineContext, PipelineExecutor, SequentialStepGroup
+    from cdt.pipeline.runner import _restore_resume_status
+    from cdt.runner import CommandRunner
+    from tests.test_pipeline_executor import CallbackStep
+
+    calls = []
+    fail = True
+    status = tmp_path / "state.json"
+
+    def produce(ctx):
+        calls.append("produce")
+        ctx.values["local"] = "preserved"
+
+    def consume(ctx):
+        assert ctx.values["local"] == "preserved"
+        assert "sibling" not in ctx.values
+        if fail:
+            ctx.values["failed-write"] = "discard"
+            raise typer.BadParameter("offline")
+        assert "failed-write" not in ctx.values
+        ctx.values["done"] = "yes"
+
+    def sibling(ctx):
+        calls.append("sibling")
+        assert "local" not in ctx.values
+        ctx.values["sibling"] = "yes"
+
+    steps = [
+        ParallelStepGroup(
+            [
+                SequentialStepGroup([CallbackStep("0/0/0", produce), CallbackStep("0/0/1", consume)], "0/0"),
+                CallbackStep("0/1", sibling),
+            ],
+            "0",
+        )
+    ]
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner(), status_file=status)
+    with pytest.raises(typer.BadParameter, match="offline"):
+        PipelineExecutor().run(steps, ctx)
+    assert ctx.values == {}
+    saved = json.loads(status.read_text())
+    assert saved["values_state"]["groups"]["0"]["branches"]["0/0"] == {"local": "preserved"}
+    fail = False
+    restored = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner(), skip_completed=True, status_file=status)
+    _restore_resume_status(restored, status)
+    PipelineExecutor().run(steps, restored)
+    assert restored.values == {"local": "preserved", "done": "yes", "sibling": "yes"}
+    assert calls == ["produce", "sibling"] or calls == ["sibling", "produce"]
+    assert json.loads(status.read_text())["values_state"]["groups"] == {}
+
+
+def test_resume_preserves_branch_values_and_does_not_resend_completed_webhook(tmp_path, monkeypatch):
+    """Resume skips completed leaves: the webhook is not sent twice and the
+    completed sibling leaf keeps its branch state for the next leaf."""
+
+    from cdt.services import webhook as webhook_module
+
+    package = tmp_path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "resume_hook.py").write_text(
+        "\n".join(
+            [
+                "from cdt.sdk import step",
+                "",
+                "@step('demo.produce')",
+                "def produce(ctx):",
+                "    ctx.values['branch'] = 'kept'",
+                "    log = ctx.cwd / 'produce-log.txt'",
+                "    prior = log.read_text(encoding='utf-8') if log.exists() else ''",
+                "    log.write_text(prior + 'ran\\n', encoding='utf-8')",
+                "",
+                "@step('demo.consume')",
+                "def consume(ctx):",
+                "    assert ctx.values.get('branch') == 'kept', 'completed leaf lost its branch values'",
+                "    if not (ctx.cwd / 'allow-resume').exists():",
+                "        raise RuntimeError('planned first-run failure')",
+                "",
+                "@step('demo.after')",
+                "def after(ctx):",
+                "    assert ctx.values.get('branch') == 'kept', 'merged branch values were lost'",
+                "    (ctx.cwd / 'after-log.txt').write_text('ran', encoding='utf-8')",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "plugins:",
+                "  - cdt_steps.resume_hook",
+                "pipelines:",
+                "  demo:",
+                "    steps:",
+                "      - parallel:",
+                "          steps:",
+                "            - sequence:",
+                "                steps:",
+                "                  - demo.produce",
+                "                  - demo.consume",
+                "            - step: notify.webhook",
+                "              with:",
+                "                url_env: WEBHOOK_URL",
+                "                payload:",
+                "                  text: released-1.0",
+                "      - demo.after",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    sent = []
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_open(request, timeout):
+        sent.append(request)
+        return FakeResponse()
+
+    monkeypatch.setattr(webhook_module, "_open_webhook_response", fake_open)
+    monkeypatch.setenv("WEBHOOK_URL", "https://hooks.example/abc123")
+
+    status_file = tmp_path / "resume.json"
+    first = runner.invoke(app, ["run", "demo", "--status-file", str(status_file)])
+    assert first.exit_code != 0
+    assert len(sent) == 1
+    assert (tmp_path / "produce-log.txt").read_text(encoding="utf-8") == "ran\n"
+    saved = json.loads(status_file.read_text(encoding="utf-8"))
+    assert saved["values_state"]["groups"]["0"]["branches"]["0/0"] == {"branch": "kept"}
+
+    (tmp_path / "allow-resume").write_text("go", encoding="utf-8")
+    second = runner.invoke(app, ["run", "demo", "--resume-status-file", str(status_file), "--skip-completed"])
+
+    assert second.exit_code == 0, second.output
+    assert len(sent) == 1, "completed webhook leaf must not be sent again"
+    assert (tmp_path / "produce-log.txt").read_text(encoding="utf-8") == "ran\n"
+    assert (tmp_path / "after-log.txt").exists()
+
+
+def test_partial_resume_keeps_unfinished_delta_private_until_remaining_branches_finish(tmp_path):
+    from cdt.pipeline import ParallelStepGroup, PipelineContext, PipelineExecutor, SequentialStepGroup
+    from cdt.pipeline.runner import _restore_resume_status
+    from cdt.runner import CommandRunner
+    from tests.test_pipeline_executor import CallbackStep
+
+    status = tmp_path / "state.json"
+    calls = []
+    fail = True
+
+    def first(ctx):
+        calls.append("first")
+        ctx.values["unfinished"] = "private"
+
+    def last(ctx):
+        assert ctx.values["unfinished"] == "private"
+        assert "selected" not in ctx.values
+        if fail:
+            raise typer.BadParameter("offline")
+        calls.append("last")
+
+    def selected(ctx):
+        assert "unfinished" not in ctx.values
+        calls.append("selected")
+        ctx.values["selected"] = "yes"
+
+    steps = [
+        ParallelStepGroup(
+            [
+                SequentialStepGroup([CallbackStep("0/0/0", first), CallbackStep("0/0/1", last)], "0/0"),
+                CallbackStep("0/1", selected),
+            ],
+            "0",
+        )
+    ]
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner(), status_file=status)
+    with pytest.raises(typer.BadParameter, match="offline"):
+        PipelineExecutor().run(steps, ctx)
+
+    resumed = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner(), status_file=status, skip_completed=True)
+    _restore_resume_status(resumed, status)
+    with pytest.raises(typer.BadParameter, match="Complete remaining branches"):
+        PipelineExecutor().run(steps, resumed, resume_from="0/1")
+    assert resumed.values == {}
+    assert "0" not in resumed.completed_steps
+    assert json.loads(status.read_text())["values_state"]["groups"]["0"]["branches"]["0/0"] == {"unfinished": "private"}
+    fail = False
+    final = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner(), status_file=status, skip_completed=True)
+    _restore_resume_status(final, status)
+    PipelineExecutor().run(steps, final)
+    assert final.values == {"unfinished": "private", "selected": "yes"}
+    assert sorted(calls) == ["first", "last", "selected"]
+
+
+def test_legacy_partial_parallel_resume_is_rejected_before_any_step(tmp_path):
+    from cdt.pipeline import ParallelStepGroup, PipelineContext, PipelineExecutor
+    from cdt.runner import CommandRunner
+    from tests.test_pipeline_executor import CallbackStep
+
+    calls = []
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner(), completed_steps=["1/0"], skip_completed=True)
+    steps = [
+        CallbackStep("0", lambda ctx: calls.append("ran")),
+        ParallelStepGroup([CallbackStep("1/0", lambda ctx: None)], "1"),
+    ]
+    with pytest.raises(typer.BadParameter, match="missing values checkpoint"):
+        PipelineExecutor().run(steps, ctx)
+    assert calls == []
 
 
 def test_resume_requires_resume_status_file_even_with_status_file(tmp_path, monkeypatch):
@@ -557,11 +923,7 @@ def _submit_attempt_counts(calls: list[dict]) -> tuple[int, int, int]:
 
     creations = [c for c in calls if c["method"] == "POST" and c["path"] == "/v1/reviewSubmissions"]
     items = [c for c in calls if c["path"] == "/v1/reviewSubmissionItems"]
-    submits = [
-        c
-        for c in calls
-        if c["method"] == "PATCH" and re.fullmatch(r"/v1/reviewSubmissions/rs-\d+", c["path"])
-    ]
+    submits = [c for c in calls if c["method"] == "PATCH" and re.fullmatch(r"/v1/reviewSubmissions/rs-\d+", c["path"])]
     return len(creations), len(items), len(submits)
 
 
@@ -851,9 +1213,7 @@ def test_google_play_resume_skips_completed_step_and_continues_from_checkpoint(t
     assert "commit: confirmed" in resumed.output
 
 
-def test_fresh_rerun_without_resume_continues_unfinished_operation_instead_of_bypassing(
-    tmp_path, monkeypatch
-):
+def test_fresh_rerun_without_resume_continues_unfinished_operation_instead_of_bypassing(tmp_path, monkeypatch):
     _write_play_project(tmp_path)
     monkeypatch.chdir(tmp_path)
     monkeypatch.syspath_prepend(str(tmp_path))

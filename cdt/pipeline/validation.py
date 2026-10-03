@@ -1,11 +1,70 @@
 from __future__ import annotations
 
 import inspect
+import os
 from difflib import get_close_matches
 from typing import Any
 
-from .config import ParallelSpec, PipelineConfig, PipelineItemSpec, PipelineSpec, SequenceSpec, StepSpec
+from ..runner import supports_process_groups
+from .config import (
+    ParallelSpec,
+    PipelineConfig,
+    PipelineItemSpec,
+    PipelineSpec,
+    SequenceSpec,
+    StepSpec,
+    validate_condition,
+)
 from .registry import get_step_factory, get_step_metadata, list_step_metadata, list_steps
+
+
+# Retries beyond a single attempt are an explicit capability declared by the
+# step author (StepMetadata.retry_safe); risk labels never imply it.
+def _retry_capability_error(step_name: str, path: str) -> dict[str, str]:
+    return {
+        "code": "retry_requires_capability",
+        "message": (
+            f"Step {step_name} is not declared retry_safe; retry.max_attempts > 1 "
+            "requires an explicit retry-safe step and cannot be inferred from risk."
+        ),
+        "path": f"{path}.retry",
+    }
+
+
+# The envelope timeout is an explicit capability naming an existing native
+# constructor parameter (StepMetadata.timeout_option); it is never inferred.
+def _timeout_capability_error(step_name: str, path: str) -> dict[str, str]:
+    return {
+        "code": "timeout_requires_capability",
+        "message": (
+            f"Step {step_name} does not declare a native timeout parameter "
+            "(timeout_option); timeout_seconds requires an explicit step capability."
+        ),
+        "path": f"{path}.timeout_seconds",
+    }
+
+
+def _timeout_ambiguity_error(step_name: str, path: str, option: str) -> dict[str, str]:
+    return {
+        "code": "ambiguous_step_timeout",
+        "message": (
+            f"Step {step_name} received both timeout_seconds and with.{option}; "
+            "remove one to make the timeout unambiguous."
+        ),
+        "path": f"{path}.timeout_seconds",
+    }
+
+
+def _timeout_platform_error(step_name: str, path: str) -> dict[str, str]:
+    return {
+        "code": "timeout_unsupported_platform",
+        "message": (
+            f"Step {step_name} declares timeout_seconds, but this platform ({os.name}) has no POSIX "
+            "process groups; CDT rejects the envelope timeout instead of promising a process-tree "
+            "guarantee it cannot keep."
+        ),
+        "path": f"{path}.timeout_seconds",
+    }
 
 
 def pipeline_names(config: PipelineConfig) -> list[str]:
@@ -45,8 +104,7 @@ def _production_risk_error(step_name: str, pipeline_risk: str, path: str, reason
     return {
         "code": "production_risk_required",
         "message": (
-            f"Step {step_name} {reason} and requires pipeline risk: production "
-            f"(declared risk: {pipeline_risk!r})."
+            f"Step {step_name} {reason} and requires pipeline risk: production (declared risk: {pipeline_risk!r})."
         ),
         "path": path,
     }
@@ -56,9 +114,17 @@ def _appstore_review_risk_error(step_name: str, pipeline_risk: str, path: str) -
     return _production_risk_error(step_name, pipeline_risk, path, "submits an app for App Store review")
 
 
+def _appstore_metadata_risk_error(step_name: str, pipeline_risk: str, path: str) -> dict[str, str]:
+    return _production_risk_error(step_name, pipeline_risk, path, "updates localized App Store metadata texts")
+
+
 # Submitting a version for App Store review is a production action on its own;
 # plain TestFlight upload/completion steps stay usable under any declared risk.
+# Mutating localized App Store metadata texts of a real version is equally
+# production-only. Both requirements are validated recursively through
+# sequence/parallel groups and apply to conditionally skipped steps as well.
 _APPSTORE_REVIEW_STEPS = frozenset({"appstore.submit_review"})
+_APPSTORE_METADATA_STEPS = frozenset({"appstore.update_metadata"})
 
 
 def declared_inputs_payload(pipeline: PipelineSpec | None) -> dict[str, dict[str, Any]]:
@@ -122,18 +188,24 @@ def _validate_steps(pipeline: PipelineSpec) -> list[dict[str, str]]:
     errors: list[dict[str, str]] = []
     for index, item in enumerate(pipeline.steps):
         path = f"pipelines.{pipeline.name}.steps[{index}]"
-        errors.extend(_validate_item(item, path, pipeline.risk))
+        errors.extend(_validate_item(item, path, pipeline))
     return errors
 
 
-def _validate_item(item: PipelineItemSpec, path: str, pipeline_risk: str) -> list[dict[str, str]]:
+def _validate_item(item: PipelineItemSpec, path: str, pipeline: PipelineSpec) -> list[dict[str, str]]:
     if isinstance(item, (ParallelSpec, SequenceSpec)):
         group_name = "parallel" if isinstance(item, ParallelSpec) else "sequence"
         errors: list[dict[str, str]] = []
         for child_index, child in enumerate(item.steps):
-            errors.extend(_validate_item(child, f"{path}.{group_name}.steps[{child_index}]", pipeline_risk))
+            errors.extend(_validate_item(child, f"{path}.{group_name}.steps[{child_index}]", pipeline))
         return errors
-    return _validate_step(item, path, pipeline_risk)
+    errors = _validate_step(item, path, pipeline.risk)
+    if item.when is not None:
+        try:
+            validate_condition(item.when, pipeline.inputs)
+        except Exception as exc:
+            errors.append({"code": "invalid_condition", "message": str(exc), "path": f"{path}.when"})
+    return errors
 
 
 def _validate_step(step: StepSpec, path: str, pipeline_risk: str) -> list[dict[str, str]]:
@@ -152,6 +224,18 @@ def _validate_step(step: StepSpec, path: str, pipeline_risk: str) -> list[dict[s
             errors.append(_google_play_risk_error(step.name, pipeline_risk, path))
         if step.name in _APPSTORE_REVIEW_STEPS:
             errors.append(_appstore_review_risk_error(step.name, pipeline_risk, path))
+        if step.name in _APPSTORE_METADATA_STEPS:
+            errors.append(_appstore_metadata_risk_error(step.name, pipeline_risk, path))
+    if step.retry is not None and step.retry.max_attempts > 1 and not metadata.retry_safe:
+        errors.append(_retry_capability_error(step.name, path))
+    if step.timeout_seconds is not None:
+        if not metadata.timeout_option:
+            errors.append(_timeout_capability_error(step.name, path))
+        else:
+            if metadata.timeout_option in step.options:
+                errors.append(_timeout_ambiguity_error(step.name, path, metadata.timeout_option))
+            if not supports_process_groups():
+                errors.append(_timeout_platform_error(step.name, path))
     errors.extend(_validate_step_options(step, factory, path))
     return errors
 
@@ -196,4 +280,7 @@ def _step_node(item: PipelineItemSpec, step_id: str) -> dict[str, Any]:
         "step_id": step_id,
         "name": item.name,
         "options": item.options,
+        **({"when": item.when} if item.when is not None else {}),
+        **({"retry": item.retry.to_dict()} if item.retry is not None else {}),
+        **({"timeout_seconds": item.timeout_seconds} if item.timeout_seconds is not None else {}),
     }

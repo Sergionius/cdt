@@ -16,7 +16,9 @@ import cdt.steps.google_play as google_play_step
 from cdt.agent_release import release_status, stop_release
 from cdt.cli import app
 from cdt.pipeline.builtins import register_builtin_steps
+from cdt.pipeline.config import load_pipeline_config, load_plugins
 from cdt.pipeline.registry import _clear_steps_for_tests, list_step_metadata
+from cdt.pipeline.validation import validate_pipeline
 from cdt.runs import create_run, list_runs, read_json, run_paths, write_exit_code
 from cdt.schema import bundled_schema_path, schema_payload
 from cdt.services.appstore_state import load_upload_record, save_upload_record
@@ -28,18 +30,161 @@ ROOT = Path(__file__).resolve().parents[1]
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 
 
+def test_skipped_production_leaf_keeps_risk_validation_and_confirmation(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    config = tmp_path / "cdt.yaml"
+    text = (
+        "version: 1\npipelines:\n  demo:\n    inputs: {deploy: {}}\n    steps:\n"
+        "      - parallel:\n          steps:\n            - sequence:\n                steps:\n"
+        "                  - step: appstore.submit_review\n"
+        "                    when: {input: deploy, present: true}\n"
+    )
+    config.write_text(text)
+    invalid = runner.invoke(app, ["pipeline", "plan", "demo", "--json", "--input", "deploy="])
+    assert invalid.exit_code != 0
+    assert any(e["code"] == "production_risk_required" for e in json.loads(invalid.output)["errors"])
+    config.write_text(text.replace("    inputs:", "    risk: production\n    inputs:"))
+    rejected = runner.invoke(app, ["run", "demo", "--confirm", "wrong"])
+    assert rejected.exit_code != 0
+    assert not (tmp_path / ".cdt").exists()
+    accepted = runner.invoke(app, ["run", "demo", "--confirm", "demo"])
+    assert accepted.exit_code == 0, accepted.output
+
+
+def test_extended_schema_is_unambiguous_and_bundled():
+    schema = schema_payload()
+    assert json.loads(bundled_schema_path().read_text()) == schema
+    extended = schema["$defs"]["extendedStep"]
+    assert extended["required"] == ["step"]
+    assert not extended["additionalProperties"]
+    assert extended["properties"]["retry"] == {"$ref": "#/$defs/retryPolicy"}
+    assert extended["properties"]["timeout_seconds"] == {"$ref": "#/$defs/timeoutSeconds"}
+    timeout = schema["$defs"]["timeoutSeconds"]
+    assert timeout == {"type": "number", "exclusiveMinimum": 0}
+    retry = schema["$defs"]["retryPolicy"]
+    assert retry["additionalProperties"] is False
+    assert retry["properties"]["max_attempts"] == {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 5,
+        "default": 1,
+    }
+    assert retry["properties"]["delay_seconds"] == {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 60,
+        "default": 0,
+    }
+    plugin = next(item for item in schema["$defs"]["step"]["oneOf"] if item.get("description") == "Project plugin step")
+    assert re.fullmatch(plugin["propertyNames"]["pattern"], "step") is None
+    assert re.fullmatch(plugin["propertyNames"]["pattern"], "retry") is None
+    assert schema["$defs"]["condition"]["oneOf"] == [
+        {"required": ["equals"]},
+        {"required": ["not_equals"]},
+        {"required": ["present"]},
+    ]
+
+
+def test_builtin_steps_do_not_declare_automatic_retries():
+    from cdt.pipeline.builtins import _BUILTIN_METADATA
+
+    retriable = [name for name, metadata in _BUILTIN_METADATA.items() if metadata.retry_safe]
+    assert retriable == []
+
+
+def test_plan_and_inspect_expose_timeout_capability(tmp_path, monkeypatch):
+    register_builtin_steps()
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  test:\n    steps:\n"
+        "      - step: hook.python_script\n        with: {script: hooks/x.py}\n        timeout_seconds: 12\n"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    plan = json.loads(runner.invoke(app, ["pipeline", "plan", "test", "--json"]).output)
+    node = plan["steps"][0]
+    assert node["timeout_seconds"] == 12
+    assert node["metadata"]["timeout_option"] == "timeout"
+
+    inspect = json.loads(runner.invoke(app, ["pipeline", "inspect", "test", "--json"]).output)
+    assert inspect["steps"][0]["timeout_seconds"] == 12
+
+
+def test_plan_flags_timeout_without_capability(tmp_path, monkeypatch):
+    register_builtin_steps()
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  test:\n    steps:\n      - step: flutter.pub_get\n        timeout_seconds: 30\n"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["pipeline", "plan", "test", "--json"])
+
+    assert result.exit_code != 0
+    payload = json.loads(result.output)
+    assert payload["errors"][0]["code"] == "timeout_requires_capability"
+
+
+def test_plan_and_inspect_expose_retry_policy_and_capability(tmp_path, monkeypatch):
+    package = tmp_path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "demo.py").write_text(
+        "from cdt.sdk import step\n\n@step('demo.flaky', retry_safe=True)\ndef flaky(ctx):\n    pass\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\nplugins:\n  - cdt_steps.demo\npipelines:\n  test:\n    steps:\n"
+        "      - step: demo.flaky\n        retry: {max_attempts: 3, delay_seconds: 2}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    plan = json.loads(runner.invoke(app, ["pipeline", "plan", "test", "--json"]).output)
+    node = plan["steps"][0]
+    assert node["retry"] == {"max_attempts": 3, "delay_seconds": 2}
+    assert node["metadata"]["retry_safe"] is True
+
+    inspect = json.loads(runner.invoke(app, ["pipeline", "inspect", "test", "--json"]).output)
+    assert inspect["steps"][0]["retry"] == {"max_attempts": 3, "delay_seconds": 2}
+
+
+def test_plan_flags_retry_without_capability(tmp_path, monkeypatch):
+    package = tmp_path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "demo.py").write_text(
+        "from cdt.sdk import step\n\n@step('demo.risky')\ndef risky(ctx):\n    pass\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\nplugins:\n  - cdt_steps.demo\npipelines:\n  test:\n    steps:\n"
+        "      - step: demo.risky\n        retry: {max_attempts: 2}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    result = runner.invoke(app, ["pipeline", "plan", "test", "--json"])
+
+    assert result.exit_code != 0
+    payload = json.loads(result.output)
+    assert payload["errors"][0]["code"] == "retry_requires_capability"
+
+
 def setup_function():
     _clear_steps_for_tests()
-    sys.modules.pop("cdt_steps.demo", None)
-    sys.modules.pop("cdt_steps.play", None)
+    for module in ("cdt_steps.demo", "cdt_steps.play", "cdt_steps.offline", "mix_steps.demo"):
+        sys.modules.pop(module, None)
     sys.modules.pop("cdt_steps", None)
+    sys.modules.pop("mix_steps", None)
 
 
 def teardown_function():
     _clear_steps_for_tests()
-    sys.modules.pop("cdt_steps.demo", None)
-    sys.modules.pop("cdt_steps.play", None)
+    for module in ("cdt_steps.demo", "cdt_steps.play", "cdt_steps.offline", "mix_steps.demo"):
+        sys.modules.pop(module, None)
     sys.modules.pop("cdt_steps", None)
+    sys.modules.pop("mix_steps", None)
 
 
 def _write_project(path: Path, *, risk: str = "standard") -> None:
@@ -265,9 +410,7 @@ def test_detached_play_start_without_exact_confirmation_requests_it_before_any_r
     assert not (tmp_path / ".cdt" / "google-play").exists()
 
 
-def test_detached_play_start_with_exact_confirmation_runs_the_step_offline_of_credentials(
-    tmp_path, monkeypatch
-):
+def test_detached_play_start_with_exact_confirmation_runs_the_step_offline_of_credentials(tmp_path, monkeypatch):
     _write_play_project(tmp_path)
     monkeypatch.chdir(tmp_path)
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -311,7 +454,7 @@ def _write_submit_project(path: Path) -> None:
                 "    steps:",
                 "      - appstore.submit_review:",
                 "          whats_new:",
-                "            ru: \"${inputs.whats_new}\"",
+                '            ru: "${inputs.whats_new}"',
                 "          release_mode: manual",
                 "          phased_release: true",
             ]
@@ -604,6 +747,31 @@ def test_schema_exposes_github_wait_release_step_options():
     assert wait_metadata.risk == "safe"
 
 
+def test_schema_exposes_notify_webhook_step_options_and_metadata():
+    register_builtin_steps()
+    payload = schema_payload()
+    step_schemas = [obj for obj in payload["$defs"]["step"]["oneOf"] if isinstance(obj, dict) and obj.get("properties")]
+    options_by_name = {next(iter(obj["properties"])): next(iter(obj["properties"].values())) for obj in step_schemas}
+
+    webhook_options = options_by_name["notify.webhook"]
+    assert webhook_options["required"] == ["url_env", "payload"]
+    assert sorted(webhook_options["properties"]) == [
+        "authorization_env",
+        "fail_on_error",
+        "payload",
+        "timeout_seconds",
+        "url_env",
+    ]
+    assert webhook_options["properties"]["fail_on_error"] == {"type": "boolean"}
+    assert webhook_options["properties"]["timeout_seconds"] == {"type": "number"}
+    assert webhook_options["properties"]["payload"]["type"] == "object"
+
+    webhook_metadata = next(metadata for metadata in list_step_metadata() if metadata.name == "notify.webhook")
+    assert webhook_metadata.retry_safe is False
+    assert webhook_metadata.timeout_option == "timeout_seconds"
+    assert webhook_metadata.risk == "upload"
+
+
 def test_schema_exposes_google_play_upload_aab_required_options():
     payload = schema_payload()
     step_schemas = [obj for obj in payload["$defs"]["step"]["oneOf"] if isinstance(obj, dict) and obj.get("properties")]
@@ -641,6 +809,201 @@ def test_schema_exposes_appstore_submit_review_required_options():
     serialized = json.dumps(payload)
     assert "appstore.submit_review" in serialized
     assert payload == json.loads(bundled_schema_path().read_text(encoding="utf-8"))
+
+
+def test_schema_exposes_appstore_update_metadata_required_options():
+    register_builtin_steps()
+    payload = schema_payload()
+    step_schemas = [obj for obj in payload["$defs"]["step"]["oneOf"] if isinstance(obj, dict) and obj.get("properties")]
+    options_by_name = {next(iter(obj["properties"])): next(iter(obj["properties"].values())) for obj in step_schemas}
+
+    metadata_options = options_by_name["appstore.update_metadata"]
+    assert metadata_options["required"] == ["version", "localizations"]
+    assert sorted(metadata_options["properties"]) == ["localizations", "version"]
+    assert metadata_options["properties"]["version"] == {"type": "string"}
+    assert metadata_options["properties"]["localizations"] == {
+        "type": "object",
+        "additionalProperties": {"type": "object", "additionalProperties": {"type": "string"}},
+    }
+    metadata = next(m for m in list_step_metadata() if m.name == "appstore.update_metadata")
+    # No automatic retries and no envelope timeout capability: ASC keeps its own
+    # request retry settings.
+    assert metadata.retry_safe is False
+    assert metadata.timeout_option is None
+    assert metadata.risk == "upload"
+    serialized = json.dumps(payload)
+    assert "appstore.update_metadata" in serialized
+    assert payload == json.loads(bundled_schema_path().read_text(encoding="utf-8"))
+
+
+def _write_metadata_project(path: Path) -> None:
+    """Production metadata update nested in parallel and guarded by an input condition."""
+
+    (path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  meta:",
+                "    inputs:",
+                "      update:",
+                "        required: false",
+                "    steps:",
+                "      - parallel:",
+                "          steps:",
+                "            - sequence:",
+                "                steps:",
+                "                  - step: appstore.update_metadata",
+                "                    with:",
+                '                      version: "1.2.3"',
+                "                      localizations:",
+                "                        ru:",
+                "                          whats_new: Исправления и улучшения",
+                "                    when:",
+                "                      input: update",
+                '                      equals: "yes"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (path / ".env").write_text("IOS_BUNDLE_ID=com.example.app\n", encoding="utf-8")
+
+
+def test_metadata_step_confirmation_survives_condition_nesting_and_detached_start(tmp_path, monkeypatch):
+    """A conditionally skipped nested metadata leaf still needs production risk,
+    the exact confirmation, and it cannot be reached around it via detached start."""
+
+    _write_metadata_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    def fail(method, path, client, payload=None, retry_ambiguous=True):
+        raise AssertionError("Apple must not be contacted before the exact production confirmation")
+
+    monkeypatch.setattr(appstore_service, "_asc_request", fail)
+
+    # Nested sequence inside parallel plus a condition: still a production step.
+    planned = runner.invoke(app, ["pipeline", "plan", "meta", "--json"])
+    assert planned.exit_code != 0
+    errors = json.loads(planned.output)["errors"]
+    assert any(e["code"] == "production_risk_required" for e in errors)
+
+    # Even an explicitly skipped decision never bypasses the risk requirement.
+    skipped = runner.invoke(app, ["pipeline", "plan", "meta", "--json", "--input", "update="])
+    assert skipped.exit_code != 0
+    assert any(e["code"] == "production_risk_required" for e in json.loads(skipped.output)["errors"])
+
+    wrong = runner.invoke(app, ["run", "meta", "--confirm", "wrong"])
+    assert wrong.exit_code != 0
+    assert not (tmp_path / ".cdt" / "runs").exists()
+
+    # With the declared production risk, detached start demands the exact
+    # confirmation before it creates any run record.
+    config = tmp_path / "cdt.yaml"
+    config.write_text(
+        config.read_text(encoding="utf-8").replace("  meta:\n", "  meta:\n    risk: production\n", 1),
+        encoding="utf-8",
+    )
+    for command in (
+        ["agent-release", "start", "meta", "--json"],
+        ["agent-release", "start", "meta", "--confirm", "wrong", "--json"],
+    ):
+        rejected = runner.invoke(app, command)
+        payload = json.loads(rejected.output)
+        assert rejected.exit_code == 2
+        assert payload["status"] == "confirmation_required"
+        assert payload["required_confirmation"] == "meta"
+    assert not (tmp_path / ".cdt" / "runs").exists()
+
+    # The exact confirmation lets the step run; it then fails at the missing
+    # ASC credentials, offline of Apple.
+    started = runner.invoke(
+        app,
+        ["agent-release", "start", "meta", "--input", "update=yes", "--confirm", "meta", "--json"],
+    )
+    payload = json.loads(started.output)
+    assert started.exit_code == 0, started.output
+    run_id = payload["run_id"]
+    paths = run_paths(tmp_path, run_id)
+    deadline = time.time() + 60
+    while not paths.exit.exists() and time.time() < deadline:
+        time.sleep(0.1)
+    assert paths.exit.exists(), "detached metadata worker did not finish"
+
+    status = read_json(paths.status)
+    assert status["status"] == "failed"
+    assert "Missing ASC credentials" in status["error"]
+
+
+def test_documentation_syntax_schema_and_plan_payloads_stay_consistent(tmp_path, monkeypatch):
+    """Integration check: bundled schema equals the generated schema, the legacy
+    example pipeline still parses, and text and JSON plans agree on decisions."""
+
+    assert json.loads(bundled_schema_path().read_text(encoding="utf-8")) == schema_payload()
+
+    # The pre-P1 example (legacy string steps, single-key form) still validates.
+    examples = ROOT / "examples"
+    monkeypatch.syspath_prepend(str(examples))
+    config = load_pipeline_config(examples)
+    register_builtin_steps()
+    load_plugins(config.plugins)
+    assert validate_pipeline(config) == []
+
+    # A mixed pipeline (legacy single-key form, extended when form) plans
+    # with unknown decisions without inputs; explicit inputs resolve them.
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "plugins:",
+                "  - mix_steps.demo",
+                "pipelines:",
+                "  demo:",
+                "    inputs:",
+                "      deploy: {}",
+                "    steps:",
+                "      - demo.legacy",
+                "      - step: demo.conditional",
+                "        when: {input: deploy, equals: 'yes'}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    package = tmp_path / "mix_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "demo.py").write_text(
+        "\n".join(
+            [
+                "from cdt.sdk import step",
+                "",
+                "@step('demo.legacy')",
+                "def legacy(ctx):",
+                "    pass",
+                "",
+                "@step('demo.conditional')",
+                "def conditional(ctx):",
+                "    pass",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    static_plan = runner.invoke(app, ["pipeline", "plan", "demo", "--json"])
+    assert static_plan.exit_code == 0, static_plan.output
+    static_json = json.loads(static_plan.output)
+    assert [node["decision"] for node in static_json["steps"]] == ["run", "unknown"]
+    static_text = runner.invoke(app, ["pipeline", "plan", "demo"]).output
+    assert "demo.legacy" in static_text and "unknown" in static_text
+
+    resolved_plan = runner.invoke(app, ["pipeline", "plan", "demo", "--json", "--input", "deploy=yes"])
+    assert resolved_plan.exit_code == 0, resolved_plan.output
+    resolved_json = json.loads(resolved_plan.output)
+    assert [node["decision"] for node in resolved_json["steps"]] == ["run", "run"]
+    resolved_text = runner.invoke(app, ["pipeline", "plan", "demo", "--input", "deploy=yes"]).output
+    assert "run" in resolved_text and "unknown" not in resolved_text
 
 
 def test_release_summary_includes_release_results_without_reading_the_log(tmp_path, monkeypatch):
@@ -1169,9 +1532,7 @@ def test_release_workflow_hands_off_artifacts_to_publish_and_release_jobs():
 
     for job_name in ("pypi-publish", "github-release"):
         downloads = [
-            step
-            for step in jobs[job_name]["steps"]
-            if step.get("uses", "").startswith("actions/download-artifact")
+            step for step in jobs[job_name]["steps"] if step.get("uses", "").startswith("actions/download-artifact")
         ]
         assert len(downloads) == 1
         assert downloads[0]["with"]["name"] == "dist"
@@ -1181,9 +1542,7 @@ def test_release_workflow_publishes_to_pypi_with_trusted_publishing_as_last_step
     job = _release_workflow_config()["jobs"]["pypi-publish"]
 
     assert job["permissions"] == {"id-token": "write"}
-    publish_steps = [
-        step for step in job["steps"] if step.get("uses", "").startswith("pypa/gh-action-pypi-publish")
-    ]
+    publish_steps = [step for step in job["steps"] if step.get("uses", "").startswith("pypa/gh-action-pypi-publish")]
     assert len(publish_steps) == 1
     assert job["steps"][-1] is publish_steps[0]
     assert not any("run" in step for step in job["steps"])
@@ -1195,9 +1554,7 @@ def test_release_workflow_creates_github_release_with_checksums_after_pypi():
     assert job["needs"] == "pypi-publish"
     runs = {step["name"]: step["run"] for step in job["steps"] if "run" in step}
     assert "sha256sum *.whl *.tar.gz > SHA256SUMS" in runs["Generate SHA-256 checksums"]
-    release_step = next(
-        step for step in job["steps"] if step.get("uses", "").startswith("softprops/action-gh-release")
-    )
+    release_step = next(step for step in job["steps"] if step.get("uses", "").startswith("softprops/action-gh-release"))
     assert "dist/*.whl" in release_step["with"]["files"]
     assert "dist/*.tar.gz" in release_step["with"]["files"]
     assert "dist/SHA256SUMS" in release_step["with"]["files"]

@@ -17,6 +17,64 @@ def _compact_visible_text(output: str) -> str:
     return re.sub(r"\s+", "", visible)
 
 
+def test_conditional_plan_inputs_and_artifact_flow(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    inputs: {deploy: {}, other: {}}\n    steps:\n"
+        "      - parallel:\n          steps:\n            - sequence:\n                steps:\n"
+        "                  - step: ios.flutter_build_ipa\n                    with: {artifact: ipa}\n"
+        "                    when: {input: deploy, equals: 'yes'}\n"
+        "      - appstore.upload_testflight: {artifact: ipa}\n"
+    )
+    for args, decision, missing in [
+        ([], "unknown", True),
+        (["--input", "other=x"], "skip", True),
+        (["--input", "deploy=yes"], "run", False),
+    ]:
+        result = runner.invoke(app, ["pipeline", "plan", "demo", "--json", *args])
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        leaf = payload["steps"][0]["steps"][0]["steps"][0]
+        assert leaf["step_id"] == "0/0/0"
+        assert leaf["decision"] == decision
+        assert leaf["when"] == {"input": "deploy", "equals": "yes"}
+        assert any(w["code"] == "missing_required_artifact" for w in payload["warnings"]) == missing
+    dry = runner.invoke(app, ["run", "demo", "--dry-run"])
+    assert dry.exit_code == 0, dry.output
+    assert "skip" in dry.output and "when:" in dry.output
+    assert not (tmp_path / ".cdt").exists()
+
+
+def test_skipped_consumer_has_no_artifact_warning(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    inputs: {deploy: {}}\n    steps:\n"
+        "      - step: appstore.upload_testflight\n        with: {artifact: missing}\n"
+        "        when: {input: deploy, equals: 'yes'}\n"
+    )
+    result = runner.invoke(app, ["pipeline", "plan", "demo", "--json", "--input", "deploy=no"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["warnings"] == []
+
+
+def test_preflight_recurses_conditional_sequence_inside_parallel(tmp_path, monkeypatch):
+    from cdt.pipeline.builtins import register_builtin_steps
+    from cdt.pipeline.config import load_pipeline_config
+
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    inputs: {deploy: {}}\n    steps:\n"
+        "      - parallel:\n          steps:\n            - sequence:\n                steps:\n"
+        "                  - step: appstore.upload_testflight\n                    with: {artifact: ipa}\n"
+        "                    when: {input: deploy, present: true}\n"
+    )
+    register_builtin_steps()
+    monkeypatch.setattr(preflight.shutil, "which", lambda tool: None)
+    payload = preflight.preflight_payload(load_pipeline_config(tmp_path), "demo", {})
+    assert payload["errors"] == []
+    assert payload["missing_env"]
+    assert payload["status"] == "error"
+
+
 def setup_function():
     _clear_steps_for_tests()
     sys.modules.pop("cdt_steps.artifacts", None)
@@ -273,8 +331,7 @@ def test_pipeline_plan_json_warns_for_missing_artifact_name(tmp_path, monkeypatc
         {
             "code": "missing_required_artifact",
             "message": (
-                "Step appstore.upload_testflight requires artifact name ios_ipa, "
-                "but no previous step declares it."
+                "Step appstore.upload_testflight requires artifact name ios_ipa, but no previous step declares it."
             ),
             "path": "pipelines.demo.steps[0]",
         }
@@ -896,5 +953,92 @@ def test_pipeline_plan_carries_production_risk_error_for_submit_review(tmp_path,
                 "production (declared risk: 'standard')."
             ),
             "path": "pipelines.submit.steps[0].sequence.steps[0]",
+        }
+    ]
+
+
+def test_pipeline_plan_reports_appstore_update_metadata_step(tmp_path, monkeypatch):
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  meta:",
+                "    risk: production",
+                "    steps:",
+                "      - step: appstore.update_metadata",
+                "        with:",
+                '          version: "1.2.3"',
+                "          localizations:",
+                "            ru:",
+                "              whats_new: Исправления и улучшения",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["pipeline", "plan", "meta", "--json"])
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0
+    assert payload["declared_risk"] == "production"
+    assert payload["overall_risk"] == "upload"
+    assert payload["errors"] == []
+    assert payload["warnings"] == []
+    assert payload["steps"][0]["name"] == "appstore.update_metadata"
+    assert payload["steps"][0]["risk"] == "upload"
+    assert payload["steps"][0]["artifact_flow"] == {
+        "requires": [],
+        "requires_names": [],
+        "produces_names": [],
+        "produces_types": ["appstore_metadata"],
+    }
+
+
+def test_pipeline_plan_carries_production_risk_error_for_update_metadata(tmp_path, monkeypatch):
+    """The production requirement is recursive and covers conditionally skipped leaves."""
+
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  meta:",
+                "    inputs:",
+                "      update:",
+                "        required: false",
+                "    steps:",
+                "      - parallel:",
+                "          steps:",
+                "            - step: appstore.update_metadata",
+                "              with:",
+                '                version: "1.2.3"',
+                "                localizations:",
+                "                  ru:",
+                "                    whats_new: Исправления и улучшения",
+                "              when:",
+                "                input: update",
+                '                equals: "yes"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["pipeline", "plan", "meta", "--json"])
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 1  # a validation error makes the plan exit non-zero
+    assert payload["errors"] == [
+        {
+            "code": "production_risk_required",
+            "message": (
+                "Step appstore.update_metadata updates localized App Store metadata texts and requires pipeline "
+                "risk: production (declared risk: 'standard')."
+            ),
+            "path": "pipelines.meta.steps[0].parallel.steps[0]",
         }
     ]

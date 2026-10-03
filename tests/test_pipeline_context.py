@@ -13,6 +13,27 @@ def _ctx(tmp_path: Path, env: dict[str, str] | None = None) -> PipelineContext:
     return PipelineContext(cwd=tmp_path, env=env or {}, runner=CommandRunner())
 
 
+def test_values_mapping_and_worker_scope_cleanup(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner(), values={"root": "yes"})
+
+    def worker():
+        with pytest.raises(RuntimeError), ctx.values.scope("0/0", {"local": "yes"}):
+            ctx.values.setdefault("new", "value")
+            assert ctx.values.copy() == {"local": "yes", "new": "value"}
+            ctx.values.clear()
+            raise RuntimeError("failure")
+        assert dict(ctx.values) == {"root": "yes"}
+        assert ctx.values.branch_id is None
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pool.submit(worker).result()
+        pool.submit(worker).result()
+    assert ctx.values.pop("root") == "yes"
+    assert ctx.values == {}
+
+
 def test_context_stores_versions_and_artifacts(tmp_path):
     ctx = _ctx(tmp_path)
     artifact = BuildArtifact(ArtifactKind.IPA, tmp_path / "app.ipa", "App IPA")

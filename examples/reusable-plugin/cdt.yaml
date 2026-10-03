@@ -1,0 +1,14 @@
+# yaml-language-server: $schema=../../cdt/cdt.schema.json
+version: 1
+plugins:
+  - cdt_example_steps
+
+pipelines:
+  example:
+    steps:
+      - step: example.check_file
+        with:
+          path: pyproject.toml
+        retry:
+          max_attempts: 3
+          delay_seconds: 1

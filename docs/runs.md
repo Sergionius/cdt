@@ -55,12 +55,23 @@ cdt agent-release status --run <run-id> --wait --json
 
 - `queued`: the record exists and execution has not started;
 - `running`: at least one step is executing or the pipeline is between steps;
-- `success`: every selected step completed;
+- `success`: every selected step completed or was skipped by its input condition;
 - `failed`: execution ended with an error;
 - `cancelled`: a detached process was stopped;
 - `blocked`: execution requires an external decision or state change.
 
 The status includes current/completed step IDs, parallel child state, artifact metadata, version changes, errors, and timestamps. Consumers must check `schema_version` before relying on fields.
+
+`step_decisions` records the precomputed `run`/`skip` decision by numeric ID (including
+groups). `skipped_steps` lists conditionally skipped leaves separately from
+`completed_steps`; they create no artifacts and do not renumber later steps.
+Decisions cover the whole pipeline even when resume selects only part of it.
+Older statuses may omit these optional fields.
+
+`step_attempts` records retry activity per leaf: the index of the last failed
+attempt and its redacted error message. Intermediate retryable failures are not
+terminal failures; the leaf is completed only after a successful attempt, and
+the field is absent for steps that never retried. Older statuses may omit it.
 
 A status command may report `stale` when a detached PID disappeared without a terminal status or exit code. `timeout` is a wait result, not a pipeline terminal state.
 
@@ -153,6 +164,17 @@ cdt run release \
   --skip-completed
 ```
 
+Input conditions are recomputed after matching the original inputs, not restored
+from saved decisions. Even an explicit `--resume-from <step-id>` cannot force a
+conditionally skipped leaf to run. Old statuses without condition fields remain
+valid resume sources; missing saved inputs mean an empty input set.
+See [Conditional steps](pipelines.md#conditional-steps) for syntax and semantics.
+
+Retried steps follow the same rules: completed leaves are skipped without new
+attempts, and an unfinished leaf starts a new bounded attempt cycle — the saved
+`step_attempts` budget is informational and is not carried over.
+See [Step retries](pipelines.md#step-retries) for the retry contract.
+
 For TestFlight pipelines, resume skips completed build and upload steps and starts at `appstore.complete_testflight` with the version context restored from the status file, so the IPA is not re-uploaded and the build number is unchanged:
 
 ```bash
@@ -162,6 +184,30 @@ cdt run prod \
 ```
 
 See [Resuming a failed TestFlight upload](pipelines.md#resuming-a-failed-testflight-upload) in the pipeline documentation for the full description.
+
+### Parallel values checkpoints
+
+The optional `values_state` status field has its own `version: 1`. It stores root
+values and, for unfinished parallel groups, the original base and each branch's
+snapshot at its last successfully completed leaf. Completion IDs and checkpoints
+are written under the same lock. Failed-leaf writes are not restored. Resume with
+`--skip-completed` preserves completed side effects and branch-local values without
+exposing them to siblings; the root changes only when the whole group can merge.
+
+Selecting only part of an unfinished group with `--resume-from` does not merge
+unfinished branches or declare the group complete. CDT saves the selected leaves
+and reports which leaves remain; continue from that new status using
+`--skip-completed` without `--resume-from`. Conflicting completed writes require
+manual reconciliation, not automatic repetition of completed side effects.
+
+Checkpoints use normal secret redaction, including values keys. If redaction
+changes required state, `restorable: false` prevents resume before any new step;
+CDT never restores `***` in place of a secret. Keep values non-secret. Legacy
+statuses remain usable outside partially completed parallel groups; missing
+branch state for such a group is rejected before execution. Use the same pipeline
+configuration when resuming: IDs are positional, not a configuration fingerprint.
+This is not rollback of artifacts, files or external effects, nor an exactly-once
+guarantee if a process dies between a side effect and its successful checkpoint.
 
 ### Google Play publication checkpoints
 
@@ -194,3 +240,9 @@ During resume and reruns:
 - changed submission parameters while an operation is unfinished, a version in a non-editable state, a foreign review submission, or a remotely changed build stop with an explicit conflict instead of being overwritten or resubmitted.
 
 Deleting a checkpoint is **not** a safe way to repeat a submission: it erases CDT's knowledge of changes that may already have been applied remotely. Verify the version and the submission in App Store Connect and resolve any half-applied state there instead.
+
+### App Store metadata updates
+
+`appstore.update_metadata` keeps no checkpoint files under `.cdt/appstore/`: it stores its durable state in App Store Connect itself. Every run re-reads the current version localizations before the first mutation, skips requested fields that already match, and verifies every PATCH by reading it back; an unverifiable result fails the run without repeating the PATCH, and you resolve it in App Store Connect.
+
+The step registers only a safe summary in `release_results`: bundle id, version string, and the names of the updated and unchanged locales. It never records credentials or metadata texts, and it never submits anything for review or selects a build.
