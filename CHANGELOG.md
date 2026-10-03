@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Nothing yet.
+
+## v0.7.0 - 2026-10-03
+
 - Added input-based conditional steps: an extended step record accepts `step`/`with` plus a `when` condition with exactly one operator (`equals`, `not_equals`, `present`) over a declared pipeline input. Decisions are computed once before the first step, shown as `run`/`skip`/`unknown` in plans and status files, skipped leaves create no artifacts and stay separate from `completed_steps`, and resume recomputes decisions from the same inputs. Existing string and single-key step records are unchanged, and conditions never bypass production-risk validation or the exact CLI confirmation.
 - Changed parallel `values` semantics intentionally: each parallel branch now works on an isolated snapshot of `ctx.values`, sequential steps of one branch see that branch's writes, and siblings never see them. After every branch succeeds, changed keys (including deletions) are merged atomically; conflicting writes or a deletion-versus-write conflict fail the group by step ID and key name without a partial merge, and a failed group leaves the root values unchanged. Only `values` is isolated — the filesystem and external services are not transactional.
 - Added an opt-in step retry policy: the extended record accepts `retry` with `max_attempts` (1–5) and `delay_seconds` (0–60), honored only for steps whose metadata declares `retry_safe: true` and only for the explicit `RetryableStepError`. Uploads, publications, webhooks, hooks, and store publishing steps gained no automatic retries, and ambiguous mutation results are never retried; unfinished steps start a fresh bounded attempt cycle on resume.
