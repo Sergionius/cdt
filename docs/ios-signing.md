@@ -57,7 +57,7 @@ same variables it always used; CDT adds no runtime flags:
 
 With `IOS_SIGNING_STYLE: manual`, provide a complete `ExportOptions.plist`
 (method, `signingStyle: manual`, `teamID`, and the `provisioningProfiles`
-mapping from profile name to bundle ID) and point `IOS_EXPORT_OPTIONS_PLIST`
+mapping from bundle ID to provisioning profile name or UUID) and point `IOS_EXPORT_OPTIONS_PLIST`
 at it.
 
 ## CI: temporary keychain recipe

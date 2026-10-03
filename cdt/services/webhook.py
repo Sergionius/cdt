@@ -132,16 +132,25 @@ def _open_webhook_response(request: urllib.request.Request, timeout: float):
 
 
 def _payload_secret_categories(env: Mapping[str, str], url: str, authorization: str, body: bytes) -> list[str]:
-    """Return safe categories of known secrets found verbatim inside the payload."""
-    text = body.decode("utf-8", errors="replace")
-    categories: list[str] = []
-    if url in text:
-        categories.append("destination URL")
-    if authorization and authorization in text:
-        categories.append("authorization value")
-    if SecretRedactor.from_env(env).find_secrets(text):
-        categories.append("known context secret")
-    return categories
+    """Inspect decoded JSON strings so escaping cannot conceal known secrets."""
+    redactor = SecretRedactor.from_env(env)
+    categories: set[str] = set()
+    pending = [json.loads(body)]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            pending.extend(value.keys())
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+        elif isinstance(value, str):
+            if url in value:
+                categories.add("destination URL")
+            if authorization and authorization in value:
+                categories.add("authorization value")
+            if redactor.find_secrets(value):
+                categories.add("known context secret")
+    return sorted(categories)
 
 
 def _transport_category(exc: BaseException) -> str:

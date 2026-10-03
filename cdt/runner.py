@@ -3,6 +3,7 @@ import shlex
 import signal
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -102,13 +103,24 @@ def run_managed_subprocess(
 
 def _terminate_process_group(proc: subprocess.Popen) -> None:
     """TERM the process group, then KILL after a bounded grace; always reap."""
+    deadline = time.monotonic() + PROCESS_GROUP_TERMINATE_GRACE_SECONDS
     try:
         os.killpg(proc.pid, signal.SIGTERM)
     except (ProcessLookupError, PermissionError):
         pass
     try:
         proc.wait(timeout=PROCESS_GROUP_TERMINATE_GRACE_SECONDS)
-        return
+        # Reaping the parent does not imply its descendants have exited.
+        # Give the remaining group the rest of the same bounded grace period.
+        while True:
+            try:
+                os.killpg(proc.pid, 0)
+            except ProcessLookupError:
+                return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(0.05, remaining))
     except subprocess.TimeoutExpired:
         pass
     try:

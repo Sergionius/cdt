@@ -1,6 +1,9 @@
 import json
+import os
 import signal
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -176,9 +179,17 @@ def _patch_popen(monkeypatch, proc):
     return calls
 
 
-def _patch_killpg(monkeypatch):
+def _patch_killpg(monkeypatch, *, group_survives=False):
     signals = []
-    monkeypatch.setattr(runner.os, "killpg", lambda pid, sig: signals.append((pid, sig)))
+
+    def killpg(pid, sig):
+        if sig == 0:
+            if not group_survives:
+                raise ProcessLookupError
+        else:
+            signals.append((pid, sig))
+
+    monkeypatch.setattr(runner.os, "killpg", killpg)
     return signals
 
 
@@ -244,6 +255,62 @@ def test_run_managed_subprocess_cleans_up_group_on_interrupted_wait(tmp_path, mo
 
     if runner.supports_process_groups():
         assert signals == [(4242, signal.SIGTERM)]
+
+
+@pytest.mark.parametrize("interruption", [subprocess.TimeoutExpired(["hook"], 3), KeyboardInterrupt()])
+def test_cleanup_kills_remaining_group_after_parent_exits(tmp_path, monkeypatch, interruption):
+    proc = ScriptedProc(4242, [interruption, -15, -15])
+    _patch_popen(monkeypatch, proc)
+    signals = _patch_killpg(monkeypatch, group_survives=True)
+    monkeypatch.setattr(runner, "PROCESS_GROUP_TERMINATE_GRACE_SECONDS", 0)
+
+    with pytest.raises(type(interruption)):
+        runner.run_managed_subprocess(["hook"], cwd=tmp_path, timeout=3)
+
+    assert signals == [(4242, signal.SIGTERM), (4242, signal.SIGKILL)]
+    assert proc.wait_calls == [3, 0, 0]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process groups are required")
+def test_managed_timeout_kills_child_ignoring_term_after_parent_exits(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "PROCESS_GROUP_TERMINATE_GRACE_SECONDS", 0.2)
+    child_script = tmp_path / "child.py"
+    child_script.write_text(
+        "import os, signal, time\n"
+        "from pathlib import Path\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "Path('child.pid').write_text(str(os.getpid()))\n"
+        "time.sleep(60)\n"
+    )
+    parent_script = tmp_path / "parent.py"
+    parent_script.write_text(
+        "import os, subprocess, sys, time\n"
+        "from pathlib import Path\n"
+        "Path('parent.pid').write_text(str(os.getpid()))\n"
+        "subprocess.Popen([sys.executable, 'child.py'])\n"
+        "time.sleep(60)\n"
+    )
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            runner.run_managed_subprocess([sys.executable, str(parent_script)], cwd=tmp_path, timeout=2)
+        child_pid = int((tmp_path / "child.pid").read_text())
+        deadline = time.monotonic() + 3
+        while True:
+            # An orphan may briefly remain a zombie until the OS reaps it.
+            state = subprocess.run(
+                ["ps", "-o", "stat=", "-p", str(child_pid)], capture_output=True, text=True, check=False
+            ).stdout.strip()
+            if not state or state.startswith("Z"):
+                break
+            assert time.monotonic() < deadline, "Child survived managed timeout"
+            time.sleep(0.05)
+    finally:
+        pidfile = tmp_path / "parent.pid"
+        if pidfile.exists():
+            try:
+                os.killpg(int(pidfile.read_text()), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
 
 def test_run_managed_subprocess_timeout_requires_process_groups(tmp_path, monkeypatch):

@@ -345,6 +345,35 @@ def test_payload_containing_authorization_value_is_rejected_before_sending(monke
     assert calls == []
 
 
+@pytest.mark.parametrize("secret", ['private"value', "private\\value", 'first"line\nsecond\\line', "private\tvalue"])
+@pytest.mark.parametrize("in_key", [False, True])
+@pytest.mark.parametrize("source", ["context", "authorization", "destination"])
+def test_escaped_secrets_in_nested_json_are_rejected(monkeypatch, secret, in_key, source):
+    calls = patch_transport(monkeypatch)
+    env = {"WEBHOOK_URL": "https://hooks.example/abc"}
+    auth_key = None
+    if source == "context":
+        env["NOTIFY_TOKEN"] = secret
+        category = "known context secret"
+    elif source == "authorization":
+        auth_key = "DELIVERY_VALUE"  # not implicitly recognized as a credential key
+        env[auth_key] = secret
+        category = "authorization value"
+    else:
+        secret = "https://hooks.example/" + secret
+        env["WEBHOOK_URL"] = secret
+        category = "destination URL"
+    nested = {secret: "value"} if in_key else {"value": "prefix " + secret + " suffix"}
+    payload = {"nested": [None, {"items": [nested]}]}
+
+    with pytest.raises(typer.BadParameter, match=category) as excinfo:
+        send_webhook(env, url_env="WEBHOOK_URL", authorization_env=auth_key, payload=payload)
+
+    assert calls == []
+    assert secret not in str(excinfo.value)
+    assert json.dumps(secret) not in str(excinfo.value)
+
+
 def test_secret_scan_message_does_not_echo_values(monkeypatch):
     patch_transport(monkeypatch)
     env = {
