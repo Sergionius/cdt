@@ -114,7 +114,7 @@ def run_captured_child(
             lacks process-group primitives or the capture log cannot be
             opened; the pipeline is not executed in that case.
     """
-    _require_posix_capture()
+    require_posix_capture()
     environment = dict(env) if env is not None else dict(os.environ)
     active_redactor = redactor if redactor is not None else SecretRedactor.from_env(environment)
     active_terminal = terminal if terminal is not None else sys.stdout
@@ -412,8 +412,12 @@ def _reap_process(process: subprocess.Popen[bytes], pgid: int, timeout: float) -
         return -1, errors
 
 
-def _require_posix_capture() -> None:
-    """Reject platforms without the process-group primitives capture relies on."""
+def require_posix_capture() -> None:
+    """Reject platforms without the process-group primitives capture relies on.
+
+    Public so the CLI can decline ``--capture-output`` before creating a run
+    record or executing any step.
+    """
     if sys.platform == "win32" or not hasattr(os, "killpg") or not hasattr(os, "setsid"):
         raise ForegroundCaptureError(
             "Foreground output capture requires POSIX process-group primitives (Linux/macOS); "
@@ -426,7 +430,7 @@ def _spawn_child(argv: Sequence[str], *, cwd: Path, env: Mapping[str, str]) -> s
 
     ``start_new_session`` makes the child a session and group leader, so the
     supervisor receives terminal SIGINT/SIGTERM itself and decides when the
-    child group is interrupted. Callers must check :func:`_require_posix_capture`
+    child group is interrupted. Callers must check :func:`require_posix_capture`
     first; the flag is a POSIX feature.
     """
     try:

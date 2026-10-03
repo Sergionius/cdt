@@ -413,3 +413,12 @@ def test_capture_bounds_wait_for_grandchild_holding_pipe(tmp_path):
     assert "grandchild-ready" in saved
     assert "grandchild-ready" in terminal.getvalue()
     _assert_eventually_gone(_read_pid(pid_file))
+
+
+def test_require_posix_capture_rejects_windows(monkeypatch):
+    from cdt.foreground_run import require_posix_capture
+
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    with pytest.raises(ForegroundCaptureError, match="POSIX"):
+        require_posix_capture()

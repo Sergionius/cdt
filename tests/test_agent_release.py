@@ -357,3 +357,36 @@ def test_agent_release_status_includes_inputs(tmp_path, monkeypatch):
 
     assert result.exit_code == 0
     assert payload["inputs"] == {"version": "0.5.2"}
+
+
+def test_capture_child_reuses_record_without_competing_for_supervisor_files(tmp_path, monkeypatch):
+    import sys
+
+    from cdt.runs import create_run
+
+    for module_name in ("cdt_steps", "cdt_steps.demo"):
+        sys.modules.pop(module_name, None)
+    package = tmp_path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "demo.py").write_text(
+        "from cdt.sdk import step\n\n@step('demo.ok')\ndef ok(ctx):\n    pass\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\nplugins:\n  - cdt_steps.demo\npipelines:\n  test:\n    steps:\n      - demo.ok\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    paths = create_run(tmp_path, "test", run_id="capture-child-run", detached=False, capture_output=True)
+    paths.pid.write_text("supervisor-pid\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["run", "test", "--run-id", "capture-child-run", "--capture-child"])
+
+    assert result.exit_code == 0, result.output
+    assert "Run:" not in result.output
+    assert paths.pid.read_text(encoding="utf-8").strip() == "supervisor-pid"
+    assert not paths.exit.exists()
+    status = json.loads(paths.status.read_text(encoding="utf-8"))
+    assert status["status"] == "success"

@@ -1253,3 +1253,35 @@ def test_fresh_rerun_with_changed_track_is_blocked_by_unfinished_operation(tmp_p
     assert "blocksapublicationwithchangedparameters" in normalized
     assert client.calls[calls_after_first_run:] == []
     assert client.tracks == {}
+
+
+def test_capture_output_run_supports_skip_completed_resume(tmp_path, monkeypatch):
+    _write_project(
+        tmp_path,
+        "\n".join(
+            [
+                "      - demo.touch: {output: skipped.txt}",
+                "      - demo.touch: {output: ran.txt}",
+            ]
+        )
+        + "\n",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    resume_status = tmp_path / "input.json"
+    resume_status.write_text(json.dumps({"completed_steps": ["0"], "artifacts": []}), encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        ["run", "demo", "--capture-output", "--resume-status-file", str(resume_status), "--skip-completed"],
+    )
+    runs = list_runs(tmp_path)
+
+    assert result.exit_code == 0, result.output
+    assert len(runs) == 1
+    assert runs[0]["status"] == "success"
+    assert result.output.count("Run: ") == 1
+    assert not (tmp_path / "skipped.txt").exists()
+    assert (tmp_path / "ran.txt").exists()
+    status = read_json(run_paths(tmp_path, runs[0]["run_id"]).status)
+    assert status["status"] == "success"

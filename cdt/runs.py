@@ -44,6 +44,7 @@ def create_run(
     detached: bool = False,
     inputs: dict[str, str] | None = None,
     env: dict[str, str] | None = None,
+    capture_output: bool = False,
 ) -> RunPaths:
     run_id = run_id or generate_run_id(pipeline)
     paths = run_paths(cwd, run_id)
@@ -66,6 +67,8 @@ def create_run(
         "command": redactor.redact_data(command or ["cdt", "run", pipeline]),
         "detached": detached,
     }
+    if capture_output:
+        manifest["capture_output"] = True
     write_json_atomic(paths.manifest, manifest)
     write_json_atomic(
         paths.status,
@@ -105,6 +108,7 @@ def ensure_run(
     detached: bool = False,
     inputs: dict[str, str] | None = None,
     env: dict[str, str] | None = None,
+    capture_output: bool = False,
 ) -> RunPaths:
     if run_id is not None:
         paths = run_paths(cwd, run_id)
@@ -119,6 +123,7 @@ def ensure_run(
         detached=detached,
         inputs=inputs,
         env=env,
+        capture_output=capture_output,
     )
 
 

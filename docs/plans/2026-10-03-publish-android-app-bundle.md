@@ -104,20 +104,20 @@
 - Modify: `tests/test_pipeline_resume.py`
 - Modify: `tests/test_orca_status.py`
 
-- [ ] Добавить публичный `--capture-output` и скрытый служебный признак дочернего foreground-capture запуска; не использовать наличие `--run-id` как единственный источник определения detached/direct режима.
-- [ ] Разрешить служебный признак только вместе с существующим run ID и без публичного `--capture-output`; не допускать рекурсивного создания supervisor и дублирования run records.
-- [ ] Сохранять обычную проверку конфигурации, inputs и production confirmation до реального запуска. Повторно применять защиту production в ребёнке; передавать только предоставленный пользователем `--confirm`.
-- [ ] Оставить `--dry-run --capture-output` неисполняющим: без subprocess, run record и изменения логов.
-- [ ] Передавать ребёнку pipeline, inputs, IDs, resume-флаги, resume status path и пользовательский status-file без потерь и shell-интерполяции.
-- [ ] Создавать единственный foreground run record с `detached: false`, командой с публичным capture-флагом и необязательным manifest-полем `capture_output: true`; не сохранять env или credentials.
-- [ ] Разделить внутренне владение output recorder, PID и exit-файлом от значения `detached`: обычные direct/detached callers сохраняют текущие defaults, capture-child не устанавливает `RunOutputRecorder` и не конкурирует с supervisor за эти файлы.
-- [ ] Передавать capture-child `CDT_UI=verbose` только через его окружение: `_run`/`_spawn` перестают скрывать внешние stdout/stderr во временных pretty-логах. Обычные режимы runner не менять.
-- [ ] Обеспечить live PID supervisor, единственный вывод `Run: …` и отсутствие повторных Orca lifecycle-уведомлений от ребёнка. Сохранить запрет detached stop API на остановку direct run.
-- [ ] После завершения ребёнка сохранять согласованные exit code и terminal status. При startup failure либо отсутствии terminal status записывать безопасную ошибку вместо ложного `success`.
-- [ ] При capture failure или отмене сохранять уже полученные artifacts, completed steps и checkpoints, не запускать pipeline повторно и не стирать сведения о выполненных side effects.
-- [ ] Применять terminal fallback к основному и пользовательскому mirror status-файлам только после прекращения конкурентных записей ребёнка.
-- [ ] Добавить offline end-to-end тест с временным plugin/hook, выводящим строки через Python, `os.write` и дочерний subprocess. Проверить один run record, отсутствие дублей и секретов в логе и отображаемом capture-выводе.
-- [ ] Проверить old direct run, detached worker, production rejection, dry-run, resume, `cdt status`, `cdt logs`, отказ на неподдерживаемой платформе и восстановление управления терминалом после отмены.
+- [x] Добавить публичный `--capture-output` и скрытый служебный признак дочернего foreground-capture запуска; не использовать наличие `--run-id` как единственный источник определения detached/direct режима.
+- [x] Разрешить служебный признак только вместе с существующим run ID и без публичного `--capture-output`; не допускать рекурсивного создания supervisor и дублирования run records.
+- [x] Сохранять обычную проверку конфигурации, inputs и production confirmation до реального запуска. Повторно применять защиту production в ребёнке; передавать только предоставленный пользователем `--confirm`.
+- [x] Оставить `--dry-run --capture-output` неисполняющим: без subprocess, run record и изменения логов.
+- [x] Передавать ребёнку pipeline, inputs, IDs, resume-флаги, resume status path и пользовательский status-file без потерь и shell-интерполяции.
+- [x] Создавать единственный foreground run record с `detached: false`, командой с публичным capture-флагом и необязательным manifest-полем `capture_output: true`; не сохранять env или credentials.
+- [x] Разделить внутренне владение output recorder, PID и exit-файлом от значения `detached`: обычные direct/detached callers сохраняют текущие defaults, capture-child не устанавливает `RunOutputRecorder` и не конкурирует с supervisor за эти файлы.
+- [x] Передавать capture-child `CDT_UI=verbose` только через его окружение: `_run`/`_spawn` перестают скрывать внешние stdout/stderr во временных pretty-логах. Обычные режимы runner не менять.
+- [x] Обеспечить live PID supervisor, единственный вывод `Run: …` и отсутствие повторных Orca lifecycle-уведомлений от ребёнка. Сохранить запрет detached stop API на остановку direct run.
+- [x] После завершения ребёнка сохранять согласованные exit code и terminal status. При startup failure либо отсутствии terminal status записывать безопасную ошибку вместо ложного `success`.
+- [x] При capture failure или отмене сохранять уже полученные artifacts, completed steps и checkpoints, не запускать pipeline повторно и не стирать сведения о выполненных side effects.
+- [x] Применять terminal fallback к основному и пользовательскому mirror status-файлам только после прекращения конкурентных записей ребёнка.
+- [x] Добавить offline end-to-end тест с временным plugin/hook, выводящим строки через Python, `os.write` и дочерний subprocess. Проверить один run record, отсутствие дублей и секретов в логе и отображаемом capture-выводе.
+- [x] Проверить old direct run, detached worker, production rejection, dry-run, resume, `cdt status`, `cdt logs`, отказ на неподдерживаемой платформе и восстановление управления терминалом после отмены.
 
 ### Task 3: Добавить измерения build-листьев в status
 

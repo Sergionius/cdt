@@ -1704,3 +1704,22 @@ def test_detached_execution_propagates_inputs(tmp_path):
     assert (tmp_path / "message.txt").read_text(encoding="utf-8") == "0.5.2"
     status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
     assert status["inputs"] == {"version": "0.5.2"}
+
+
+def test_capture_output_run_is_direct_for_stop_api_and_manifest(tmp_path, monkeypatch):
+    _write_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    result = runner.invoke(app, ["run", "test", "--capture-output"])
+    runs = list_runs(tmp_path)
+
+    assert result.exit_code == 0, result.output
+    assert len(runs) == 1
+    assert runs[0]["status"] == "success"
+    paths = run_paths(tmp_path, runs[0]["run_id"])
+    manifest = read_json(paths.manifest)
+    assert manifest["detached"] is False
+    assert manifest["capture_output"] is True
+    payload = stop_release(run_id=runs[0]["run_id"])
+    assert payload["stop_result"] == "not_detached"
