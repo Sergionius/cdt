@@ -401,7 +401,7 @@ def pipeline_preflight(
     config = load_pipeline_config(cwd)
     register_builtin_steps()
     load_plugins(config.plugins)
-    payload = preflight_payload(config, name, env)
+    payload = preflight_payload(config, name, env, cwd=cwd)
     if json_output:
         _echo_json(payload)
     else:

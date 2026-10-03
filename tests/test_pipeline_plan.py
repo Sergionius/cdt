@@ -821,3 +821,80 @@ def test_run_rejects_malformed_input_entries(tmp_path, monkeypatch):
     assert "keymustnotbeempty" in _compact_visible_text(empty_key.output)
     assert duplicate.exit_code != 0
     assert "Duplicate--inputkey:version" in _compact_visible_text(duplicate.output)
+
+
+def test_pipeline_plan_reports_appstore_submit_review_step(tmp_path, monkeypatch):
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  submit:",
+                "    risk: production",
+                "    steps:",
+                "      - appstore.submit_review:",
+                "          whats_new:",
+                "            ru: Исправления и улучшения",
+                "          release_mode: manual",
+                "          phased_release: true",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["pipeline", "plan", "submit", "--json"])
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 0
+    assert payload["declared_risk"] == "production"
+    assert payload["overall_risk"] == "upload"
+    assert payload["errors"] == []
+    assert payload["warnings"] == []
+    assert payload["steps"][0]["name"] == "appstore.submit_review"
+    assert payload["steps"][0]["risk"] == "upload"
+    assert payload["steps"][0]["artifact_flow"] == {
+        "requires": [],
+        "requires_names": [],
+        "produces_names": [],
+        "produces_types": ["review_submission"],
+    }
+
+
+def test_pipeline_plan_carries_production_risk_error_for_submit_review(tmp_path, monkeypatch):
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  submit:",
+                "    steps:",
+                "      - sequence:",
+                "          steps:",
+                "            - appstore.submit_review:",
+                "                whats_new:",
+                "                  ru: Исправления и улучшения",
+                "                release_mode: manual",
+                "                phased_release: true",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["pipeline", "plan", "submit", "--json"])
+    payload = json.loads(result.output)
+
+    assert result.exit_code == 1  # a validation error makes the plan exit non-zero
+    assert payload["errors"] == [
+        {
+            "code": "production_risk_required",
+            "message": (
+                "Step appstore.submit_review submits an app for App Store review and requires pipeline risk: "
+                "production (declared risk: 'standard')."
+            ),
+            "path": "pipelines.submit.steps[0].sequence.steps[0]",
+        }
+    ]

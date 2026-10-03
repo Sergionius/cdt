@@ -2,7 +2,7 @@
 
 CDT is an agent-first release automation CLI built around project-local YAML pipelines, safe preflight checks, and reusable steps for mobile, web, and custom deployments. Direct human operation remains a first-class workflow.
 
-CDT includes built-in steps for Flutter, native iOS/Xcode, Android, web, Firebase/AppTester, TestFlight, Python hooks, and custom steps via its SDK.
+CDT includes built-in steps for Flutter, native iOS/Xcode, Android, web, Firebase/AppTester, TestFlight, Google Play, Python hooks, and custom steps via its SDK.
 
 ## Installation
 
@@ -202,6 +202,8 @@ Use `cdt pipeline steps` for the complete list. Common built-ins:
 - `appstore.upload_testflight`
 - `appstore.upload_testflight_ipa`
 - `appstore.complete_testflight`
+- `appstore.submit_review`
+- `google_play.upload_aab`
 - `artifact.copy_to_downloads`
 - `hook.python_script`
 - `notify.prod_user_agent`
@@ -210,6 +212,12 @@ Use `cdt pipeline steps` for the complete list. Common built-ins:
 Build steps use `profile` for CDT presets (`profile: prod` adds `--dart-define=ENV=prod`). Flutter `flavor` is separate. Build steps do not run `flutter pub get` or increment versions implicitly.
 
 `appstore.upload_testflight` keeps the full upload cycle in one step and remains supported. New pipelines should prefer the resumable pair `appstore.upload_testflight_ipa` (iTMSTransporter upload only) followed by `appstore.complete_testflight` (find the uploaded build, wait for processing, set the changelog), so a failed completion can resume without re-uploading the IPA. See [Pipelines](docs/pipelines.md) for details.
+
+## App Store review submission
+
+`appstore.submit_review` sends the completed TestFlight build for App Store review: it creates or reuses the App Store version, binds the exact verified build, fills localized "What's new" text, sets the release mode and phased release, and submits through the ASC `reviewSubmissions` flow with durable checkpoints and safe recovery. The app comes from `IOS_BUNDLE_ID`; the build is taken from the current pipeline version context or the last recorded TestFlight completion — never an arbitrary latest Apple build. Required options: `whats_new` (locale → text mapping), `release_mode` (`manual`/`automatic` release after Apple approval), and `phased_release` (a real boolean for Apple's standard seven-day rollout).
+
+Every pipeline containing the step requires `risk: production` and the exact CLI confirmation (`cdt run <pipeline> --confirm <pipeline>`). Success means the submission was sent for review — not Apple approval and not user availability. Existing pipelines never start submitting automatically: add the step explicitly, either after `appstore.complete_testflight` or as a standalone `submit-review` pipeline that needs no rebuild or re-upload. The app card, version localizations, and all other mandatory review data must already exist in App Store Connect. See [App Store review submission](docs/pipelines.md#app-store-review-submission) for pipeline examples, the meaning of release modes, prerequisites, and recovery rules.
 
 ## Firebase App Distribution
 
@@ -228,6 +236,27 @@ export GOOGLE_APPLICATION_CREDENTIALS=/secure/path/firebase-service-account.json
 ```
 
 Terminal environment variables override values from `.env`. For Firebase uploads, a non-empty `FIREBASE_TOKEN` takes precedence over the service account. To switch an existing project to service-account authentication, remove `FIREBASE_TOKEN` from both `.env` and the terminal environment, then verify configuration with `cdt pipeline preflight <pipeline>`.
+
+## Google Play upload (AAB)
+
+`google_play.upload_aab` uploads one Android App Bundle and creates one release on an explicitly chosen Google Play track. It is separate from Firebase App Distribution: Firebase delivers builds to testers, while this step publishes releases through the Google Play Android Publisher API.
+
+One-time setup happens in Google Cloud Console and Play Console — it is independent of any Firebase configuration:
+
+1. In Play Console, link the app to a Google Cloud project and enable the **Google Play Android Developer API** for that project.
+2. Grant the publishing identity Play Console permissions for the target app under **Users and permissions** (for example, release-to-testing or release-to-production rights). These are Play Console app permissions — not Firebase IAM roles and not the Firebase App Distribution Admin role.
+3. The application and the target track must already exist in Play Console. CDT does not create apps or tracks and does not perform the initial app setup (store listing, Play App Signing).
+4. Authenticate with Application Default Credentials: set `GOOGLE_APPLICATION_CREDENTIALS` to a service-account JSON key (relative paths resolve from the project root) or use the ambient CI identity. `FIREBASE_TOKEN` is not used by this step. Credentials never prove Play Console permissions; missing rights surface as an error from Google at publication time.
+
+Every pipeline containing a Google Play step must declare `risk: production` and runs only with the exact confirmation (`cdt run <pipeline> --confirm <pipeline>`). See [Google Play upload](docs/pipelines.md#google-play-upload-aab) for step options and ready-made production pipelines (internal, draft, full production, staged rollout).
+
+A successful run never means more than it says:
+
+- `release_status: draft` creates a draft only — it was not sent for review and no user can install it.
+- `release_status: inProgress` or `completed` commits the edit, which sends the changes through Google's standard review flow. Google accepting the changes is neither review approval nor user availability; CDT verifies neither.
+- Managed publishing is toggled per app in Play Console, and where it applies the final **Publish** after approval is also pressed manually. CDT does not automate these actions and does not infer the mode; its final message explains both outcomes instead of claiming one.
+
+CDT stops instead of guessing when the target track holds an unfinished release (draft, in-progress or halted rollout, staged rollout, multiple releases), when Google rejects the commit because the app is under review, or when Google reports an error that requires Play Console action.
 
 ## Python hooks
 

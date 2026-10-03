@@ -1,5 +1,10 @@
 from ..steps.android import AndroidBuildAabStep, AndroidBuildApkStep
-from ..steps.appstore import CompleteTestFlightStep, UploadTestFlightIpaStep, UploadTestFlightStep
+from ..steps.appstore import (
+    CompleteTestFlightStep,
+    SubmitReviewStep,
+    UploadTestFlightIpaStep,
+    UploadTestFlightStep,
+)
 from ..steps.artifact import CopyArtifactToDownloadsStep
 from ..steps.firebase import EnsureFirebaseCliStep, FirebaseDeployStep, FirebaseUploadAppDistributionStep
 from ..steps.flutter import FlutterPubGetStep, IncrementFlutterBuildNumberStep
@@ -11,6 +16,7 @@ from ..steps.git import (
     RequireSyncedMainStep,
 )
 from ..steps.github import WaitReleaseStep
+from ..steps.google_play import GooglePlayUploadAabStep
 from ..steps.hook import PythonScriptHookStep
 from ..steps.ios import IncrementIosBuildNumberStep, IosFlutterBuildIpaStep, IosXcodeBuildIpaStep
 from ..steps.notify import NotifyProdUserAgentPachcaStep, NotifySuccessStep
@@ -24,6 +30,7 @@ _BUILTINS: dict[str, type] = {
     "android.build_aab": AndroidBuildAabStep,
     "android.build_apk": AndroidBuildApkStep,
     "appstore.complete_testflight": CompleteTestFlightStep,
+    "appstore.submit_review": SubmitReviewStep,
     "appstore.upload_testflight": UploadTestFlightStep,
     "appstore.upload_testflight_ipa": UploadTestFlightIpaStep,
     "artifact.copy_to_downloads": CopyArtifactToDownloadsStep,
@@ -38,6 +45,7 @@ _BUILTINS: dict[str, type] = {
     "git.release_tag_push": ReleaseTagPushStep,
     "git.require_synced_main": RequireSyncedMainStep,
     "github.wait_release": WaitReleaseStep,
+    "google_play.upload_aab": GooglePlayUploadAabStep,
     "ios.bump_xcode_build_number": IncrementIosBuildNumberStep,
     "ios.flutter_build_ipa": IosFlutterBuildIpaStep,
     "ios.xcode_build_ipa": IosXcodeBuildIpaStep,
@@ -104,6 +112,20 @@ _BUILTIN_METADATA: dict[str, StepMetadata] = {
         ),
         category="appstore",
         risk="upload",
+        requires_env=("ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_PRIVATE_KEY_PATH", "IOS_BUNDLE_ID"),
+    ),
+    "appstore.submit_review": StepMetadata(
+        name="appstore.submit_review",
+        description=(
+            "Submit the completed TestFlight build for App Store review: create or reuse the App Store version, "
+            "bind the exact verified build, fill localized 'What's new', set the release mode and phased release "
+            "and send the reviewSubmissions request with durable checkpoints and safe recovery. Requires "
+            "pipeline risk: production and the exact CLI confirmation; success means the submission was sent, "
+            "not that Apple approved the version or that users can download it."
+        ),
+        category="appstore",
+        risk="upload",
+        produces=(ResultProduction("review_submission"),),
         requires_env=("ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_PRIVATE_KEY_PATH", "IOS_BUNDLE_ID"),
     ),
     "artifact.copy_to_downloads": StepMetadata(
@@ -218,6 +240,19 @@ _BUILTIN_METADATA: dict[str, StepMetadata] = {
         risk="safe",
         produces=(ResultProduction("release_confirmation"),),
         external_tools=("gh",),
+    ),
+    "google_play.upload_aab": StepMetadata(
+        name="google_play.upload_aab",
+        description=(
+            "Upload one AAB to Google Play and create a release on an explicitly chosen track "
+            "(draft, inProgress or completed) via ADC, with a durable checkpoint and safe recovery. "
+            "Requires pipeline risk: production and the exact CLI confirmation; commit never cancels "
+            "an in-progress review."
+        ),
+        category="google_play",
+        risk="upload",
+        requires=(ResultRequirement(("android_aab",), name_options=("artifact",)),),
+        produces=(ResultProduction("upload_result"),),
     ),
     "ios.bump_xcode_build_number": StepMetadata(
         name="ios.bump_xcode_build_number",

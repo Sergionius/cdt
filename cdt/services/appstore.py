@@ -45,6 +45,49 @@ _ASC_TRANSIENT_ERRNOS = frozenset(
 )
 
 
+class AscHttpError(typer.BadParameter):
+    """App Store Connect HTTP error with structured fields.
+
+    Derives from ``typer.BadParameter`` so existing steps keep surfacing a
+    friendly message unchanged, while calling code can branch on ``code``,
+    ``method``, ``path`` and ``body`` without parsing the message text.
+    """
+
+    def __init__(self, message: str, *, code: int, method: str, path: str, body: str):
+        super().__init__(message)
+        self.code = code
+        self.method = method
+        self.path = path
+        self.body = body
+
+
+class AscAmbiguousResultError(typer.BadParameter):
+    """A mutating request failed ambiguously: it may or may not have been applied.
+
+    Raised instead of an automatic retry when the caller opted out of ambiguous
+    retries (``retry_ambiguous=False``). A lost response must be reconciled via
+    GET (or human verification) before the mutation is repeated. Attributes let
+    callers reconcile remote state without parsing the message text.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        method: str,
+        path: str,
+        code: int | None,
+        category: str,
+        detail: str,
+    ):
+        super().__init__(message)
+        self.method = method
+        self.path = path
+        self.code = code  # HTTP status for an ambiguous 5xx, None for transport failures
+        self.category = category  # e.g. "http_502", "timeout", "ConnectionResetError"
+        self.detail = detail
+
+
 def _ensure_itmstransporter_available() -> None:
     try:
         check = subprocess.run(["xcrun", "iTMSTransporter", "-help"], capture_output=True, text=True)
@@ -176,8 +219,27 @@ def _asc_retry_wait(delay: float, deadline: float | None, now: float | None = No
     return min(delay, remaining)
 
 
-def _asc_request(method: str, path: str, client: _AscClient, payload: dict | None = None) -> dict:
+def _asc_request(
+    method: str,
+    path: str,
+    client: _AscClient,
+    payload: dict | None = None,
+    *,
+    retry_ambiguous: bool = True,
+) -> dict:
+    """Perform one ASC request with transient-failure retries.
+
+    With the default ``retry_ambiguous=True`` the historical behaviour is kept:
+    HTTP 5xx and transient transport errors are retried even for mutating
+    requests. Pass ``retry_ambiguous=False`` for mutations whose repetition is
+    dangerous (e.g. submitting for review): the first ambiguous failure — HTTP
+    5xx or a transport error, where the request may already have been applied —
+    raises :class:`AscAmbiguousResultError` instead of retrying. Explicitly
+    rejected requests (429, 401) and read-only GET requests are still retried,
+    because they are known not to have been applied.
+    """
     url = ASC_API_BASE + path
+    mutating = method.upper() != "GET"
     attempts = 0
     refreshed_after_401 = False
     while True:
@@ -208,13 +270,39 @@ def _asc_request(method: str, path: str, client: _AscClient, payload: dict | Non
                 category = f"http_{exc.code}"
                 retry_after_sec = _asc_retry_after_seconds(exc.headers.get("Retry-After") if exc.headers else None)
                 detail = f"HTTP {exc.code}: {body}"
+                if mutating and not retry_ambiguous and exc.code >= 500:
+                    raise AscAmbiguousResultError(
+                        f"App Store Connect {method} {path} failed with HTTP {exc.code} after the request "
+                        f"may already have been applied ({body}); verify the result before retrying",
+                        method=method,
+                        path=path,
+                        code=exc.code,
+                        category=category,
+                        detail=body,
+                    ) from exc
             else:
-                raise typer.BadParameter(f"App Store Connect API error {exc.code}: {body}") from exc
+                raise AscHttpError(
+                    f"App Store Connect API error {exc.code}: {body}",
+                    code=exc.code,
+                    method=method,
+                    path=path,
+                    body=body,
+                ) from exc
         except (urllib.error.URLError, TimeoutError, socket.timeout, ssl.SSLError, ConnectionError, OSError) as exc:
             category = _asc_transient_category(exc)
             if category is None:
                 raise typer.BadParameter(f"App Store Connect request failed: {type(exc).__name__}: {exc}") from exc
             detail = str(exc) or type(exc).__name__
+            if mutating and not retry_ambiguous:
+                raise AscAmbiguousResultError(
+                    f"App Store Connect {method} {path} failed with a transport error ({category}: {detail}) "
+                    "after the request may already have been applied; verify the result before retrying",
+                    method=method,
+                    path=path,
+                    code=None,
+                    category=category,
+                    detail=detail,
+                ) from exc
         attempts += 1
         if attempts >= ASC_RETRY_MAX_ATTEMPTS:
             raise typer.BadParameter(

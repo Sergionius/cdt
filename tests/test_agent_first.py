@@ -3,18 +3,25 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.error
 from pathlib import Path
+from typing import Any
 
 import yaml
 from typer.testing import CliRunner
 
+import cdt.services.appstore as appstore_service
+import cdt.steps.google_play as google_play_step
 from cdt.agent_release import release_status, stop_release
 from cdt.cli import app
 from cdt.pipeline.builtins import register_builtin_steps
 from cdt.pipeline.registry import _clear_steps_for_tests, list_step_metadata
 from cdt.runs import create_run, list_runs, read_json, run_paths, write_exit_code
 from cdt.schema import bundled_schema_path, schema_payload
+from cdt.services.appstore_state import load_upload_record, save_upload_record
+from cdt.services.google_play_state import PublishOutcome
+from tests.test_services_appstore_state import FakeAsc, _stub_client
 
 runner = CliRunner()
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,12 +31,14 @@ RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 def setup_function():
     _clear_steps_for_tests()
     sys.modules.pop("cdt_steps.demo", None)
+    sys.modules.pop("cdt_steps.play", None)
     sys.modules.pop("cdt_steps", None)
 
 
 def teardown_function():
     _clear_steps_for_tests()
     sys.modules.pop("cdt_steps.demo", None)
+    sys.modules.pop("cdt_steps.play", None)
     sys.modules.pop("cdt_steps", None)
 
 
@@ -99,6 +108,353 @@ def test_production_pipeline_can_be_confirmed_interactively(tmp_path, monkeypatc
 
     assert result.exit_code == 0
     assert "Enter the pipeline name" in result.output
+
+
+# -- Google Play production confirmation gates -------------------------------------
+
+
+def _write_play_project(path: Path) -> None:
+    """Production pipeline that registers an AAB and uploads it to Google Play."""
+    package = path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "play.py").write_text(
+        "\n".join(
+            [
+                "from cdt.artifacts import ArtifactKind, BuildArtifact",
+                "from cdt.sdk import step",
+                "",
+                "@step('demo.aab')",
+                "def make_aab(ctx, output: str):",
+                "    aab = ctx.cwd / output",
+                "    aab.write_bytes(b'android-app-bundle-bytes')",
+                "    ctx.register_artifact('aab', BuildArtifact(ArtifactKind.AAB, aab, 'Android AAB'))",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "plugins:",
+                "  - cdt_steps.play",
+                "pipelines:",
+                "  play:",
+                "    risk: production",
+                "    steps:",
+                "      - demo.aab: {output: app-release.aab}",
+                "      - google_play.upload_aab:",
+                "          artifact: aab",
+                "          package_name: com.example.app",
+                "          track: internal",
+                "          release_status: completed",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _patch_publishing_api(
+    monkeypatch: Any,
+    *,
+    outcome: PublishOutcome | None = None,
+    error: Exception | None = None,
+    captured: dict[str, Any] | None = None,
+) -> dict[str, int]:
+    """Stub the Android Publisher client and operation, recording each construction."""
+    calls = {"client": 0, "operation": 0}
+    captured = captured if captured is not None else {}
+
+    def fake_client(env: dict[str, str], cwd: Path):
+        calls["client"] += 1
+        captured["env"] = env
+        captured["cwd"] = cwd
+        return ("fake-play-client",)
+
+    class FakeOperation:
+        def __init__(self, client: Any, cwd: Path, intent: Any, aab_path: Path):
+            calls["operation"] += 1
+            captured["intent"] = intent
+            captured["aab_path"] = aab_path
+
+        def run(self) -> PublishOutcome:
+            if error is not None:
+                raise error
+            assert outcome is not None
+            return outcome
+
+    monkeypatch.setattr(google_play_step, "GooglePlayClient", fake_client)
+    monkeypatch.setattr(google_play_step, "GooglePlayPublishOperation", FakeOperation)
+    return calls
+
+
+def _confirmed_outcome() -> PublishOutcome:
+    return PublishOutcome(
+        operation_id="op",
+        package_name="com.example.app",
+        track="internal",
+        release_status="completed",
+        version_code=40,
+        aab_sha256="a" * 64,
+        changes_sent_for_review=True,
+    )
+
+
+def test_play_run_without_or_wrong_confirmation_never_calls_publishing_api(tmp_path, monkeypatch):
+    _write_play_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    calls = _patch_publishing_api(monkeypatch)
+
+    missing = runner.invoke(app, ["run", "play"])
+    wrong = runner.invoke(app, ["run", "play", "--confirm", "wrong"])
+
+    # Without --confirm the interactive prompt is offered and never satisfied;
+    # with a wrong value the exact-confirmation requirement fails the run.
+    missing_visible = " ".join(re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", missing.output).split())
+    assert "Enter the pipeline name to continue" in missing_visible
+    wrong_visible = " ".join(re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", wrong.output).split())
+    assert "requires --confirm play" in wrong_visible
+    for rejected in (missing, wrong):
+        assert rejected.exit_code != 0
+    assert calls == {"client": 0, "operation": 0}
+    assert not (tmp_path / ".cdt" / "runs").exists()
+    assert not (tmp_path / ".cdt" / "google-play").exists()
+
+
+def test_play_run_with_exact_confirmation_allows_the_publishing_step(tmp_path, monkeypatch):
+    _write_play_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    captured: dict[str, Any] = {}
+    calls = _patch_publishing_api(monkeypatch, outcome=_confirmed_outcome(), captured=captured)
+
+    result = runner.invoke(app, ["run", "play", "--confirm", "play"])
+
+    assert result.exit_code == 0, result.output
+    assert calls["client"] == 1
+    assert calls["operation"] == 1
+    assert "commit: confirmed" in result.output
+    assert captured["intent"].package_name == "com.example.app"
+    assert captured["intent"].track == "internal"
+    assert captured["intent"].release_status == "completed"
+    runs = list_runs(tmp_path)
+    assert len(runs) == 1
+    assert read_json(run_paths(tmp_path, runs[0]["run_id"]).status)["status"] == "success"
+
+
+def test_detached_play_start_without_exact_confirmation_requests_it_before_any_run(tmp_path, monkeypatch):
+    _write_play_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    calls = _patch_publishing_api(monkeypatch)
+
+    missing = runner.invoke(app, ["agent-release", "start", "play", "--json"])
+    wrong = runner.invoke(app, ["agent-release", "start", "play", "--confirm", "wrong", "--json"])
+
+    for rejected in (missing, wrong):
+        payload = json.loads(rejected.output)
+        assert rejected.exit_code == 2
+        assert payload["status"] == "confirmation_required"
+        assert payload["required_confirmation"] == "play"
+    assert calls == {"client": 0, "operation": 0}
+    assert not (tmp_path / ".cdt" / "runs").exists()
+    assert not (tmp_path / ".cdt" / "google-play").exists()
+
+
+def test_detached_play_start_with_exact_confirmation_runs_the_step_offline_of_credentials(
+    tmp_path, monkeypatch
+):
+    _write_play_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    # The ADC file is missing, so the detached worker can only fail at credential
+    # loading: reaching that failure proves the step was allowed to run while the
+    # publishing API stays unreachable without real credentials.
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(tmp_path / "missing-adc.json"))
+
+    started = runner.invoke(app, ["agent-release", "start", "play", "--confirm", "play", "--json"])
+
+    payload = json.loads(started.output)
+    assert started.exit_code == 0, started.output
+    run_id = payload["run_id"]
+    paths = run_paths(tmp_path, run_id)
+    deadline = time.time() + 60
+    while not paths.exit.exists() and time.time() < deadline:
+        time.sleep(0.1)
+    assert paths.exit.exists(), "detached Google Play worker did not finish"
+
+    status = read_json(paths.status)
+    assert status["status"] == "failed"
+    assert "GOOGLE_APPLICATION_CREDENTIALS file not found" in status["error"]
+    # The publication never got far enough to open an edit or save a checkpoint.
+    assert not (tmp_path / ".cdt" / "google-play" / "operations").exists()
+
+
+# -- appstore.submit_review: exact confirmation and offline planning -------------
+
+
+def _write_submit_project(path: Path) -> None:
+    (path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  submit:",
+                "    risk: production",
+                "    inputs:",
+                "      whats_new:",
+                "        required: true",
+                "    steps:",
+                "      - appstore.submit_review:",
+                "          whats_new:",
+                "            ru: \"${inputs.whats_new}\"",
+                "          release_mode: manual",
+                "          phased_release: true",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (path / ".env").write_text("IOS_BUNDLE_ID=com.example.app\n", encoding="utf-8")
+
+
+def test_submit_run_without_or_wrong_confirmation_never_contacts_apple(tmp_path, monkeypatch):
+    _write_submit_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    def fail(method, path, client, payload=None, retry_ambiguous=True):
+        raise AssertionError("Apple must not be contacted before the exact confirmation")
+
+    monkeypatch.setattr(appstore_service, "_asc_request", fail)
+
+    missing = runner.invoke(app, ["run", "submit", "--input", "whats_new=Исправления"])
+    wrong = runner.invoke(app, ["run", "submit", "--input", "whats_new=Исправления", "--confirm", "wrong"])
+
+    # Without --confirm the interactive prompt is offered and never satisfied;
+    # with a wrong value the exact-confirmation requirement fails the run.
+    assert missing.exit_code != 0
+    assert "Enter the pipeline name to continue" in missing.output
+    assert wrong.exit_code != 0
+    wrong_visible = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", wrong.output).replace("│", " ")
+    assert "requires --confirm submit" in " ".join(wrong_visible.split())
+    assert not (tmp_path / ".cdt" / "appstore").exists()
+    assert not (tmp_path / ".cdt" / "runs").exists()
+
+
+def test_submit_run_with_exact_confirmation_submits_with_interpolated_whats_new(tmp_path, monkeypatch):
+    _write_submit_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    # A previous full TestFlight completion recorded the build for this app;
+    # the standalone submit pipeline must use it without rebuilding or uploading.
+    save_upload_record(tmp_path, "com.example.app", "1.2.3+5")
+    FakeAsc(monkeypatch)
+    _stub_client(monkeypatch)
+
+    result = runner.invoke(
+        app,
+        ["run", "submit", "--input", "whats_new=Исправления и улучшения", "--confirm", "submit"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Submitted for App Store review" in result.output
+    assert "does NOT mean approval or user availability" in result.output
+    runs = list_runs(tmp_path)
+    assert len(runs) == 1
+    status = read_json(run_paths(tmp_path, runs[0]["run_id"]).status)
+    assert status["status"] == "success"
+    release_results = dict(status["release_results"])
+    submission_id = release_results.pop("appstore_review_submission_id")
+    assert submission_id
+    assert release_results == {
+        "appstore_review_bundle_id": "com.example.app",
+        "appstore_review_marketing_version": "1.2.3",
+        "appstore_review_build_number": "5",
+        "appstore_review_submission_state": "WAITING_FOR_REVIEW",
+        "appstore_review_release_mode": "manual",
+        "appstore_review_phased_release": "true",
+    }
+    # The localized text was interpolated from the pipeline input into the intent.
+    checkpoints = list((tmp_path / ".cdt" / "appstore" / "operations").glob("*.json"))
+    assert len(checkpoints) == 1
+    checkpoint = json.loads(checkpoints[0].read_text(encoding="utf-8"))
+    assert checkpoint["whats_new"] == {"ru": "Исправления и улучшения"}
+    assert checkpoint["submission_id"] == submission_id
+    assert checkpoint["phase"] == "confirmed"
+
+
+def test_standalone_submit_without_record_fails_without_scanning_apple(tmp_path, monkeypatch):
+    _write_submit_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    asc = FakeAsc(monkeypatch)
+    _stub_client(monkeypatch)
+
+    result = runner.invoke(app, ["run", "submit", "--input", "whats_new=Исправления", "--confirm", "submit"])
+
+    assert result.exit_code != 0
+    assert "No recorded TestFlight build" in result.output
+    assert "appstore.upload_testflight" in result.output
+    assert "does not pick an arbitrary" in result.output
+    # Apple was never contacted: no app lookup and no unfiltered latest-build
+    # scan — the refusal happened entirely from the missing local record.
+    assert asc.calls == []
+    assert not (tmp_path / ".cdt" / "appstore").exists()
+
+
+def test_detached_submit_start_without_exact_confirmation_requests_it_before_any_run(tmp_path, monkeypatch):
+    _write_submit_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    def fail(method, path, client, payload=None, retry_ambiguous=True):
+        raise AssertionError("Apple must not be contacted before the exact confirmation")
+
+    monkeypatch.setattr(appstore_service, "_asc_request", fail)
+
+    missing = runner.invoke(app, ["agent-release", "start", "submit", "--input", "whats_new=Исправления", "--json"])
+    wrong = runner.invoke(
+        app,
+        ["agent-release", "start", "submit", "--input", "whats_new=Исправления", "--confirm", "wrong", "--json"],
+    )
+
+    for rejected in (missing, wrong):
+        payload = json.loads(rejected.output)
+        assert rejected.exit_code == 2
+        assert payload["status"] == "confirmation_required"
+        assert payload["required_confirmation"] == "submit"
+    assert not (tmp_path / ".cdt" / "runs").exists()
+    assert not (tmp_path / ".cdt" / "appstore").exists()
+
+
+def test_detached_submit_start_with_exact_confirmation_runs_offline_of_apple(tmp_path, monkeypatch):
+    _write_submit_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    save_upload_record(tmp_path, "com.example.app", "1.2.3+5")
+
+    started = runner.invoke(
+        app,
+        ["agent-release", "start", "submit", "--input", "whats_new=Исправления", "--confirm", "submit", "--json"],
+    )
+
+    payload = json.loads(started.output)
+    assert started.exit_code == 0, started.output
+    run_id = payload["run_id"]
+    paths = run_paths(tmp_path, run_id)
+    deadline = time.time() + 60
+    while not paths.exit.exists() and time.time() < deadline:
+        time.sleep(0.1)
+    assert paths.exit.exists(), "detached submit worker did not finish"
+
+    status = read_json(paths.status)
+    # The worker runs without ASC credentials, so the submission fails at the
+    # credential boundary: reaching it proves the step was allowed to run while
+    # Apple stays unreachable without real credentials.
+    assert status["status"] == "failed"
+    assert "Missing ASC credentials" in status["error"]
+    # The submission never got far enough to save a review checkpoint.
+    assert not (tmp_path / ".cdt" / "appstore" / "operations").exists()
 
 
 def test_background_start_reports_config_errors_as_json(tmp_path, monkeypatch):
@@ -246,6 +602,45 @@ def test_schema_exposes_github_wait_release_step_options():
     wait_metadata = next(metadata for metadata in list_step_metadata() if metadata.name == "github.wait_release")
     assert wait_metadata.external_tools == ("gh",)
     assert wait_metadata.risk == "safe"
+
+
+def test_schema_exposes_google_play_upload_aab_required_options():
+    payload = schema_payload()
+    step_schemas = [obj for obj in payload["$defs"]["step"]["oneOf"] if isinstance(obj, dict) and obj.get("properties")]
+    options_by_name = {next(iter(obj["properties"])): next(iter(obj["properties"].values())) for obj in step_schemas}
+
+    upload_options = options_by_name["google_play.upload_aab"]
+    assert upload_options["required"] == ["artifact", "package_name", "track", "release_status"]
+    assert sorted(upload_options["properties"]) == [
+        "artifact",
+        "package_name",
+        "release_name",
+        "release_notes",
+        "release_status",
+        "track",
+        "user_fraction",
+    ]
+    serialized = json.dumps(payload)
+    assert "google_play.upload_aab" in serialized
+    assert payload == json.loads(bundled_schema_path().read_text(encoding="utf-8"))
+
+
+def test_schema_exposes_appstore_submit_review_required_options():
+    payload = schema_payload()
+    step_schemas = [obj for obj in payload["$defs"]["step"]["oneOf"] if isinstance(obj, dict) and obj.get("properties")]
+    options_by_name = {next(iter(obj["properties"])): next(iter(obj["properties"].values())) for obj in step_schemas}
+
+    submit_options = options_by_name["appstore.submit_review"]
+    assert submit_options["required"] == ["whats_new", "release_mode", "phased_release"]
+    assert sorted(submit_options["properties"]) == ["phased_release", "release_mode", "whats_new"]
+    assert submit_options["properties"]["phased_release"]["type"] == "boolean"
+    assert submit_options["properties"]["whats_new"] == {
+        "type": "object",
+        "additionalProperties": {"type": "string"},
+    }
+    serialized = json.dumps(payload)
+    assert "appstore.submit_review" in serialized
+    assert payload == json.loads(bundled_schema_path().read_text(encoding="utf-8"))
 
 
 def test_release_summary_includes_release_results_without_reading_the_log(tmp_path, monkeypatch):
@@ -582,6 +977,76 @@ def test_detached_execution_does_not_duplicate_output_lines(tmp_path):
     assert result.returncode == 0, result.stderr
     log = (run_dir / "output.log").read_text(encoding="utf-8")
     assert log.count("detached marker line") == 1
+
+
+def test_existing_testflight_pipeline_external_actions_unchanged_without_submit_step(tmp_path, monkeypatch):
+    """Without the new step an existing TestFlight pipeline behaves as before:
+
+    one build, one upload, one completion — and no App Review activity at all.
+    """
+
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "pipelines:",
+                "  iosapp:",
+                "    steps:",
+                "      - ios.bump_xcode_build_number",
+                "      - ios.xcode_build_ipa",
+                "      - appstore.upload_testflight",
+                "      - appstore.complete_testflight",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".env").write_text(
+        "IOS_BUNDLE_ID=com.example.app\nIOS_TEST_SCHEME=Runner\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    def fail(method, path, client, payload=None, retry_ambiguous=True):
+        raise AssertionError(f"existing TestFlight pipeline must not contact the ASC API: {method} {path}")
+
+    monkeypatch.setattr(appstore_service, "_asc_request", fail)
+
+    from cdt.steps import appstore as appstore_steps
+    from cdt.steps import ios as ios_steps
+
+    uploads, completions = [], []
+    ipa = tmp_path / "App.ipa"
+
+    def build_ipa(cwd, env, scheme):
+        ipa.write_bytes(b"ipa")
+        return ipa
+
+    monkeypatch.setattr(ios_steps, "_increment_ios_build_number", lambda cwd, env, scheme: ("1.2.3+4", "1.2.3+5"))
+    monkeypatch.setattr(ios_steps, "_ios_xcode_build_ipa", build_ipa)
+    monkeypatch.setattr(
+        appstore_steps,
+        "_upload_testflight",
+        lambda path, env, changelog, new_version: uploads.append((changelog, new_version)) or 0,
+    )
+    monkeypatch.setattr(
+        appstore_steps,
+        "_complete_testflight_after_upload",
+        lambda env, changelog, new_version: completions.append(new_version) or 0,
+    )
+
+    result = runner.invoke(app, ["run", "iosapp"])
+
+    assert result.exit_code == 0, result.output
+    assert uploads == [("dev build", "1.2.3+5")]  # exactly one upload, same build number
+    assert completions == ["1.2.3+5"]
+    # No App Review activity: no ASC API call, no submission message, no review checkpoint.
+    assert "Submitted for App Store review" not in result.output
+    assert not (tmp_path / ".cdt" / "appstore" / "operations").exists()
+    # The only new local effect is the additive upload record; Apple-facing
+    # actions are unchanged.
+    record = load_upload_record(tmp_path, "com.example.app")
+    assert (record.marketing_version, record.build_number) == ("1.2.3", "5")
 
 
 def test_resume_skips_finished_upload_and_reruns_only_testflight_completion(tmp_path, monkeypatch):

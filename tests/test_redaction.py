@@ -5,11 +5,34 @@ import re
 import subprocess
 import sys
 import threading
+from pathlib import Path
+from typing import Any
 
+import pytest
+from typer.testing import CliRunner
+
+import cdt.steps.google_play as google_play_step
+from cdt.cli import app
 from cdt.pipeline.context import PipelineContext
 from cdt.redaction import SecretRedactor, StreamingRedactor
 from cdt.runner import CommandRunner
-from cdt.runs import RunOutputRecorder
+from cdt.runs import RunOutputRecorder, list_runs, read_json, run_paths
+from cdt.services.google_play import (
+    STAGE_EDIT_COMMIT,
+    STAGE_TRACK_GET,
+    GooglePlayError,
+    compute_file_sha256,
+)
+
+runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _drop_google_play_plugin_modules():
+    """Keep inline cdt_steps plugins from leaking into other test modules."""
+    yield
+    for module_name in ("cdt_steps.play", "cdt_steps"):
+        sys.modules.pop(module_name, None)
 
 
 def test_redactor_uses_credential_and_explicit_environment_keys():
@@ -239,3 +262,124 @@ def test_detached_worker_persists_only_redacted_output(tmp_path):
     assert exit_path.read_text(encoding="utf-8") == "0\n"
     assert "provider says ***" in log_path.read_text(encoding="utf-8")
     assert all("detached-secret-value" not in path.read_text(encoding="utf-8") for path in run_dir.iterdir())
+
+
+def test_google_play_run_keeps_secrets_out_of_status_log_and_checkpoint(tmp_path, monkeypatch):
+    package = tmp_path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "play.py").write_text(
+        "\n".join(
+            [
+                "from cdt.artifacts import ArtifactKind, BuildArtifact",
+                "from cdt.sdk import step",
+                "",
+                "@step('demo.aab')",
+                "def make_aab(ctx, output: str):",
+                "    aab = ctx.cwd / output",
+                "    aab.write_bytes(b'android-app-bundle-bytes')",
+                "    ctx.register_artifact('aab', BuildArtifact(ArtifactKind.AAB, aab, 'Android AAB'))",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "cdt.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "plugins:",
+                "  - cdt_steps.play",
+                "pipelines:",
+                "  play:",
+                "    risk: production",
+                "    steps:",
+                "      - demo.aab: {output: app-release.aab}",
+                "      - google_play.upload_aab:",
+                "          artifact: aab",
+                "          package_name: com.example.app",
+                "          track: internal",
+                "          release_status: completed",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    for module_name in ("cdt_steps.play", "cdt_steps"):
+        sys.modules.pop(module_name, None)
+
+    token = "play-publishing-secret"
+    adc_material = "fake-service-account-private-key-material"
+    adc_file = tmp_path / "adc.json"
+    adc_file.write_text(adc_material, encoding="utf-8")
+    monkeypatch.setenv("DEMO_TOKEN", token)
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(adc_file))
+
+    class LeakyFakeClient:
+        """Fake publishing client whose definite failure echoes a secret."""
+
+        def __init__(self, env: dict[str, str], cwd: Path):
+            pass
+
+        def create_edit(self, package_name: str) -> dict[str, Any]:
+            return {"id": "edit-1", "expiryTimeSeconds": "43200"}
+
+        def get_edit(self, package_name: str, edit_id: str) -> dict[str, Any]:
+            return {"id": edit_id}
+
+        def list_bundles(self, package_name: str, edit_id: str) -> list[dict[str, Any]]:
+            return []
+
+        def upload_bundle(self, package_name: str, edit_id: str, aab_path: Path) -> dict[str, Any]:
+            return {"versionCode": 40, "sha256": compute_file_sha256(Path(aab_path))}
+
+        def get_track(self, package_name: str, edit_id: str, track: str) -> dict[str, Any]:
+            raise GooglePlayError(STAGE_TRACK_GET, "track not found", http_status=404)
+
+        def update_track(
+            self, package_name: str, edit_id: str, track: str, releases: list[dict[str, Any]]
+        ) -> dict[str, Any]:
+            return {"track": track, "releases": list(releases)}
+
+        def commit_edit(self, package_name: str, edit_id: str) -> dict[str, Any]:
+            raise GooglePlayError(
+                STAGE_EDIT_COMMIT,
+                f"permission denied for context {token}",
+                http_status=403,
+            )
+
+        def delete_edit(self, package_name: str, edit_id: str) -> None:
+            pass
+
+    monkeypatch.setattr(google_play_step, "GooglePlayClient", LeakyFakeClient)
+
+    result = runner.invoke(app, ["run", "play", "--confirm", "play"])
+
+    assert result.exit_code != 0
+    assert token not in result.output
+    assert "permission denied for context ***" in result.output
+
+    runs = list_runs(tmp_path)
+    paths = run_paths(tmp_path, runs[0]["run_id"])
+    status = read_json(paths.status)
+    assert status["status"] == "failed"
+    assert "***" in status["error"]
+    # The saved status and log are redacted end to end.
+    saved_files = [path for path in paths.root.iterdir() if path.is_file()]
+    assert saved_files, "run record files are expected"
+    for path in saved_files:
+        saved = path.read_text(encoding="utf-8")
+        assert token not in saved, path.name
+        assert adc_material not in saved, path.name
+
+    # The publication checkpoint stores parameters only, never secrets.
+    checkpoints = list((tmp_path / ".cdt" / "google-play" / "operations").glob("*.json"))
+    assert len(checkpoints) == 1
+    checkpoint_raw = checkpoints[0].read_text(encoding="utf-8")
+    checkpoint = json.loads(checkpoint_raw)
+    assert checkpoint["phase"] == "track_updated"
+    for secret in (token, adc_material):
+        assert secret not in checkpoint_raw
+    assert "GOOGLE_APPLICATION_CREDENTIALS" not in checkpoint_raw

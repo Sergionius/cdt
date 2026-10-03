@@ -162,3 +162,35 @@ cdt run prod \
 ```
 
 See [Resuming a failed TestFlight upload](pipelines.md#resuming-a-failed-testflight-upload) in the pipeline documentation for the full description.
+
+### Google Play publication checkpoints
+
+`google_play.upload_aab` keeps durable operation state under `.cdt/google-play/operations/<operation-id>.json`, separate from `status.json`. Checkpoints store only non-secret publication data — package, track, release parameters, AAB hash, edit metadata, version code, phase, and the confirmed result once known — and are written atomically before every external mutation.
+
+During resume and plain reruns:
+
+- completed steps are skipped as usual, and an already-confirmed Google Play operation returns its stored result without repeating any upload or commit;
+- an unfinished operation resumes from its recorded phase with the restored artifact, never repeating confirmed mutations blindly;
+- a plain rerun without `--resume-status-file`/`--skip-completed` cannot bypass an unfinished operation either: the checkpoint ID derives from the publication parameters and the AAB SHA-256, so identical parameters resume the same operation, and changed parameters stop with an explicit conflict error;
+- if the result cannot be established after a lost response, the run fails with an explicit "publication result is unknown" error naming the checkpoint and asking you to verify the release in Play Console (Bundle Explorer and the track pages) before doing anything else.
+
+Deleting a checkpoint is **not** a safe way to repeat a publication: it erases CDT's knowledge of changes that may already have been applied remotely. Verify the app in Play Console and resolve any half-applied state there instead.
+
+The per-package lock `.cdt/google-play/locks/<package>.lock` serializes publications within this checkout only. It does not coordinate other machines, CI runners, or manual Play Console edits; conflicting external changes make the run stop instead of being overwritten.
+
+### App Store review checkpoints
+
+`appstore.submit_review` keeps its state under `.cdt/appstore/`, separate from `status.json`:
+
+- `.cdt/appstore/uploads/<bundle-key>.json` records which build the last successful full TestFlight cycle (`appstore.upload_testflight` or `appstore.complete_testflight`) made ready for one app: bundle id, marketing version, build number, and completion time. It stores no tokens or secrets. A standalone submit run reads this record only when the current pipeline has no version context, and the chosen build is always re-verified in App Store Connect before anything is submitted. Records for builds uploaded before this functionality do not exist; rerun `appstore.complete_testflight` for the known build with the version context restored from the old run's status file to create one without re-uploading the IPA.
+- `.cdt/appstore/operations/<operation-id>.json` is a checkpoint for one review submission, written atomically before every external change. Nothing is sent to Apple if the checkpoint could not be saved.
+- `.cdt/appstore/locks/` serializes submissions of one app within this checkout only; it does not coordinate other machines, other checkouts, or manual App Store Connect work.
+
+During resume and reruns:
+
+- an identical already-confirmed submission is re-verified against App Store Connect and returns its stored result without submitting again — a successful submission followed by a later pipeline failure never causes a second submission;
+- a lost submit or creation response is reconciled with read-only GET verification: an accepted submission completes the operation without repeating the request;
+- when the outcome still cannot be established, the run fails with an explicit error naming the checkpoint (`.cdt/appstore/operations/<operation-id>.json`) and the operation stays blocked: further runs stop until the version and the submission have been verified in App Store Connect;
+- changed submission parameters while an operation is unfinished, a version in a non-editable state, a foreign review submission, or a remotely changed build stop with an explicit conflict instead of being overwritten or resubmitted.
+
+Deleting a checkpoint is **not** a safe way to repeat a submission: it erases CDT's knowledge of changes that may already have been applied remotely. Verify the version and the submission in App Store Connect and resolve any half-applied state there instead.
