@@ -16,9 +16,11 @@ from cdt.pipeline.config import (
     parse_pipeline_inputs,
     validate_pipeline_inputs,
 )
+from cdt.pipeline.policy import RetryPolicy
 from cdt.pipeline.registry import _clear_steps_for_tests
 from cdt.pipeline.validation import validate_pipeline
 from cdt.runner import CommandRunner
+from cdt.sdk import step as sdk_step
 
 
 @pytest.mark.parametrize(
@@ -89,7 +91,7 @@ def test_extended_step_preserves_legacy_forms_and_ids(tmp_path):
     assert leaf.when == {"input": "deploy", "present": True}
 
 
-@pytest.mark.parametrize("extra", ["typo: true", "retry: {}"])
+@pytest.mark.parametrize("extra", ["typo: true", "retries: {}"])
 def test_extended_step_rejects_unknown_fields(tmp_path, extra):
     (tmp_path / "cdt.yaml").write_text(
         f"version: 1\npipelines:\n  demo:\n    steps:\n      - step: flutter.pub_get\n        {extra}\n"
@@ -107,6 +109,99 @@ def test_condition_requires_declared_input_and_keeps_option_validation(tmp_path)
     register_builtin_steps()
     errors = validate_pipeline(load_pipeline_config(tmp_path))
     assert {error["code"] for error in errors} == {"invalid_condition", "unknown_step_option"}
+
+
+def test_extended_step_parses_retry_policy_separately_from_options(tmp_path):
+    @sdk_step("demo.transient", retry_safe=True)
+    def transient(ctx):
+        pass
+
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    steps:\n"
+        "      - step: demo.transient\n        with: {}\n"
+        "        retry: {max_attempts: 3, delay_seconds: 1}\n"
+        "      - parallel:\n          steps:\n            - sequence:\n                steps:\n"
+        "                  - step: demo.transient\n                    retry: {max_attempts: 5, delay_seconds: 60}\n"
+    )
+    config = load_pipeline_config(tmp_path)
+    steps = configured_steps(config.pipelines["demo"])
+    assert steps[0].retry == RetryPolicy(max_attempts=3, delay_seconds=1.0)
+    assert steps[0].options == {}
+    assert steps[1].steps[0].steps[0].retry == RetryPolicy(max_attempts=5, delay_seconds=60.0)
+    assert validate_pipeline(config) == []
+
+
+def test_retry_defaults_keep_single_attempt_and_zero_delay(tmp_path):
+    @sdk_step("demo.transient", retry_safe=True)
+    def transient(ctx):
+        pass
+
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    steps:\n      - step: demo.transient\n        retry: {}\n"
+    )
+    config = load_pipeline_config(tmp_path)
+    leaf = configured_steps(config.pipelines["demo"])[0]
+    assert leaf.retry == RetryPolicy(max_attempts=1, delay_seconds=0.0)
+    assert not leaf.retry.enabled
+    assert validate_pipeline(config) == []
+
+
+@pytest.mark.parametrize(
+    "retry_block",
+    [
+        "{max_attempts: 0}",
+        "{max_attempts: 6}",
+        "{max_attempts: true}",
+        "{max_attempts: '3'}",
+        "{max_attempts: 1.5}",
+        "{delay_seconds: -1}",
+        "{delay_seconds: 61}",
+        "{delay_seconds: true}",
+        "{delay_seconds: '1'}",
+        "{delay_seconds: .inf}",
+        "{delay_seconds: .nan}",
+        "{unknown: 1}",
+        "3",
+    ],
+)
+def test_invalid_retry_rejected(tmp_path, retry_block):
+    (tmp_path / "cdt.yaml").write_text(
+        f"version: 1\npipelines:\n  demo:\n    steps:\n      - step: flutter.pub_get\n        retry: {retry_block}\n"
+    )
+    with pytest.raises(typer.BadParameter, match="retry"):
+        load_pipeline_config(tmp_path)
+
+
+def test_retry_above_single_attempt_requires_explicit_capability(tmp_path):
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    steps:\n      - step: flutter.pub_get\n        retry: {max_attempts: 2}\n"
+    )
+    register_builtin_steps()
+    errors = validate_pipeline(load_pipeline_config(tmp_path))
+    assert {error["code"] for error in errors} == {"retry_requires_capability"}
+    assert "cannot be inferred from risk" in errors[0]["message"]
+
+
+def test_retry_single_attempt_needs_no_capability(tmp_path):
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    steps:\n"
+        "      - step: flutter.pub_get\n        retry: {max_attempts: 1, delay_seconds: 2}\n"
+    )
+    register_builtin_steps()
+    assert validate_pipeline(load_pipeline_config(tmp_path)) == []
+
+
+def test_single_key_form_keeps_retry_out_of_constructor_options(tmp_path):
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    steps:\n      - flutter.pub_get: {retry: {max_attempts: 2}}\n"
+    )
+    register_builtin_steps()
+    config = load_pipeline_config(tmp_path)
+    leaf = configured_steps(config.pipelines["demo"])[0]
+    assert leaf.retry is None
+    assert leaf.options == {"retry": {"max_attempts": 2}}
+    errors = validate_pipeline(config)
+    assert {error["code"] for error in errors} == {"unknown_step_option"}
 
 
 def setup_function():

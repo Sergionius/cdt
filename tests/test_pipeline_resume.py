@@ -64,6 +64,116 @@ def test_resume_explicit_skipped_leaf_recomputes_conditions_from_inputs(tmp_path
     assert "Resumeinputsdonotmatch" in _compact_visible_text(mismatch.output)
 
 
+def _write_retry_project(tmp_path) -> None:
+    # Re-import the plugin module fresh: a previous test may have imported a
+    # same-named module from another tmp directory, which would skip decorator
+    # registration and break the run.
+    for module_name in ("cdt_steps", "cdt_steps.flaky"):
+        sys.modules.pop(module_name, None)
+    package = tmp_path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "flaky.py").write_text(
+        "\n".join(
+            [
+                "from cdt.sdk import RetryableStepError, step",
+                "",
+                "@step('demo.flaky', retry_safe=True)",
+                "def flaky(ctx):",
+                "    runs = ctx.cwd / 'flaky-runs.txt'",
+                "    value = int(runs.read_text(encoding='utf-8')) if runs.exists() else 0",
+                "    runs.write_text(str(value + 1), encoding='utf-8')",
+                "    threshold = int((ctx.cwd / 'fail-times.txt').read_text(encoding='utf-8'))",
+                "    if value <= threshold:",
+                "        raise RetryableStepError(f'transient failure {value}')",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\nplugins:\n  - cdt_steps.flaky\npipelines:\n  demo:\n    steps:\n"
+        "      - step: demo.flaky\n        retry: {max_attempts: 2, delay_seconds: 0}\n",
+        encoding="utf-8",
+    )
+
+
+def test_resume_of_unfinished_retry_step_starts_new_bounded_cycle(tmp_path, monkeypatch):
+    _write_retry_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    (tmp_path / "fail-times.txt").write_text("99", encoding="utf-8")
+    first_status = tmp_path / "first.json"
+
+    first = runner.invoke(app, ["run", "demo", "--status-file", str(first_status)])
+
+    assert first.exit_code != 0
+    payload = json.loads(first_status.read_text(encoding="utf-8"))
+    assert payload["status"] == "failed"
+    assert payload["step_attempts"]["0"]["attempts"] == 2
+    assert (tmp_path / "flaky-runs.txt").read_text(encoding="utf-8") == "2"
+
+    # The step now succeeds on its first attempt: resume starts a fresh,
+    # bounded attempt cycle instead of restoring the exhausted budget.
+    (tmp_path / "fail-times.txt").write_text("0", encoding="utf-8")
+    second_status = tmp_path / "second.json"
+    second = runner.invoke(
+        app,
+        [
+            "run",
+            "demo",
+            "--resume-status-file",
+            str(first_status),
+            "--status-file",
+            str(second_status),
+            "--resume-from",
+            "demo.flaky",
+        ],
+    )
+
+    assert second.exit_code == 0, second.output
+    resumed = json.loads(second_status.read_text(encoding="utf-8"))
+    assert resumed["status"] == "success"
+    assert resumed["completed_steps"] == ["0"]
+    assert resumed["step_attempts"] == {}
+    assert (tmp_path / "flaky-runs.txt").read_text(encoding="utf-8") == "3"
+
+
+def test_resume_skips_completed_retry_step_without_new_attempts(tmp_path, monkeypatch):
+    _write_retry_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    (tmp_path / "fail-times.txt").write_text("0", encoding="utf-8")
+    first_status = tmp_path / "first.json"
+
+    first = runner.invoke(app, ["run", "demo", "--status-file", str(first_status)])
+
+    assert first.exit_code == 0, first.output
+    assert (tmp_path / "flaky-runs.txt").read_text(encoding="utf-8") == "2"
+
+    second_status = tmp_path / "second.json"
+    second = runner.invoke(
+        app,
+        [
+            "run",
+            "demo",
+            "--resume-status-file",
+            str(first_status),
+            "--status-file",
+            str(second_status),
+            "--skip-completed",
+        ],
+    )
+
+    assert second.exit_code == 0, second.output
+    resumed = json.loads(second_status.read_text(encoding="utf-8"))
+    assert resumed["status"] == "success"
+    assert resumed["completed_steps"] == ["0"]
+    assert resumed["step_attempts"] == {}
+    # The completed leaf is never re-executed, so no side effect repeats.
+    assert (tmp_path / "flaky-runs.txt").read_text(encoding="utf-8") == "2"
+
+
 def setup_function():
     _clear_steps_for_tests()
     for module in ("cdt_steps.resume", "cdt_steps.play", "cdt_steps.notify"):

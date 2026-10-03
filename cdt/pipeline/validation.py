@@ -16,6 +16,19 @@ from .config import (
 from .registry import get_step_factory, get_step_metadata, list_step_metadata, list_steps
 
 
+# Retries beyond a single attempt are an explicit capability declared by the
+# step author (StepMetadata.retry_safe); risk labels never imply it.
+def _retry_capability_error(step_name: str, path: str) -> dict[str, str]:
+    return {
+        "code": "retry_requires_capability",
+        "message": (
+            f"Step {step_name} is not declared retry_safe; retry.max_attempts > 1 "
+            "requires an explicit retry-safe step and cannot be inferred from risk."
+        ),
+        "path": f"{path}.retry",
+    }
+
+
 def pipeline_names(config: PipelineConfig) -> list[str]:
     return sorted(config.pipelines)
 
@@ -165,6 +178,8 @@ def _validate_step(step: StepSpec, path: str, pipeline_risk: str) -> list[dict[s
             errors.append(_google_play_risk_error(step.name, pipeline_risk, path))
         if step.name in _APPSTORE_REVIEW_STEPS:
             errors.append(_appstore_review_risk_error(step.name, pipeline_risk, path))
+    if step.retry is not None and step.retry.max_attempts > 1 and not metadata.retry_safe:
+        errors.append(_retry_capability_error(step.name, path))
     errors.extend(_validate_step_options(step, factory, path))
     return errors
 
@@ -210,4 +225,5 @@ def _step_node(item: PipelineItemSpec, step_id: str) -> dict[str, Any]:
         "name": item.name,
         "options": item.options,
         **({"when": item.when} if item.when is not None else {}),
+        **({"retry": item.retry.to_dict()} if item.retry is not None else {}),
     }

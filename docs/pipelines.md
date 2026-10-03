@@ -101,6 +101,57 @@ Conditions never bypass configuration validation, production risk requirements,
 or exact production confirmation. Static preflight remains conservative and checks
 all declared leaves, including conditional ones.
 
+## Step retries
+
+Extended leaf records can also declare an opt-in retry policy:
+
+```yaml
+- step: appstore.upload_testflight
+  with: {}
+  retry:
+    max_attempts: 3
+    delay_seconds: 1
+```
+
+`retry` belongs to the envelope, never to `with`: constructor options of the step
+are unchanged. `max_attempts` is an integer from 1 to 5 (default 1);
+`delay_seconds` is a finite number from 0 to 60 seconds (default 0). Unknown
+retry fields, booleans in place of integers, and non-finite numbers are rejected
+before execution.
+
+Retries require an explicit capability from the step author:
+
+- `max_attempts` above 1 is accepted only for steps whose metadata declares
+  `retry_safe: true` (SDK: `@step(..., retry_safe=True)`).
+- The capability is never inferred from `risk: safe` and is never added to
+  built-in steps automatically. Built-ins keep their existing service-level
+  retries: App Store Connect requests, Google Play reads, and other internal
+  retry budgets are unchanged, and no upload, push, publication, webhook, or
+  hook step gained a new automatic retry.
+
+A retryable failure is a special `RetryableStepError` raised by the step itself.
+It means a transient failure after which rerunning the whole step is safe.
+SDK contract: before raising `RetryableStepError`, a step must leave the
+pipeline context and its external effects in a state from which rerunning the
+whole step is safe. Neither the executor nor the retry policy performs any
+generic rollback of partial effects. Ordinary exceptions, validation errors,
+cancellation, and ambiguous mutation results are never retried.
+
+Execution semantics:
+
+- Attempts are bounded by `max_attempts` with a fixed `delay_seconds` pause
+  between attempts; each attempt constructs a fresh runtime step instance.
+- The policy applies identically to sequential and parallel leaves.
+- A leaf is completed only after a successful attempt. Intermediate failures
+  are not terminal failures: the status file records `step_attempts` with the
+  attempt count and the redacted last error per leaf.
+- Retries never start for skipped leaves, and a completed leaf is never
+  re-executed. An explicit resume of an unfinished step starts a new bounded
+  attempt cycle; the saved budget is not carried over.
+
+`cdt pipeline plan` and `cdt pipeline inspect` show each leaf's `retry` policy,
+and plans include `retry_safe` in the step metadata.
+
 ## CDT self-release pipeline
 
 The CDT repository uses its own `cdt.yaml` production pipeline named `release` for its own releases. The version is always explicit:
@@ -162,7 +213,7 @@ Each item in `steps` is one of:
 
 - Step name string: `- flutter.pub_get`
 - Single-key step mapping: `- android.build_aab: { profile: prod }`
-- Extended leaf mapping: `- step: flutter.pub_get` with optional `with` and `when`
+- Extended leaf mapping: `- step: flutter.pub_get` with optional `with`, `when`, and `retry`
 - Parallel group: `- parallel: { steps: [...] }`
 - Sequential group: `- sequence: { steps: [...] }`
 

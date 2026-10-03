@@ -123,6 +123,7 @@ def test_step_metadata_to_dict_is_structured():
         produces=(ResultProduction("upload_result"),),
         external_tools=("demo",),
         requires_env=("DEMO_TOKEN",),
+        retry_safe=True,
     )
 
     assert metadata.to_dict() == {
@@ -139,7 +140,28 @@ def test_step_metadata_to_dict_is_structured():
         "external_tools": ["demo"],
         "requires_env": ["DEMO_TOKEN"],
         "plugin": False,
+        "retry_safe": True,
     }
+
+
+def test_step_metadata_defaults_to_not_retry_safe_and_normalizes_to_bool():
+    register_step("demo.plain", DummyStep)
+    register_step("demo.retryable", DummyStep, metadata=StepMetadata(name="demo.retryable", retry_safe=True))
+    register_step("demo.coerced", DummyStep, metadata=StepMetadata(name="demo.coerced", retry_safe="yes"))
+
+    assert get_step_metadata("demo.plain").retry_safe is False
+    assert get_step_metadata("demo.retryable").retry_safe is True
+    assert get_step_metadata("demo.coerced").retry_safe is True
+    # Registration normalizes into a fresh metadata object and keeps the capability.
+    normalized = get_step_metadata("demo.retryable")
+    assert normalized.to_dict()["retry_safe"] is True
+
+
+def test_retryable_step_error_is_exported_from_sdk():
+    from cdt.pipeline.policy import RetryableStepError as PolicyError
+    from cdt.sdk import RetryableStepError as SdkError
+
+    assert SdkError is PolicyError
 
 
 def test_result_requirement_rejects_invalid_mode():
@@ -218,6 +240,7 @@ def test_sdk_step_rejects_metadata_with_requires_or_produces():
     given = StepMetadata(name="demo.fetch")
 
     with pytest.raises(TypeError, match="Cannot pass both 'metadata' and 'requires'/'produces'"):
+
         @sdk_step("demo.fetch", metadata=given, requires=[ResultRequirement(("ios_ipa",))])
         def fetch(ctx, output: str) -> None:
             pass
@@ -252,6 +275,28 @@ def test_sdk_step_defaults_category_from_name_and_custom_risk():
     assert metadata.category == "offline"
     assert metadata.risk == "custom"
     assert metadata.plugin is True
+    # The capability is opt-in: the SDK default keeps retries disabled.
+    assert metadata.retry_safe is False
+
+
+def test_sdk_step_accepts_retry_safe_keyword():
+    @sdk_step("demo.transient", retry_safe=True)
+    def fetch(ctx, output: str) -> None:
+        pass
+
+    assert get_step_metadata("demo.transient").retry_safe is True
+
+
+def test_sdk_step_metadata_object_keeps_retry_safe():
+    given = StepMetadata(name="demo.transient", retry_safe=True)
+
+    @sdk_step("demo.transient", metadata=given)
+    def fetch(ctx, output: str) -> None:
+        pass
+
+    metadata = get_step_metadata("demo.transient")
+    assert metadata.plugin is True
+    assert metadata.retry_safe is True
 
 
 def test_sdk_step_defaults_custom_category_for_flat_names():

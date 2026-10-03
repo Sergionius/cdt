@@ -55,6 +55,14 @@ def schema_payload() -> dict[str, Any]:
                 },
                 "oneOf": [{"required": [operator]} for operator in ("equals", "not_equals", "present")],
             },
+            "retryPolicy": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "max_attempts": {"type": "integer", "minimum": 1, "maximum": 5, "default": 1},
+                    "delay_seconds": {"type": "number", "minimum": 0, "maximum": 60, "default": 0},
+                },
+            },
             "extendedStep": {
                 "type": "object",
                 "additionalProperties": False,
@@ -63,6 +71,7 @@ def schema_payload() -> dict[str, Any]:
                     "step": {"type": "string", "minLength": 1, "not": {"enum": ["parallel", "sequence"]}},
                     "with": {"type": "object"},
                     "when": {"$ref": "#/$defs/condition"},
+                    "retry": {"$ref": "#/$defs/retryPolicy"},
                 },
                 "allOf": [
                     {

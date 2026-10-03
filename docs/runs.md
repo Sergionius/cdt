@@ -68,6 +68,11 @@ groups). `skipped_steps` lists conditionally skipped leaves separately from
 Decisions cover the whole pipeline even when resume selects only part of it.
 Older statuses may omit these optional fields.
 
+`step_attempts` records retry activity per leaf: the index of the last failed
+attempt and its redacted error message. Intermediate retryable failures are not
+terminal failures; the leaf is completed only after a successful attempt, and
+the field is absent for steps that never retried. Older statuses may omit it.
+
 A status command may report `stale` when a detached PID disappeared without a terminal status or exit code. `timeout` is a wait result, not a pipeline terminal state.
 
 ## Failed-build output
@@ -164,6 +169,11 @@ from saved decisions. Even an explicit `--resume-from <step-id>` cannot force a
 conditionally skipped leaf to run. Old statuses without condition fields remain
 valid resume sources; missing saved inputs mean an empty input set.
 See [Conditional steps](pipelines.md#conditional-steps) for syntax and semantics.
+
+Retried steps follow the same rules: completed leaves are skipped without new
+attempts, and an unfinished leaf starts a new bounded attempt cycle — the saved
+`step_attempts` budget is informational and is not carried over.
+See [Step retries](pipelines.md#step-retries) for the retry contract.
 
 For TestFlight pipelines, resume skips completed build and upload steps and starts at `appstore.complete_testflight` with the version context restored from the status file, so the IPA is not re-uploaded and the build number is unchanged:
 

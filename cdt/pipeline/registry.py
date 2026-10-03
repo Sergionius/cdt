@@ -84,6 +84,10 @@ class StepMetadata:
 
     `requires` and `produces` use structured dataclasses. They describe static
     result/artifact types, not configured pipeline-local artifact names.
+
+    `retry_safe` is an explicit capability: only retry-safe steps may declare
+    `retry.max_attempts > 1`. It is never inferred from `risk` and never added
+    to built-in steps automatically.
     """
 
     name: str
@@ -95,10 +99,12 @@ class StepMetadata:
     external_tools: tuple[str, ...] = ()
     requires_env: tuple[str, ...] = ()
     plugin: bool = False
+    retry_safe: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "external_tools", _string_tuple(self.external_tools, "StepMetadata.external_tools"))
         object.__setattr__(self, "requires_env", _string_tuple(self.requires_env, "StepMetadata.requires_env"))
+        object.__setattr__(self, "retry_safe", bool(self.retry_safe))
 
     def to_dict(self) -> dict:
         return {
@@ -111,6 +117,7 @@ class StepMetadata:
             "external_tools": list(self.external_tools),
             "requires_env": list(self.requires_env),
             "plugin": self.plugin,
+            "retry_safe": self.retry_safe,
         }
 
 
@@ -183,6 +190,7 @@ def _normalize_metadata(name: str, metadata: StepMetadata | None) -> StepMetadat
         external_tools=tuple(metadata.external_tools),
         requires_env=tuple(metadata.requires_env),
         plugin=metadata.plugin,
+        retry_safe=metadata.retry_safe,
     )
 
 

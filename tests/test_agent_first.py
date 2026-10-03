@@ -55,13 +55,84 @@ def test_extended_schema_is_unambiguous_and_bundled():
     extended = schema["$defs"]["extendedStep"]
     assert extended["required"] == ["step"]
     assert not extended["additionalProperties"]
+    assert extended["properties"]["retry"] == {"$ref": "#/$defs/retryPolicy"}
+    retry = schema["$defs"]["retryPolicy"]
+    assert retry["additionalProperties"] is False
+    assert retry["properties"]["max_attempts"] == {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 5,
+        "default": 1,
+    }
+    assert retry["properties"]["delay_seconds"] == {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 60,
+        "default": 0,
+    }
     plugin = next(item for item in schema["$defs"]["step"]["oneOf"] if item.get("description") == "Project plugin step")
     assert re.fullmatch(plugin["propertyNames"]["pattern"], "step") is None
+    assert re.fullmatch(plugin["propertyNames"]["pattern"], "retry") is None
     assert schema["$defs"]["condition"]["oneOf"] == [
         {"required": ["equals"]},
         {"required": ["not_equals"]},
         {"required": ["present"]},
     ]
+
+
+def test_builtin_steps_do_not_declare_automatic_retries():
+    from cdt.pipeline.builtins import _BUILTIN_METADATA
+
+    retriable = [name for name, metadata in _BUILTIN_METADATA.items() if metadata.retry_safe]
+    assert retriable == []
+
+
+def test_plan_and_inspect_expose_retry_policy_and_capability(tmp_path, monkeypatch):
+    package = tmp_path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "demo.py").write_text(
+        "from cdt.sdk import step\n\n@step('demo.flaky', retry_safe=True)\ndef flaky(ctx):\n    pass\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\nplugins:\n  - cdt_steps.demo\npipelines:\n  test:\n    steps:\n"
+        "      - step: demo.flaky\n        retry: {max_attempts: 3, delay_seconds: 2}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    plan = json.loads(runner.invoke(app, ["pipeline", "plan", "test", "--json"]).output)
+    node = plan["steps"][0]
+    assert node["retry"] == {"max_attempts": 3, "delay_seconds": 2}
+    assert node["metadata"]["retry_safe"] is True
+
+    inspect = json.loads(runner.invoke(app, ["pipeline", "inspect", "test", "--json"]).output)
+    assert inspect["steps"][0]["retry"] == {"max_attempts": 3, "delay_seconds": 2}
+
+
+def test_plan_flags_retry_without_capability(tmp_path, monkeypatch):
+    package = tmp_path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "demo.py").write_text(
+        "from cdt.sdk import step\n\n@step('demo.risky')\ndef risky(ctx):\n    pass\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\nplugins:\n  - cdt_steps.demo\npipelines:\n  test:\n    steps:\n"
+        "      - step: demo.risky\n        retry: {max_attempts: 2}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    result = runner.invoke(app, ["pipeline", "plan", "test", "--json"])
+
+    assert result.exit_code != 0
+    payload = json.loads(result.output)
+    assert payload["errors"][0]["code"] == "retry_requires_capability"
 
 
 def setup_function():

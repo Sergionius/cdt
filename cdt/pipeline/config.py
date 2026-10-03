@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib
+import math
 import re
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,7 +14,8 @@ import typer
 from ..versioning import _current_flutter_version
 from .context import PipelineContext
 from .executor import ParallelStepGroup, SequentialStepGroup
-from .registry import get_step_factory
+from .policy import MAX_ATTEMPTS_LIMIT, MAX_DELAY_SECONDS, RetryableStepError, RetryPolicy, run_with_retry_policy
+from .registry import get_step_factory, get_step_metadata
 
 try:
     import yaml
@@ -29,6 +32,7 @@ class StepSpec:
     name: str
     options: dict[str, Any] = field(default_factory=dict)
     when: dict[str, Any] | None = None
+    retry: RetryPolicy | None = None
 
 
 @dataclass(frozen=True)
@@ -72,11 +76,37 @@ class ConfiguredStep:
     options: dict[str, Any]
     step_id: str | None = None
     when: dict[str, Any] | None = None
+    retry: RetryPolicy | None = None
 
     def run(self, ctx: PipelineContext) -> None:
         resolved_options = resolve_value(self.options, ctx)
-        step = get_step_factory(self.name)(**resolved_options)
-        step.run(ctx)
+        policy = self.retry or RetryPolicy()
+        if policy.enabled:
+            # Defense in depth: validation already rejects retries for steps
+            # without the explicit retry_safe capability.
+            if not get_step_metadata(self.name).retry_safe:
+                raise typer.BadParameter(
+                    f"Step {self.name} is not declared retry_safe; "
+                    "retry.max_attempts > 1 requires an explicit retry-safe step"
+                )
+        attempt_id = self.step_id or self.name
+
+        def attempt() -> None:
+            # A fresh runtime instance per attempt: the previous instance may
+            # keep state mutated by the failed attempt.
+            step = get_step_factory(self.name)(**resolved_options)
+            step.run(ctx)
+
+        def on_retryable_failure(count: int, exc: RetryableStepError) -> None:
+            ctx.mark_step_retry(attempt_id, count, str(exc))
+
+        try:
+            run_with_retry_policy(policy, attempt, on_retryable_failure=on_retryable_failure, sleep=time.sleep)
+        except RetryableStepError as exc:
+            if policy.enabled:
+                # Exhaustion is terminal: keep the final attempts count recorded.
+                ctx.mark_step_retry(attempt_id, policy.max_attempts, str(exc))
+            raise
 
 
 def load_pipeline_config(cwd: Path, filename: str = "cdt.yaml") -> PipelineConfig:
@@ -250,11 +280,11 @@ def _configured_item(
         return ParallelStepGroup(children, step_id=step_id)
     if isinstance(item, SequenceSpec):
         children = [
-            ConfiguredStep(step.name, step.options, f"{step_id}/{index}", step.when)
+            ConfiguredStep(step.name, step.options, f"{step_id}/{index}", step.when, step.retry)
             for index, step in enumerate(item.steps)
         ]
         return SequentialStepGroup(children, step_id=step_id)
-    return ConfiguredStep(item.name, item.options, step_id, item.when)
+    return ConfiguredStep(item.name, item.options, step_id, item.when, item.retry)
 
 
 def resolve_value(value: Any, ctx: PipelineContext) -> Any:
@@ -272,7 +302,7 @@ def _parse_step_spec(pipeline_name: str, index: int, item: Any) -> PipelineItemS
     if isinstance(item, str):
         return StepSpec(name=item)
     if isinstance(item, dict) and "step" in item:
-        if set(item) - {"step", "with", "when"}:
+        if set(item) - {"step", "with", "when", "retry"}:
             raise typer.BadParameter(f"{prefix} has unsupported extended step fields")
         name = item["step"]
         if not isinstance(name, str) or not name.strip() or name in {"parallel", "sequence"}:
@@ -282,7 +312,8 @@ def _parse_step_spec(pipeline_name: str, index: int, item: Any) -> PipelineItemS
             raise typer.BadParameter(f"{prefix} with must be a mapping")
         if "when" in item:
             validate_condition(item["when"])
-        return StepSpec(name=name, options=options, when=item.get("when"))
+        retry = parse_retry_policy(item["retry"], prefix) if "retry" in item else None
+        return StepSpec(name=name, options=options, when=item.get("when"), retry=retry)
     if isinstance(item, dict) and len(item) == 1:
         name, options = next(iter(item.items()))
         if not isinstance(name, str) or not name.strip():
@@ -317,6 +348,29 @@ def validate_condition(when: Any, inputs: Mapping[str, InputSpec] | None = None)
             raise typer.BadParameter("when present must be a boolean")
     elif not isinstance(value, str) or "${" in value:
         raise typer.BadParameter(f"when {operator} must be a string without interpolation")
+
+
+def parse_retry_policy(raw: Any, prefix: str) -> RetryPolicy:
+    """Parse the extended-record ``retry`` block; constructor options never see it."""
+    label = f"{prefix} retry"
+    if not isinstance(raw, dict):
+        raise typer.BadParameter(f"{label} must be a mapping")
+    unknown_fields = sorted(set(raw) - {"max_attempts", "delay_seconds"})
+    if unknown_fields:
+        raise typer.BadParameter(f"{label} has unsupported fields: " + ", ".join(unknown_fields))
+    max_attempts = raw.get("max_attempts", 1)
+    if isinstance(max_attempts, bool) or not isinstance(max_attempts, int):
+        raise typer.BadParameter(f"{label} max_attempts must be an integer, not a boolean or string")
+    if not 1 <= max_attempts <= MAX_ATTEMPTS_LIMIT:
+        raise typer.BadParameter(f"{label} max_attempts must be between 1 and {MAX_ATTEMPTS_LIMIT}")
+    delay_seconds = raw.get("delay_seconds", 0)
+    if isinstance(delay_seconds, bool) or not isinstance(delay_seconds, (int, float)):
+        raise typer.BadParameter(f"{label} delay_seconds must be a number, not a boolean or string")
+    if not math.isfinite(delay_seconds):
+        raise typer.BadParameter(f"{label} delay_seconds must be a finite number")
+    if not 0 <= delay_seconds <= MAX_DELAY_SECONDS:
+        raise typer.BadParameter(f"{label} delay_seconds must be between 0 and {MAX_DELAY_SECONDS} seconds")
+    return RetryPolicy(max_attempts=max_attempts, delay_seconds=float(delay_seconds))
 
 
 def _parse_parallel_spec(pipeline_name: str, index: int, options: Any) -> ParallelSpec:

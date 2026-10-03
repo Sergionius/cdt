@@ -183,6 +183,50 @@ def test_run_status_file_records_failure(tmp_path, monkeypatch):
     assert "boom" in payload["error"]
 
 
+def test_run_status_file_records_retry_attempts_with_redacted_last_error(tmp_path, monkeypatch):
+    package = tmp_path / "cdt_steps"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "demo.py").write_text(
+        "\n".join(
+            [
+                "from cdt.sdk import RetryableStepError, step",
+                "",
+                "@step('demo.transient', retry_safe=True)",
+                "def transient(ctx):",
+                "    count = ctx.cwd / 'attempts.txt'",
+                "    value = int(count.read_text(encoding='utf-8')) if count.exists() else 0",
+                "    count.write_text(str(value + 1), encoding='utf-8')",
+                "    if value < 2:",
+                "        raise RetryableStepError('token supersecret123 unavailable')",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\nplugins:\n  - cdt_steps.demo\npipelines:\n  demo:\n    steps:\n"
+        "      - step: demo.transient\n        retry: {max_attempts: 3, delay_seconds: 0}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv("RETRY_SECRET", "supersecret123")
+    status_file = tmp_path / ".cdt" / "status.json"
+
+    result = runner.invoke(app, ["run", "demo", "--status-file", str(status_file)])
+    payload = json.loads(status_file.read_text(encoding="utf-8"))
+
+    assert result.exit_code == 0, result.output
+    assert payload["status"] == "success"
+    assert payload["completed_steps"] == ["0"]
+    assert payload["failed_step"] is None
+    # Attempts count and the redacted intermediate error survive; the retry
+    # itself is never a terminal failure. Two attempts failed, the third ran.
+    assert payload["step_attempts"] == {"0": {"attempts": 2, "last_error": "token *** unavailable"}}
+    assert "supersecret123" not in status_file.read_text(encoding="utf-8")
+
+
 def test_run_status_file_coexists_with_nonempty_run_log(tmp_path, monkeypatch):
     _write_demo_project(tmp_path)
     monkeypatch.chdir(tmp_path)

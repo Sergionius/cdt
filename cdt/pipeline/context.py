@@ -45,6 +45,7 @@ class PipelineContext:
     completed_steps: list[str] = field(default_factory=list)
     skipped_steps: list[str] = field(default_factory=list)
     step_decisions: dict[str, str] = field(default_factory=dict)
+    step_attempts: dict[str, dict[str, Any]] = field(default_factory=dict)
     failed_step: str | None = None
     error: str | None = None
     running_steps: list[str] = field(default_factory=list)
@@ -179,6 +180,12 @@ class PipelineContext:
         return self.step_decisions.get(step_id) == "skip" or (self.skip_completed and step_id in self.completed_steps)
 
     @_synchronized
+    def mark_step_retry(self, step_id: str, attempts: int, error: str) -> None:
+        """Record an intermediate retryable failure; it is not a terminal failure."""
+        self.step_attempts[step_id] = {"attempts": attempts, "last_error": self.redact(str(error))}
+        self.write_status("running")
+
+    @_synchronized
     def mark_parallel_step_started(self, step_id: str) -> None:
         if step_id not in self.running_steps:
             self.running_steps.append(step_id)
@@ -287,6 +294,7 @@ class PipelineContext:
                 "completed_steps": list(self.completed_steps),
                 "skipped_steps": list(self.skipped_steps),
                 "step_decisions": dict(self.step_decisions),
+                "step_attempts": {step_id: dict(entry) for step_id, entry in self.step_attempts.items()},
                 "failed_step": self.failed_step,
                 "error": self.error,
                 "running_steps": list(self.running_steps),

@@ -1269,6 +1269,9 @@
         }
       ],
       "properties": {
+        "retry": {
+          "$ref": "#/$defs/retryPolicy"
+        },
         "step": {
           "minLength": 1,
           "not": {
@@ -2564,6 +2567,24 @@
       "required": [
         "steps"
       ],
+      "type": "object"
+    },
+    "retryPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "delay_seconds": {
+          "default": 0,
+          "maximum": 60,
+          "minimum": 0,
+          "type": "number"
+        },
+        "max_attempts": {
+          "default": 1,
+          "maximum": 5,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
       "type": "object"
     },
     "step": {

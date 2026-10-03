@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import Any, TypeVar
 
 from .pipeline.context import PipelineContext
+from .pipeline.policy import RetryableStepError
 from .pipeline.registry import ResultProduction, ResultRequirement, StepMetadata, register_step
 
 T = TypeVar("T")
@@ -61,6 +62,7 @@ def _build_metadata(
             external_tools=tuple(metadata.external_tools),
             requires_env=tuple(metadata.requires_env),
             plugin=True,
+            retry_safe=metadata.retry_safe,
         )
 
     kwargs = dict(metadata_kwargs)
@@ -75,4 +77,4 @@ def _build_metadata(
     return StepMetadata(name=name, plugin=True, **kwargs)
 
 
-__all__ = ["PipelineContext", "ResultProduction", "ResultRequirement", "StepMetadata", "step"]
+__all__ = ["PipelineContext", "ResultProduction", "ResultRequirement", "RetryableStepError", "StepMetadata", "step"]

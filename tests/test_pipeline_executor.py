@@ -6,8 +6,186 @@ import pytest
 
 from cdt.artifacts import ArtifactKind, BuildArtifact
 from cdt.pipeline import ParallelStepGroup, PipelineContext, PipelineExecutor, SequentialStepGroup
+from cdt.pipeline.config import ConfiguredStep
 from cdt.pipeline.executor import PipelineExecutionError
+from cdt.pipeline.policy import RetryableStepError, RetryPolicy
+from cdt.pipeline.registry import StepMetadata, _clear_steps_for_tests, register_step
 from cdt.runner import CommandExecutionError, CommandRunner
+from cdt.sdk import step as sdk_step
+
+
+def setup_function():
+    _clear_steps_for_tests()
+
+
+def teardown_function():
+    _clear_steps_for_tests()
+
+
+def _register_flaky_step(calls, *, fail_times, error="transient", name="demo.flaky"):
+    """SDK fixture: raises RetryableStepError for the first `fail_times` attempts."""
+
+    @sdk_step(name, retry_safe=True)
+    def flaky(ctx):
+        calls.append("run")
+        if len(calls) <= fail_times:
+            raise RetryableStepError(error)
+
+    return flaky
+
+
+def test_retry_safe_step_retries_until_success(tmp_path, monkeypatch):
+    calls = []
+    sleeps = []
+    monkeypatch.setattr("cdt.pipeline.config.time.sleep", lambda s: sleeps.append(s))
+    _register_flaky_step(calls, fail_times=1)
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner())
+    leaf = ConfiguredStep("demo.flaky", {}, "0", None, RetryPolicy(max_attempts=3, delay_seconds=1.5))
+
+    PipelineExecutor().run([leaf], ctx)
+
+    assert calls == ["run", "run"]
+    assert sleeps == [1.5]
+    assert ctx.completed_steps == ["0"]
+    assert "0" not in ctx.running_steps
+    assert ctx.step_attempts == {"0": {"attempts": 1, "last_error": "transient"}}
+
+
+def test_each_retry_constructs_a_fresh_runtime_instance(tmp_path):
+    constructions = []
+
+    class CountingStep:
+        name = "counting"
+
+        def __init__(self):
+            constructions.append(object())
+
+        def run(self, ctx):
+            if len(constructions) == 1:
+                raise RetryableStepError("transient")
+
+    register_step("demo.counting", CountingStep, metadata=StepMetadata(name="demo.counting", retry_safe=True))
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner())
+    leaf = ConfiguredStep("demo.counting", {}, "0", None, RetryPolicy(max_attempts=3, delay_seconds=0))
+
+    PipelineExecutor().run([leaf], ctx)
+
+    assert len(constructions) == 2
+    assert constructions[0] is not constructions[1]
+    assert ctx.completed_steps == ["0"]
+
+
+def test_retry_attempts_are_bounded_and_exhaustion_is_terminal(tmp_path):
+    calls = []
+    _register_flaky_step(calls, fail_times=99)
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner())
+    leaf = ConfiguredStep("demo.flaky", {}, "0", None, RetryPolicy(max_attempts=2, delay_seconds=0))
+
+    with pytest.raises(RetryableStepError, match="transient"):
+        PipelineExecutor().run([leaf], ctx)
+
+    assert calls == ["run", "run"]
+    assert ctx.failed_step == "0"
+    assert ctx.completed_steps == []
+    assert ctx.step_attempts == {"0": {"attempts": 2, "last_error": "transient"}}
+
+
+def test_non_retryable_exception_is_never_retried(tmp_path):
+    calls = []
+
+    @sdk_step("demo.broken", retry_safe=True)
+    def broken(ctx):
+        calls.append("run")
+        raise ValueError("boom")
+
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner())
+    leaf = ConfiguredStep("demo.broken", {}, "0", None, RetryPolicy(max_attempts=3, delay_seconds=0))
+
+    with pytest.raises(ValueError, match="boom"):
+        PipelineExecutor().run([leaf], ctx)
+
+    assert calls == ["run"]
+    assert ctx.failed_step == "0"
+    assert ctx.step_attempts == {}
+
+
+def test_base_exception_is_not_treated_as_retryable(tmp_path):
+    calls = []
+
+    @sdk_step("demo.interrupt", retry_safe=True)
+    def interrupt(ctx):
+        calls.append("run")
+        raise KeyboardInterrupt
+
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner())
+    leaf = ConfiguredStep("demo.interrupt", {}, "0", None, RetryPolicy(max_attempts=3, delay_seconds=0))
+
+    with pytest.raises(KeyboardInterrupt):
+        PipelineExecutor().run([leaf], ctx)
+
+    assert calls == ["run"]
+
+
+def test_unsafe_step_rejects_multiple_attempts_before_running(tmp_path):
+    calls = []
+
+    @sdk_step("demo.unsafe")
+    def unsafe(ctx):
+        calls.append("run")
+
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner())
+    leaf = ConfiguredStep("demo.unsafe", {}, "0", None, RetryPolicy(max_attempts=2, delay_seconds=0))
+
+    with pytest.raises(PipelineExecutionError, match="not declared retry_safe"):
+        PipelineExecutor().run([leaf], ctx)
+
+    assert calls == []
+    assert ctx.failed_step == "0"
+
+
+def test_retry_policy_applies_alike_to_sequence_and_parallel_leaves(tmp_path):
+    sequential_calls = []
+    parallel_calls = []
+    _register_flaky_step(sequential_calls, fail_times=1, error="seq-transient", name="demo.seq_flaky")
+    _register_flaky_step(parallel_calls, fail_times=2, error="par-transient", name="demo.par_flaky")
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner())
+    steps = [
+        SequentialStepGroup(
+            [ConfiguredStep("demo.seq_flaky", {}, "0/0", None, RetryPolicy(max_attempts=3, delay_seconds=0))],
+            step_id="0",
+        ),
+        ParallelStepGroup(
+            [ConfiguredStep("demo.par_flaky", {}, "1/0", None, RetryPolicy(max_attempts=3, delay_seconds=0))],
+            step_id="1",
+        ),
+    ]
+
+    PipelineExecutor().run(steps, ctx)
+
+    assert len(sequential_calls) == 2
+    assert len(parallel_calls) == 3
+    assert sorted(ctx.completed_steps) == ["0", "0/0", "1", "1/0"]
+    assert ctx.step_attempts["0/0"] == {"attempts": 1, "last_error": "seq-transient"}
+    assert ctx.step_attempts["1/0"] == {"attempts": 2, "last_error": "par-transient"}
+
+
+def test_skipped_retry_step_is_never_attempted(tmp_path):
+    calls = []
+    _register_flaky_step(calls, fail_times=99)
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner(), inputs={})
+    leaf = ConfiguredStep(
+        "demo.flaky",
+        {},
+        "0",
+        {"input": "deploy", "present": True},
+        RetryPolicy(max_attempts=3, delay_seconds=0),
+    )
+
+    PipelineExecutor().run([leaf], ctx)
+
+    assert calls == []
+    assert ctx.skipped_steps == ["0"]
+    assert ctx.step_attempts == {}
 
 
 def test_condition_decisions_are_frozen_before_first_step(tmp_path):

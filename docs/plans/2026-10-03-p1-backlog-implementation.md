@@ -220,17 +220,17 @@ timeout_seconds: 30
 - Modify: `docs/pipelines.md`
 - Modify: `docs/runs.md`
 
-- [ ] Добавить `retry_safe: false` в metadata, её нормализацию, сериализацию и оба пути SDK-декоратора; экспортировать `RetryableStepError`.
-- [ ] Добавить `retry` в расширенную запись листа, отдельно от constructor options; валидировать границы, конечность чисел и запрет boolean вместо integer.
-- [ ] Разрешать `max_attempts > 1` только при явной capability; не выводить её из risk и не добавлять её автоматически встроенным шагам.
-- [ ] В `ConfiguredStep` применять policy одинаково для последовательных и parallel-листьев; на каждой попытке создавать новый runtime-экземпляр шага.
-- [ ] Повторять только `RetryableStepError`, с фиксированной задержкой и ограниченным числом попыток; остальные ошибки и `BaseException` не перехватывать как retryable.
-- [ ] Зафиксировать SDK-контракт: перед retryable ошибкой шаг обязан оставить context и внешние эффекты в повторяемом состоянии; executor не выполняет фиктивный общий rollback.
-- [ ] Отмечать лист завершённым только после успешной попытки; сохранять количество попыток и редактированную последнюю ошибку, не отмечая промежуточный сбой terminal failure.
-- [ ] При явном resume незавершённого шага начинать новый ограниченный цикл попыток; завершённый шаг по-прежнему пропускать.
-- [ ] Показывать policy и capability в inspect/plan; обновить generated schema.
-- [ ] Добавить SDK fixture с временной ошибкой и последующим успехом; проверить исчерпание попыток, отсутствие повторов для обычных ошибок, unsafe metadata, skipped steps и completed resume.
-- [ ] Проверить, что ASC, Google Play, webhook, hooks, push и публикации не получают новые автоматические повторы; документировать контракт и выполнить применимые проверки.
+- [x] Добавить `retry_safe: false` в metadata, её нормализацию, сериализацию и оба пути SDK-декоратора; экспортировать `RetryableStepError`.
+- [x] Добавить `retry` в расширенную запись листа, отдельно от constructor options; валидировать границы, конечность чисел и запрет boolean вместо integer.
+- [x] Разрешать `max_attempts > 1` только при явной capability; не выводить её из risk и не добавлять её автоматически встроенным шагам.
+- [x] В `ConfiguredStep` применять policy одинаково для последовательных и parallel-листьев; на каждой попытке создавать новый runtime-экземпляр шага.
+- [x] Повторять только `RetryableStepError`, с фиксированной задержкой и ограниченным числом попыток; остальные ошибки и `BaseException` не перехватывать как retryable.
+- [x] Зафиксировать SDK-контракт: перед retryable ошибкой шаг обязан оставить context и внешние эффекты в повторяемом состоянии; executor не выполняет фиктивный общий rollback.
+- [x] Отмечать лист завершённым только после успешной попытки; сохранять количество попыток и редактированную последнюю ошибку, не отмечая промежуточный сбой terminal failure.
+- [x] При явном resume незавершённого шага начинать новый ограниченный цикл попыток; завершённый шаг по-прежнему пропускать.
+- [x] Показывать policy и capability в inspect/plan; обновить generated schema.
+- [x] Добавить SDK fixture с временной ошибкой и последующим успехом; проверить исчерпание попыток, отсутствие повторов для обычных ошибок, unsafe metadata, skipped steps и completed resume.
+- [x] Проверить, что ASC, Google Play, webhook, hooks, push и публикации не получают новые автоматические повторы; документировать контракт и выполнить применимые проверки.
 
 ### Task 4: Добавить capability-based timeouts и остановку hook subprocess
 
@@ -458,4 +458,17 @@ python -m build
 - Regression coverage: sibling isolation and sequence visibility, identical and conflicting writes, deletions, failed branches, skipped leaves, redaction-blocked resume, one-snapshot completion/checkpoint, leaf-checkpoint resume without sibling leaks, partial resume privacy, and legacy rejection (`test_pipeline_executor.py`, `test_pipeline_context.py`, `test_pipeline_resume.py`, `test_pipeline_status_file.py`, existing `test_pipeline_error_ux.py` ordering tests).
 - Docs: `docs/pipelines.md` documents the scoped values semantics and non-transactional limits; `docs/runs.md` documents `values_state` checkpoints and resume behavior.
 - Validation: the listed runtime command passed, **272 tests**; `ruff check .` passed; changed Python files pass `ruff format --check`; generated/bundled schema consistency is covered by the passing `tests/test_agent_first.py` schema assertions; the `runs.md#parallel-values-checkpoints` anchor was verified. No production pipelines, uploads, publication, or service credential checks were performed.
+
+### Task 3
+
+- Implemented only Task 3; Tasks 4–8 and backlog files are unchanged.
+- `cdt/pipeline/policy.py` defines `RetryableStepError`, the bounded `RetryPolicy` (`max_attempts` 1–5, finite `delay_seconds` 0–60), and `run_with_retry_policy`: only `RetryableStepError` triggers another attempt, with a fixed delay; other exceptions and `BaseException` propagate untouched.
+- `StepMetadata.retry_safe` (default `False`, normalized to `bool`, serialized in `to_dict`) is carried through both `@step` decorator paths (kwargs and `metadata=` object) and `_normalize_metadata`; `RetryableStepError` is exported from `cdt.sdk`.
+- The extended leaf record accepts `retry` next to `with`/`when`, never inside constructor options; parsing rejects unknown fields, booleans in place of integers, non-integers, non-finite and out-of-range numbers. `max_attempts > 1` is rejected by validation (`retry_requires_capability`) unless the registered step metadata declares `retry_safe: true`; `ConfiguredStep` re-checks the capability at runtime. No built-in step declares the capability (`test_builtin_steps_do_not_declare_automatic_retries`), so ASC, Google Play, webhook, hooks, push, and publication steps gained no new automatic retries; their existing service-level retry budgets are unchanged.
+- `ConfiguredStep` applies the policy identically for sequential and parallel leaves, constructing a fresh runtime instance per attempt. Intermediate retryable failures are recorded via `ctx.mark_step_retry` into `step_attempts` (attempt index of the last failed attempt plus redacted error) without becoming terminal; exhaustion records the final count and then fails normally. Completed leaves are only marked after a successful attempt.
+- Resume semantics: an unfinished step starts a new bounded attempt cycle (saved `step_attempts` are informational and not restored); completed leaves stay skipped under `--skip-completed`. Covered by new CLI-level resume tests.
+- Inspect and plan show each leaf's `retry`; plan metadata exposes `retry_safe`. Generated and bundled schema were regenerated together with a strict `retryPolicy` definition; plugin-name disambiguation still holds (`retry` cannot collide with plugin steps).
+- Regression coverage: metadata defaults/normalization/serialization and both SDK paths, `RetryableStepError` export, retry parsing bounds, capability enforcement, retry-then-success with fixed delay, fresh instance per attempt, bounded exhaustion, non-retryable and `BaseException` errors, unsafe metadata rejection, skipped leaves, sequence/parallel parity, status `step_attempts` with redaction, resume new-cycle and completed-skip (`test_pipeline_registry.py`, `test_pipeline_config.py`, `test_pipeline_executor.py`, `test_pipeline_status_file.py`, `test_pipeline_resume.py`, `test_agent_first.py`).
+- Docs: `docs/pipelines.md` gains a "Step retries" section (syntax, bounds, capability, SDK contract, no generic rollback, built-in retries unchanged); `docs/runs.md` documents `step_attempts` and resume behavior; the `runs.md#step-retries` anchor was verified.
+- Validation: the listed runtime command passed, **308 tests**; full `pytest` passed **1051 tests**; `ruff check .` passed; changed Python files were formatted with Ruff; bundled schema equals `schema_payload()`. No production pipelines, uploads, publication, or service credential checks were performed.
 
