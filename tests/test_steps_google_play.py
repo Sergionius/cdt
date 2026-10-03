@@ -853,7 +853,8 @@ def test_preflight_checks_explicit_adc_file_and_ignores_missing_variable(tmp_pat
     assert payload["missing_env"] == ["missing.json (GOOGLE_APPLICATION_CREDENTIALS ADC file)"]
 
 
-def test_pipeline_without_play_step_is_not_affected_by_adc_check(tmp_path):
+def test_pipeline_without_play_step_is_not_affected_by_adc_check(tmp_path, monkeypatch):
+    monkeypatch.setattr("cdt.pipeline.preflight.shutil.which", lambda tool: f"/mock/bin/{tool}")
     (tmp_path / "cdt.yaml").write_text(
         "version: 1\npipelines:\n  test:\n    risk: standard\n    steps:\n      - flutter.pub_get\n",
         encoding="utf-8",

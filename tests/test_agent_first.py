@@ -339,7 +339,8 @@ def test_submit_run_without_or_wrong_confirmation_never_contacts_apple(tmp_path,
     assert missing.exit_code != 0
     assert "Enter the pipeline name to continue" in missing.output
     assert wrong.exit_code != 0
-    assert "requires --confirm submit" in wrong.output
+    wrong_visible = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", wrong.output).replace("│", " ")
+    assert "requires --confirm submit" in " ".join(wrong_visible.split())
     assert not (tmp_path / ".cdt" / "appstore").exists()
     assert not (tmp_path / ".cdt" / "runs").exists()
 
