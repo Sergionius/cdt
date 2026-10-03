@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import math
+import os
 import re
 import time
 from collections.abc import Mapping, Sequence
@@ -11,6 +12,7 @@ from typing import Any
 
 import typer
 
+from ..runner import supports_process_groups
 from ..versioning import _current_flutter_version
 from .context import PipelineContext
 from .executor import ParallelStepGroup, SequentialStepGroup
@@ -33,6 +35,7 @@ class StepSpec:
     options: dict[str, Any] = field(default_factory=dict)
     when: dict[str, Any] | None = None
     retry: RetryPolicy | None = None
+    timeout_seconds: float | None = None
 
 
 @dataclass(frozen=True)
@@ -77,9 +80,11 @@ class ConfiguredStep:
     step_id: str | None = None
     when: dict[str, Any] | None = None
     retry: RetryPolicy | None = None
+    timeout_seconds: float | None = None
 
     def run(self, ctx: PipelineContext) -> None:
         resolved_options = resolve_value(self.options, ctx)
+        self._inject_timeout_option(resolved_options)
         policy = self.retry or RetryPolicy()
         if policy.enabled:
             # Defense in depth: validation already rejects retries for steps
@@ -107,6 +112,32 @@ class ConfiguredStep:
                 # Exhaustion is terminal: keep the final attempts count recorded.
                 ctx.mark_step_retry(attempt_id, policy.max_attempts, str(exc))
             raise
+
+    def _inject_timeout_option(self, resolved_options: dict[str, Any]) -> None:
+        """Deliver the envelope timeout into the declared native option.
+
+        Validation already rejects missing capabilities, ambiguous settings and
+        unsupported platforms; these runtime checks are defense in depth.
+        """
+        if self.timeout_seconds is None:
+            return
+        timeout_option = get_step_metadata(self.name).timeout_option
+        if not timeout_option:
+            raise typer.BadParameter(
+                f"Step {self.name} does not declare a native timeout parameter (timeout_option); "
+                "timeout_seconds requires an explicit step capability"
+            )
+        if timeout_option in resolved_options:
+            raise typer.BadParameter(
+                f"Step {self.name} received both timeout_seconds and with.{timeout_option}; "
+                "remove one to make the timeout unambiguous"
+            )
+        if not supports_process_groups():
+            raise typer.BadParameter(
+                f"timeout_seconds requires a platform with POSIX process groups; this platform ({os.name}) "
+                f"cannot guarantee process-tree termination for {self.name}"
+            )
+        resolved_options[timeout_option] = self.timeout_seconds
 
 
 def load_pipeline_config(cwd: Path, filename: str = "cdt.yaml") -> PipelineConfig:
@@ -280,11 +311,11 @@ def _configured_item(
         return ParallelStepGroup(children, step_id=step_id)
     if isinstance(item, SequenceSpec):
         children = [
-            ConfiguredStep(step.name, step.options, f"{step_id}/{index}", step.when, step.retry)
+            ConfiguredStep(step.name, step.options, f"{step_id}/{index}", step.when, step.retry, step.timeout_seconds)
             for index, step in enumerate(item.steps)
         ]
         return SequentialStepGroup(children, step_id=step_id)
-    return ConfiguredStep(item.name, item.options, step_id, item.when, item.retry)
+    return ConfiguredStep(item.name, item.options, step_id, item.when, item.retry, item.timeout_seconds)
 
 
 def resolve_value(value: Any, ctx: PipelineContext) -> Any:
@@ -302,7 +333,7 @@ def _parse_step_spec(pipeline_name: str, index: int, item: Any) -> PipelineItemS
     if isinstance(item, str):
         return StepSpec(name=item)
     if isinstance(item, dict) and "step" in item:
-        if set(item) - {"step", "with", "when", "retry"}:
+        if set(item) - {"step", "with", "when", "retry", "timeout_seconds"}:
             raise typer.BadParameter(f"{prefix} has unsupported extended step fields")
         name = item["step"]
         if not isinstance(name, str) or not name.strip() or name in {"parallel", "sequence"}:
@@ -313,7 +344,8 @@ def _parse_step_spec(pipeline_name: str, index: int, item: Any) -> PipelineItemS
         if "when" in item:
             validate_condition(item["when"])
         retry = parse_retry_policy(item["retry"], prefix) if "retry" in item else None
-        return StepSpec(name=name, options=options, when=item.get("when"), retry=retry)
+        timeout_seconds = parse_timeout_seconds(item["timeout_seconds"], prefix) if "timeout_seconds" in item else None
+        return StepSpec(name=name, options=options, when=item.get("when"), retry=retry, timeout_seconds=timeout_seconds)
     if isinstance(item, dict) and len(item) == 1:
         name, options = next(iter(item.items()))
         if not isinstance(name, str) or not name.strip():
@@ -371,6 +403,18 @@ def parse_retry_policy(raw: Any, prefix: str) -> RetryPolicy:
     if not 0 <= delay_seconds <= MAX_DELAY_SECONDS:
         raise typer.BadParameter(f"{label} delay_seconds must be between 0 and {MAX_DELAY_SECONDS} seconds")
     return RetryPolicy(max_attempts=max_attempts, delay_seconds=float(delay_seconds))
+
+
+def parse_timeout_seconds(raw: Any, prefix: str) -> float:
+    """Parse the extended-record ``timeout_seconds``; constructor options never see it."""
+    label = f"{prefix} timeout_seconds"
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        raise typer.BadParameter(f"{label} must be a number, not a boolean or string")
+    if not math.isfinite(raw):
+        raise typer.BadParameter(f"{label} must be a finite number")
+    if raw <= 0:
+        raise typer.BadParameter(f"{label} must be a positive number of seconds")
+    return float(raw)
 
 
 def _parse_parallel_spec(pipeline_name: str, index: int, options: Any) -> ParallelSpec:

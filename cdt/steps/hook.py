@@ -8,6 +8,7 @@ from typing import Any
 import typer
 
 from ..pipeline import PipelineContext
+from ..runner import run_managed_subprocess
 
 
 class PythonScriptHookStep:
@@ -55,7 +56,10 @@ class PythonScriptHookStep:
 
         typer.echo(f"==> Running hook: {self.hook_name}")
         try:
-            result = subprocess.run(
+            # Managed subprocess: on POSIX the hook runs in its own process
+            # group; a timeout terminates the whole group (TERM, bounded
+            # grace, KILL) and always reaps the direct process.
+            result_code = run_managed_subprocess(
                 ["python3", str(script), *self.args],
                 cwd=ctx.cwd,
                 env=run_env,
@@ -68,8 +72,8 @@ class PythonScriptHookStep:
                 ) from exc
             return
 
-        if result.returncode != 0 and self.fail_on_error:
-            raise typer.BadParameter(f"hook.python_script failed with exit code {result.returncode}: {self.hook_name}")
+        if result_code != 0 and self.fail_on_error:
+            raise typer.BadParameter(f"hook.python_script failed with exit code {result_code}: {self.hook_name}")
 
         if self.strict_outputs:
             after = _tracked_changes(ctx.cwd)

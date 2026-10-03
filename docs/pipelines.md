@@ -152,6 +152,69 @@ Execution semantics:
 `cdt pipeline plan` and `cdt pipeline inspect` show each leaf's `retry` policy,
 and plans include `retry_safe` in the step metadata.
 
+### Step timeouts
+
+Extended leaf records can also declare a hard external deadline for the step's
+own process:
+
+```yaml
+- step: hook.python_script
+  with: {script: hooks/slow.py}
+  timeout_seconds: 30
+```
+
+`timeout_seconds` must be a positive finite number of seconds. Like `retry`, it
+belongs to the envelope, never to `with`.
+
+Timeouts require an explicit capability from the step author:
+
+- `timeout_seconds` is accepted only for steps whose metadata declares
+  `timeout_option` (SDK: `@step(..., timeout_option="timeout")`). The capability
+  names an existing native constructor parameter of the step; the envelope value
+  is passed to that parameter, and the step itself implements the actual
+  behaviour.
+- Setting `timeout_seconds` and the same parameter in `with` at the same time is
+  rejected as ambiguous before execution.
+- The envelope timeout is a hard deadline enforced by CDT with process-group
+  termination. On platforms without POSIX process groups CDT rejects the
+  envelope timeout instead of promising a process-tree guarantee it cannot
+  keep.
+
+The capability says nothing about *how* the step times out internally. A native
+operation timeout (for example `ASC_WAIT_TIMEOUT_SEC` for App Store Connect
+waits) is cooperative: the step manages its own requests and reports a clean
+failure. The envelope `timeout_seconds` is fundamentally different: it is a
+hard external deadline after which CDT terminates the step's process tree.
+Plain Python steps run in CDT's own interpreter, so a Python step without a
+declared native timeout parameter has no general deadline and cannot be force-
+stopped; do not use `timeout_seconds` as a substitute for a native timeout.
+
+The first built-in consumer is `hook.python_script`, which declares
+`timeout_option: timeout`:
+
+- The legacy single-key form `- hook.python_script: {timeout: 30}` is unchanged:
+  `timeout` stays a constructor option, `timeout: null` disables the timeout,
+  and the default is 30 seconds.
+- The envelope form above is equivalent to the legacy form plus the managed
+  termination guarantees below.
+- On POSIX the hook runs in its own process group. On timeout CDT sends TERM to
+  the whole group, waits a bounded grace period, then sends KILL, and always
+  reaps the direct process. The same cleanup runs when the wait is interrupted
+  (for example by Ctrl+C). Children that leave the process group on their own
+  are outside this guarantee.
+- On platforms without POSIX process groups, the envelope timeout is rejected;
+  the legacy `timeout` option keeps the historical platform behaviour there
+  (only the direct child process is guaranteed to be stopped).
+
+A timeout failure is an ordinary step failure, never a retryable
+`RetryableStepError`: retries require the separate `retry_safe` capability and
+an explicit `RetryableStepError` from the step. `fail_on_error` and
+`strict_outputs` checks behave as before, and a failed cleanup is reported
+instead of being hidden behind the timeout error.
+
+`cdt pipeline plan` and `cdt pipeline inspect` show each leaf's
+`timeout_seconds`, and plans include `timeout_option` in the step metadata.
+
 ## CDT self-release pipeline
 
 The CDT repository uses its own `cdt.yaml` production pipeline named `release` for its own releases. The version is always explicit:
@@ -597,3 +660,5 @@ See [Run records → Google Play publication checkpoints](runs.md#google-play-pu
 ```
 
 The script must exist inside the project root and runs as `python3 <script> [args...]` from the project root. Environment values come from `.env` plus the shell, with shell values taking priority. With `strict_outputs: true`, CDT checks tracked changes via `git diff --name-only` and permits only files listed in `outputs`.
+
+The legacy `timeout` option defaults to 30 seconds; `timeout: null` disables it. On POSIX the hook runs in its own process group, and the timeout terminates the whole group (TERM, bounded grace, KILL, guaranteed reap of the direct process). On platforms without POSIX process groups only the direct child process is guaranteed to stop. The extended-record envelope `timeout_seconds` (see "Step timeouts") requires POSIX process groups and is rejected elsewhere.

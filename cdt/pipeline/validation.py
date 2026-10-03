@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import inspect
+import os
 from difflib import get_close_matches
 from typing import Any
 
+from ..runner import supports_process_groups
 from .config import (
     ParallelSpec,
     PipelineConfig,
@@ -26,6 +28,42 @@ def _retry_capability_error(step_name: str, path: str) -> dict[str, str]:
             "requires an explicit retry-safe step and cannot be inferred from risk."
         ),
         "path": f"{path}.retry",
+    }
+
+
+# The envelope timeout is an explicit capability naming an existing native
+# constructor parameter (StepMetadata.timeout_option); it is never inferred.
+def _timeout_capability_error(step_name: str, path: str) -> dict[str, str]:
+    return {
+        "code": "timeout_requires_capability",
+        "message": (
+            f"Step {step_name} does not declare a native timeout parameter "
+            "(timeout_option); timeout_seconds requires an explicit step capability."
+        ),
+        "path": f"{path}.timeout_seconds",
+    }
+
+
+def _timeout_ambiguity_error(step_name: str, path: str, option: str) -> dict[str, str]:
+    return {
+        "code": "ambiguous_step_timeout",
+        "message": (
+            f"Step {step_name} received both timeout_seconds and with.{option}; "
+            "remove one to make the timeout unambiguous."
+        ),
+        "path": f"{path}.timeout_seconds",
+    }
+
+
+def _timeout_platform_error(step_name: str, path: str) -> dict[str, str]:
+    return {
+        "code": "timeout_unsupported_platform",
+        "message": (
+            f"Step {step_name} declares timeout_seconds, but this platform ({os.name}) has no POSIX "
+            "process groups; CDT rejects the envelope timeout instead of promising a process-tree "
+            "guarantee it cannot keep."
+        ),
+        "path": f"{path}.timeout_seconds",
     }
 
 
@@ -180,6 +218,14 @@ def _validate_step(step: StepSpec, path: str, pipeline_risk: str) -> list[dict[s
             errors.append(_appstore_review_risk_error(step.name, pipeline_risk, path))
     if step.retry is not None and step.retry.max_attempts > 1 and not metadata.retry_safe:
         errors.append(_retry_capability_error(step.name, path))
+    if step.timeout_seconds is not None:
+        if not metadata.timeout_option:
+            errors.append(_timeout_capability_error(step.name, path))
+        else:
+            if metadata.timeout_option in step.options:
+                errors.append(_timeout_ambiguity_error(step.name, path, metadata.timeout_option))
+            if not supports_process_groups():
+                errors.append(_timeout_platform_error(step.name, path))
     errors.extend(_validate_step_options(step, factory, path))
     return errors
 
@@ -226,4 +272,5 @@ def _step_node(item: PipelineItemSpec, step_id: str) -> dict[str, Any]:
         "options": item.options,
         **({"when": item.when} if item.when is not None else {}),
         **({"retry": item.retry.to_dict()} if item.retry is not None else {}),
+        **({"timeout_seconds": item.timeout_seconds} if item.timeout_seconds is not None else {}),
     }

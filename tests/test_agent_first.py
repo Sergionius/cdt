@@ -56,6 +56,9 @@ def test_extended_schema_is_unambiguous_and_bundled():
     assert extended["required"] == ["step"]
     assert not extended["additionalProperties"]
     assert extended["properties"]["retry"] == {"$ref": "#/$defs/retryPolicy"}
+    assert extended["properties"]["timeout_seconds"] == {"$ref": "#/$defs/timeoutSeconds"}
+    timeout = schema["$defs"]["timeoutSeconds"]
+    assert timeout == {"type": "number", "exclusiveMinimum": 0}
     retry = schema["$defs"]["retryPolicy"]
     assert retry["additionalProperties"] is False
     assert retry["properties"]["max_attempts"] == {
@@ -85,6 +88,37 @@ def test_builtin_steps_do_not_declare_automatic_retries():
 
     retriable = [name for name, metadata in _BUILTIN_METADATA.items() if metadata.retry_safe]
     assert retriable == []
+
+
+def test_plan_and_inspect_expose_timeout_capability(tmp_path, monkeypatch):
+    register_builtin_steps()
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  test:\n    steps:\n"
+        "      - step: hook.python_script\n        with: {script: hooks/x.py}\n        timeout_seconds: 12\n"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    plan = json.loads(runner.invoke(app, ["pipeline", "plan", "test", "--json"]).output)
+    node = plan["steps"][0]
+    assert node["timeout_seconds"] == 12
+    assert node["metadata"]["timeout_option"] == "timeout"
+
+    inspect = json.loads(runner.invoke(app, ["pipeline", "inspect", "test", "--json"]).output)
+    assert inspect["steps"][0]["timeout_seconds"] == 12
+
+
+def test_plan_flags_timeout_without_capability(tmp_path, monkeypatch):
+    register_builtin_steps()
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  test:\n    steps:\n      - step: flutter.pub_get\n        timeout_seconds: 30\n"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["pipeline", "plan", "test", "--json"])
+
+    assert result.exit_code != 0
+    payload = json.loads(result.output)
+    assert payload["errors"][0]["code"] == "timeout_requires_capability"
 
 
 def test_plan_and_inspect_expose_retry_policy_and_capability(tmp_path, monkeypatch):

@@ -88,6 +88,10 @@ class StepMetadata:
     `retry_safe` is an explicit capability: only retry-safe steps may declare
     `retry.max_attempts > 1`. It is never inferred from `risk` and never added
     to built-in steps automatically.
+
+    `timeout_option` is an explicit capability naming an existing native
+    constructor parameter of the step; only steps declaring it may receive the
+    extended-record `timeout_seconds` envelope setting.
     """
 
     name: str
@@ -100,11 +104,18 @@ class StepMetadata:
     requires_env: tuple[str, ...] = ()
     plugin: bool = False
     retry_safe: bool = False
+    timeout_option: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "external_tools", _string_tuple(self.external_tools, "StepMetadata.external_tools"))
         object.__setattr__(self, "requires_env", _string_tuple(self.requires_env, "StepMetadata.requires_env"))
         object.__setattr__(self, "retry_safe", bool(self.retry_safe))
+        if self.timeout_option is not None:
+            if not isinstance(self.timeout_option, str) or not self.timeout_option.strip():
+                raise ValueError("StepMetadata.timeout_option must be a non-empty string or None")
+            object.__setattr__(self, "timeout_option", self.timeout_option.strip())
+        else:
+            object.__setattr__(self, "timeout_option", None)
 
     def to_dict(self) -> dict:
         return {
@@ -118,6 +129,7 @@ class StepMetadata:
             "requires_env": list(self.requires_env),
             "plugin": self.plugin,
             "retry_safe": self.retry_safe,
+            "timeout_option": self.timeout_option,
         }
 
 
@@ -191,6 +203,7 @@ def _normalize_metadata(name: str, metadata: StepMetadata | None) -> StepMetadat
         requires_env=tuple(metadata.requires_env),
         plugin=metadata.plugin,
         retry_safe=metadata.retry_safe,
+        timeout_option=metadata.timeout_option,
     )
 
 

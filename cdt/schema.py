@@ -63,6 +63,10 @@ def schema_payload() -> dict[str, Any]:
                     "delay_seconds": {"type": "number", "minimum": 0, "maximum": 60, "default": 0},
                 },
             },
+            "timeoutSeconds": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+            },
             "extendedStep": {
                 "type": "object",
                 "additionalProperties": False,
@@ -72,6 +76,7 @@ def schema_payload() -> dict[str, Any]:
                     "with": {"type": "object"},
                     "when": {"$ref": "#/$defs/condition"},
                     "retry": {"$ref": "#/$defs/retryPolicy"},
+                    "timeout_seconds": {"$ref": "#/$defs/timeoutSeconds"},
                 },
                 "allOf": [
                     {

@@ -141,7 +141,40 @@ def test_step_metadata_to_dict_is_structured():
         "requires_env": ["DEMO_TOKEN"],
         "plugin": False,
         "retry_safe": True,
+        "timeout_option": None,
     }
+
+
+def test_step_metadata_timeout_option_defaults_to_none_and_normalizes():
+    register_step("demo.plain", DummyStep)
+    register_step(
+        "demo.timed",
+        DummyStep,
+        metadata=StepMetadata(name="demo.timed", timeout_option="timeout"),
+    )
+    register_step(
+        "demo.spaced",
+        DummyStep,
+        metadata=StepMetadata(name="demo.spaced", timeout_option=" timeout "),
+    )
+
+    assert get_step_metadata("demo.plain").timeout_option is None
+    assert get_step_metadata("demo.timed").timeout_option == "timeout"
+    # Registration normalizes into a fresh metadata object and keeps the capability.
+    assert get_step_metadata("demo.spaced").timeout_option == "timeout"
+    assert get_step_metadata("demo.timed").to_dict()["timeout_option"] == "timeout"
+
+    with pytest.raises(ValueError, match="timeout_option must be a non-empty string or None"):
+        StepMetadata(name="demo.bad", timeout_option="")
+    with pytest.raises(ValueError, match="timeout_option must be a non-empty string or None"):
+        StepMetadata(name="demo.bad", timeout_option=5)
+
+
+def test_builtin_timeout_capability_belongs_to_hook_only():
+    from cdt.pipeline.builtins import _BUILTIN_METADATA
+
+    timed = {name: metadata.timeout_option for name, metadata in _BUILTIN_METADATA.items() if metadata.timeout_option}
+    assert timed == {"hook.python_script": "timeout"}
 
 
 def test_step_metadata_defaults_to_not_retry_safe_and_normalizes_to_bool():
@@ -297,6 +330,26 @@ def test_sdk_step_metadata_object_keeps_retry_safe():
     metadata = get_step_metadata("demo.transient")
     assert metadata.plugin is True
     assert metadata.retry_safe is True
+
+
+def test_sdk_step_accepts_timeout_option_keyword():
+    @sdk_step("demo.timed", timeout_option="timeout")
+    def timed(ctx, timeout=None) -> None:
+        pass
+
+    assert get_step_metadata("demo.timed").timeout_option == "timeout"
+
+
+def test_sdk_step_metadata_object_keeps_timeout_option():
+    given = StepMetadata(name="demo.timed", timeout_option="timeout")
+
+    @sdk_step("demo.timed", metadata=given)
+    def timed(ctx, timeout=None) -> None:
+        pass
+
+    metadata = get_step_metadata("demo.timed")
+    assert metadata.plugin is True
+    assert metadata.timeout_option == "timeout"
 
 
 def test_sdk_step_defaults_custom_category_for_flat_names():

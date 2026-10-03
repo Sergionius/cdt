@@ -252,17 +252,17 @@ timeout_seconds: 30
 - Modify: `tests/test_agent_first.py`
 - Modify: `docs/pipelines.md`
 
-- [ ] Добавить metadata `timeout_option: str | None`, передаваемую через SDK и inspect; capability обозначает существующий нативный параметр шага.
-- [ ] Поддержать положительный конечный `timeout_seconds` в расширенной записи; при отсутствии capability отклонять настройку до исполнения.
-- [ ] Передавать значение в объявленный constructor option; одновременную настройку envelope timeout и того же параметра в `with` отклонять как неоднозначную.
-- [ ] Для `hook.python_script` объявить `timeout_option: timeout`; сохранить старый синтаксис, default 30 секунд и `timeout: null` для старой формы.
-- [ ] Выделить в `cdt/runner.py` helper управляемого subprocess с сохранением текущего вывода hook, cwd и env; не менять все существующие command call sites.
-- [ ] На POSIX запускать hook в отдельной process group, при timeout отправлять TERM группе, затем KILL через ограниченный grace period и обязательно reap непосредственного процесса.
-- [ ] Использовать ту же очистку при прерывании ожидания; потомкам, самостоятельно покинувшим process group, не обещать гарантированную остановку.
-- [ ] На неподдерживаемой платформе отклонять новый envelope timeout capability, а не заявлять несуществующую гарантию дерева процессов; старое платформенное поведение отдельно документировать.
-- [ ] Сохранить `fail_on_error` и проверку outputs; timeout не превращать в retryable ошибку и не скрывать неуспех очистки.
-- [ ] Добавить контролируемые локальные тесты зависшего hook с дочерним процессом и cleanup в `finally`, а также проверки старых параметров и несовместимых настроек.
-- [ ] Документировать различие нативного operation timeout и жёсткого общего deadline Python-шага; обновить schema и выполнить применимые проверки.
+- [x] Добавить metadata `timeout_option: str | None`, передаваемую через SDK и inspect; capability обозначает существующий нативный параметр шага.
+- [x] Поддержать положительный конечный `timeout_seconds` в расширенной записи; при отсутствии capability отклонять настройку до исполнения.
+- [x] Передавать значение в объявленный constructor option; одновременную настройку envelope timeout и того же параметра в `with` отклонять как неоднозначную.
+- [x] Для `hook.python_script` объявить `timeout_option: timeout`; сохранить старый синтаксис, default 30 секунд и `timeout: null` для старой формы.
+- [x] Выделить в `cdt/runner.py` helper управляемого subprocess с сохранением текущего вывода hook, cwd и env; не менять все существующие command call sites.
+- [x] На POSIX запускать hook в отдельной process group, при timeout отправлять TERM группе, затем KILL через ограниченный grace period и обязательно reap непосредственного процесса.
+- [x] Использовать ту же очистку при прерывании ожидания; потомкам, самостоятельно покинувшим process group, не обещать гарантированную остановку.
+- [x] На неподдерживаемой платформе отклонять новый envelope timeout capability, а не заявлять несуществующую гарантию дерева процессов; старое платформенное поведение отдельно документировать.
+- [x] Сохранить `fail_on_error` и проверку outputs; timeout не превращать в retryable ошибку и не скрывать неуспех очистки.
+- [x] Добавить контролируемые локальные тесты зависшего hook с дочерним процессом и cleanup в `finally`, а также проверки старых параметров и несовместимых настроек.
+- [x] Документировать различие нативного operation timeout и жёсткого общего deadline Python-шага; обновить schema и выполнить применимые проверки.
 
 ### Task 5: Добавить безопасный generic webhook
 
@@ -471,4 +471,14 @@ python -m build
 - Regression coverage: metadata defaults/normalization/serialization and both SDK paths, `RetryableStepError` export, retry parsing bounds, capability enforcement, retry-then-success with fixed delay, fresh instance per attempt, bounded exhaustion, non-retryable and `BaseException` errors, unsafe metadata rejection, skipped leaves, sequence/parallel parity, status `step_attempts` with redaction, resume new-cycle and completed-skip (`test_pipeline_registry.py`, `test_pipeline_config.py`, `test_pipeline_executor.py`, `test_pipeline_status_file.py`, `test_pipeline_resume.py`, `test_agent_first.py`).
 - Docs: `docs/pipelines.md` gains a "Step retries" section (syntax, bounds, capability, SDK contract, no generic rollback, built-in retries unchanged); `docs/runs.md` documents `step_attempts` and resume behavior; the `runs.md#step-retries` anchor was verified.
 - Validation: the listed runtime command passed, **308 tests**; full `pytest` passed **1051 tests**; `ruff check .` passed; changed Python files were formatted with Ruff; bundled schema equals `schema_payload()`. No production pipelines, uploads, publication, or service credential checks were performed.
+
+### Task 4
+
+- Implemented only Task 4; Tasks 5–8 and backlog files are unchanged.
+- `StepMetadata.timeout_option` (default `None`, non-empty string or `None`, stripped, serialized in `to_dict`) is carried through `_normalize_metadata` and both `@step` decorator paths; inspect/steps payloads and plan metadata expose it. The only built-in capability is `hook.python_script → timeout` (regression-tested so no other built-in gains it).
+- The extended leaf record accepts `timeout_seconds` (positive finite number; booleans, strings, zero, negative, `.inf`, `.nan` rejected at parse time). Validation rejects the setting before execution with `timeout_requires_capability` (no capability), `ambiguous_step_timeout` (same parameter also set in `with`), and `timeout_unsupported_platform` (no POSIX process groups); `ConfiguredStep.run` re-checks all three as defense in depth, injects the value into the declared constructor option after interpolation, and shows it in plan/inspect nodes.
+- `cdt/runner.py` gains `supports_process_groups()`, `run_managed_subprocess(...)`, and `_terminate_process_group(...)` with a bounded `PROCESS_GROUP_TERMINATE_GRACE_SECONDS` (5s) grace: on POSIX the child starts in its own process group, timeouts and interrupted waits (`BaseException`) send TERM to the group, then KILL after the grace period, and the direct child is always reaped; failed cleanup raises instead of being hidden. Existing `_run`/`_spawn` call sites are untouched; `hook.python_script` now runs through the managed helper while keeping its output/cwd/env behavior, `fail_on_error`, `strict_outputs`, timeout messaging, and non-retryable `typer.BadParameter` failures.
+- Legacy hook syntax is preserved: single-key `timeout` stays a constructor option, default 30 seconds, `timeout: null` disables it; legacy platform behavior (only the direct child stops) is documented. `docs/pipelines.md` gains a "Step timeouts" section distinguishing native operation timeouts from the hard envelope deadline and documenting process-group guarantees and limits.
+- Regression coverage: metadata normalization/serialization and both SDK paths, builtin capability ownership, envelope parsing bounds, three validation error codes, runtime injection/defense, plan/inspect exposure, schema `timeoutSeconds` definition with bundled-schema equality, scripted helper tests (exit codes, TERM→KILL→reap, failed cleanup, interrupt cleanup, platform rejection), and a real POSIX hung-hook-with-child test using marker files and guaranteed `finally` cleanup (`test_pipeline_registry.py`, `test_pipeline_config.py`, `test_runner.py`, `test_steps_hook.py`, `test_agent_first.py`).
+- Validation: the listed runtime command passed, **332 tests**; the subprocess command passed, **34 tests**; full `pytest` passed **1084 tests**; `ruff check .` passed; changed files were formatted with Ruff; `python -m build` produced wheel and sdist with the regenerated bundled schema. No production pipelines, uploads, publication, or service credential checks were performed.
 

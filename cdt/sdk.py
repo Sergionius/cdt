@@ -63,6 +63,7 @@ def _build_metadata(
             requires_env=tuple(metadata.requires_env),
             plugin=True,
             retry_safe=metadata.retry_safe,
+            timeout_option=metadata.timeout_option,
         )
 
     kwargs = dict(metadata_kwargs)

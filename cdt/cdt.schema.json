@@ -1282,6 +1282,9 @@
           },
           "type": "string"
         },
+        "timeout_seconds": {
+          "$ref": "#/$defs/timeoutSeconds"
+        },
         "when": {
           "$ref": "#/$defs/condition"
         },
@@ -3734,6 +3737,10 @@
           "$ref": "#/$defs/extendedStep"
         }
       ]
+    },
+    "timeoutSeconds": {
+      "exclusiveMinimum": 0,
+      "type": "number"
     }
   },
   "$id": "https://raw.githubusercontent.com/Sergionius/cdt/main/cdt/cdt.schema.json",

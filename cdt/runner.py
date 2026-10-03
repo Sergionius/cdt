@@ -1,5 +1,6 @@
 import os
 import shlex
+import signal
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -45,6 +46,80 @@ class CommandRunner:
 
     def tail(self, path: Path, lines: int = 60) -> str:
         return _tail_text(path, lines=lines)
+
+
+# Bounded grace period between TERM and KILL when terminating a process group.
+PROCESS_GROUP_TERMINATE_GRACE_SECONDS = 5.0
+
+
+def supports_process_groups() -> bool:
+    """Whether this platform can start children in a separate process group.
+
+    Only POSIX platforms can offer the process-tree termination guarantee used
+    by the managed subprocess helper; callers must reject timeout capabilities
+    elsewhere instead of pretending the guarantee exists.
+    """
+    return os.name == "posix"
+
+
+def run_managed_subprocess(
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str] | None = None,
+    timeout: float | None = None,
+) -> int:
+    """Run a child to completion, inheriting the current stdio, cwd and env.
+
+    On POSIX the child starts in its own process group. When the wait times
+    out or is interrupted, the whole group is terminated: first TERM, then,
+    after a bounded grace period, KILL; the direct child is always reaped.
+    Children that leave the process group on their own are outside this
+    guarantee. A ``timeout`` on a platform without process groups raises
+    instead of claiming a termination guarantee it cannot keep.
+    """
+    if timeout is not None and not supports_process_groups():
+        raise RuntimeError(
+            f"Managed subprocess timeout requires POSIX process groups; this platform ({os.name}) "
+            "cannot guarantee process-tree termination"
+        )
+    popen_kwargs: dict = {}
+    if supports_process_groups():
+        popen_kwargs["start_new_session"] = True
+    if env is not None:
+        popen_kwargs["env"] = env
+    proc = subprocess.Popen(command, cwd=cwd, **popen_kwargs)
+    try:
+        return proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _terminate_process_group(proc)
+        raise
+    except BaseException:
+        # Interrupted wait (e.g. KeyboardInterrupt): same cleanup, then re-raise.
+        _terminate_process_group(proc)
+        raise
+
+
+def _terminate_process_group(proc: subprocess.Popen) -> None:
+    """TERM the process group, then KILL after a bounded grace; always reap."""
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        pass
+    try:
+        proc.wait(timeout=PROCESS_GROUP_TERMINATE_GRACE_SECONDS)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    try:
+        proc.wait(timeout=PROCESS_GROUP_TERMINATE_GRACE_SECONDS)
+    except subprocess.TimeoutExpired as exc:
+        # Never hide a failed cleanup behind the original error.
+        raise RuntimeError(f"Failed to reap managed subprocess after TERM and KILL: pid {proc.pid}") from exc
 
 
 def _tail_text(path: Path, lines: int = 60) -> str:

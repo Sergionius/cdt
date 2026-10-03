@@ -93,8 +93,7 @@ _BUILTIN_METADATA: dict[str, StepMetadata] = {
     "appstore.upload_testflight_ipa": StepMetadata(
         name="appstore.upload_testflight_ipa",
         description=(
-            "Upload an IPA artifact to TestFlight with iTMSTransporter only, "
-            "without post-upload ASC processing."
+            "Upload an IPA artifact to TestFlight with iTMSTransporter only, without post-upload ASC processing."
         ),
         category="appstore",
         risk="upload",
@@ -284,6 +283,7 @@ _BUILTIN_METADATA: dict[str, StepMetadata] = {
         category="hook",
         risk="hook",
         external_tools=("python3",),
+        timeout_option="timeout",
     ),
     "notify.prod_user_agent": StepMetadata(
         name="notify.prod_user_agent",

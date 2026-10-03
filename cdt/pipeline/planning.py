@@ -175,6 +175,7 @@ def _plan_step(step: StepSpec, warnings: list[dict[str, str]], path: str, step_i
         "metadata": _compact_metadata(metadata),
         "artifact_flow": artifact_flow,
         **({"retry": step.retry.to_dict()} if step.retry is not None else {}),
+        **({"timeout_seconds": step.timeout_seconds} if step.timeout_seconds is not None else {}),
         "path": path,
     }
 

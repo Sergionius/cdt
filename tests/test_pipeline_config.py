@@ -1,3 +1,4 @@
+import os
 import sys
 
 import pytest
@@ -6,6 +7,7 @@ import typer
 from cdt.pipeline import PipelineContext, PipelineExecutor
 from cdt.pipeline.builtins import register_builtin_steps
 from cdt.pipeline.config import (
+    ConfiguredStep,
     InputSpec,
     ParallelSpec,
     PipelineSpec,
@@ -202,6 +204,143 @@ def test_single_key_form_keeps_retry_out_of_constructor_options(tmp_path):
     assert leaf.options == {"retry": {"max_attempts": 2}}
     errors = validate_pipeline(config)
     assert {error["code"] for error in errors} == {"unknown_step_option"}
+
+
+def test_extended_step_parses_timeout_seconds_separately_from_options(tmp_path):
+    register_builtin_steps()
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    steps:\n"
+        "      - step: hook.python_script\n        with: {script: hooks/x.py}\n        timeout_seconds: 12\n"
+        "      - sequence:\n          steps:\n"
+        "            - step: hook.python_script\n              with: {script: hooks/y.py}\n"
+        "              timeout_seconds: 0.5\n"
+    )
+    config = load_pipeline_config(tmp_path)
+    steps = configured_steps(config.pipelines["demo"])
+    assert steps[0].timeout_seconds == 12.0
+    assert steps[0].options == {"script": "hooks/x.py"}
+    assert steps[1].steps[0].timeout_seconds == 0.5
+    assert validate_pipeline(config) == []
+
+
+@pytest.mark.parametrize(
+    "timeout_value",
+    [0, -1, "true", "'3'", ".inf", ".nan", "null", "{}"],
+)
+def test_invalid_timeout_seconds_rejected(tmp_path, timeout_value):
+    register_builtin_steps()
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    steps:\n"
+        f"      - step: hook.python_script\n        timeout_seconds: {timeout_value}\n"
+    )
+    with pytest.raises(typer.BadParameter, match="timeout_seconds"):
+        load_pipeline_config(tmp_path)
+
+
+def test_timeout_seconds_requires_explicit_capability(tmp_path):
+    register_builtin_steps()
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    steps:\n      - step: flutter.pub_get\n        timeout_seconds: 30\n"
+    )
+    errors = validate_pipeline(load_pipeline_config(tmp_path))
+    assert {error["code"] for error in errors} == {"timeout_requires_capability"}
+    assert errors[0]["path"] == "pipelines.demo.steps[0].timeout_seconds"
+
+
+def test_timeout_seconds_with_same_option_is_ambiguous(tmp_path):
+    register_builtin_steps()
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    steps:\n"
+        "      - step: hook.python_script\n        with: {script: hooks/x.py, timeout: 5}\n"
+        "        timeout_seconds: 10\n"
+    )
+    errors = validate_pipeline(load_pipeline_config(tmp_path))
+    assert {error["code"] for error in errors} == {"ambiguous_step_timeout"}
+    assert "remove one" in errors[0]["message"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process groups are required")
+def test_timeout_seconds_supported_for_hook_without_with_timeout(tmp_path):
+    register_builtin_steps()
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    steps:\n"
+        "      - step: hook.python_script\n        with: {script: hooks/x.py}\n        timeout_seconds: 10\n"
+    )
+    assert validate_pipeline(load_pipeline_config(tmp_path)) == []
+
+
+def test_timeout_seconds_rejected_on_platform_without_process_groups(tmp_path, monkeypatch):
+    from cdt.pipeline import validation
+
+    register_builtin_steps()
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    steps:\n      - step: hook.python_script\n        timeout_seconds: 10\n"
+    )
+    monkeypatch.setattr(validation, "supports_process_groups", lambda: False)
+    errors = validate_pipeline(load_pipeline_config(tmp_path))
+    assert {error["code"] for error in errors} == {"timeout_unsupported_platform"}
+
+
+def test_single_key_form_keeps_timeout_in_constructor_options(tmp_path):
+    register_builtin_steps()
+    (tmp_path / "cdt.yaml").write_text(
+        "version: 1\npipelines:\n  demo:\n    steps:\n      - hook.python_script: {script: hooks/x.py, timeout: 5}\n"
+    )
+    config = load_pipeline_config(tmp_path)
+    leaf = configured_steps(config.pipelines["demo"])[0]
+    assert leaf.timeout_seconds is None
+    assert leaf.options == {"script": "hooks/x.py", "timeout": 5}
+    assert validate_pipeline(config) == []
+
+
+def _record_timeout_step():
+    received = []
+
+    @sdk_step("demo.timed", timeout_option="timeout")
+    def timed(ctx, timeout=None) -> None:
+        received.append(timeout)
+
+    return received
+
+
+def _make_context(tmp_path):
+    return PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner())
+
+
+def test_configured_step_injects_timeout_into_declared_option(tmp_path):
+    received = _record_timeout_step()
+    leaf = ConfiguredStep("demo.timed", {}, "0", None, None, 7)
+
+    leaf.run(_make_context(tmp_path))
+
+    assert received == [7]
+
+
+def test_configured_step_rejects_timeout_without_capability_at_runtime(tmp_path):
+    @sdk_step("demo.untimed")
+    def untimed(ctx) -> None:
+        pass
+
+    leaf = ConfiguredStep("demo.untimed", {}, "0", None, None, 7)
+    with pytest.raises(typer.BadParameter, match="does not declare a native timeout parameter"):
+        leaf.run(_make_context(tmp_path))
+
+
+def test_configured_step_rejects_ambiguous_timeout_at_runtime(tmp_path):
+    _record_timeout_step()
+    leaf = ConfiguredStep("demo.timed", {"timeout": 5}, "0", None, None, 7)
+    with pytest.raises(typer.BadParameter, match="both timeout_seconds and with.timeout"):
+        leaf.run(_make_context(tmp_path))
+
+
+def test_configured_step_rejects_timeout_on_unsupported_platform_at_runtime(tmp_path, monkeypatch):
+    from cdt.pipeline import config as pipeline_config
+
+    _record_timeout_step()
+    monkeypatch.setattr(pipeline_config, "supports_process_groups", lambda: False)
+    leaf = ConfiguredStep("demo.timed", {}, "0", None, None, 7)
+    with pytest.raises(typer.BadParameter, match="POSIX process groups"):
+        leaf.run(_make_context(tmp_path))
 
 
 def setup_function():
