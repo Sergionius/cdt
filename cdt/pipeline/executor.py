@@ -89,16 +89,17 @@ class ParallelStepGroup:
 
     def run(self, ctx: PipelineContext) -> None:
         selected_child = _selected_parallel_child(ctx.resume_from, self.step_id)
+        base, branches = ctx.begin_values_group(self.step_id, [_step_id(step) for step in self.steps])
         runnable_steps = [
             step
             for step in self.steps
             if (selected_child is None or _step_id(step) == selected_child) and not ctx.should_skip_step(_step_id(step))
         ]
-        if not runnable_steps:
-            return
         failures: dict[int, ChildFailure] = {}
-        with ThreadPoolExecutor(max_workers=len(runnable_steps)) as pool:
-            futures = {pool.submit(_run_parallel_child, step, ctx): step for step in runnable_steps}
+        with ThreadPoolExecutor(max_workers=max(1, len(runnable_steps))) as pool:
+            futures = {
+                pool.submit(_run_scoped_child, step, ctx, branches[_step_id(step)]): step for step in runnable_steps
+            }
             for future in as_completed(futures):
                 step = futures[future]
                 try:
@@ -120,11 +121,39 @@ class ParallelStepGroup:
                 failed_step_id=primary.step_id,
                 failed_step_label=primary.label,
             ) from primary.exception
+        incomplete = [
+            _step_id(leaf)
+            for child in self.steps
+            for leaf in (child.steps if isinstance(child, SequentialStepGroup) else [child])
+            if _step_id(leaf) not in ctx.completed_steps and ctx.step_decisions.get(_step_id(leaf)) != "skip"
+        ]
+        if incomplete:
+            raise typer.BadParameter(
+                "Parallel values were not merged. Complete remaining branches with --skip-completed "
+                "and without --resume-from: " + ", ".join(incomplete)
+            )
+        ctx.merge_values_group(self.step_id, base, branches)
 
 
 class PipelineExecutor:
     def run(self, steps: Sequence[Step], ctx: PipelineContext, *, resume_from: str | None = None) -> None:
         _prepare_decisions(steps, ctx)
+        for step in steps:
+            if not isinstance(step, ParallelStepGroup):
+                continue
+            group_id = _step_id(step)
+            partial = group_id not in ctx.completed_steps and any(
+                item.startswith(group_id + "/") for item in ctx.completed_steps
+            )
+            if partial and group_id not in ctx.values_groups:
+                raise typer.BadParameter(
+                    f"Cannot resume partially completed parallel group {group_id}: missing values checkpoint. "
+                    "Do not repeat completed side effects; reconcile the original run manually."
+                )
+            if group_id in ctx.values_groups:
+                expected = {_step_id(child) for child in step.steps}
+                if set(ctx.values_groups[group_id]["branches"]) != expected:
+                    raise typer.BadParameter(f"Resume branch checkpoint does not match parallel group {group_id}")
         ctx.mark_status_started()
         skipping_until = resume_from
         try:
@@ -195,6 +224,11 @@ def _prepare_decisions(steps: Sequence[Step], ctx: PipelineContext) -> None:
         visit(step)
 
 
+def _run_scoped_child(step: Step, ctx: PipelineContext, values: dict) -> None:
+    with ctx.values.scope(_step_id(step), values):
+        _run_parallel_child(step, ctx)
+
+
 def _run_parallel_child(step: Step, ctx: PipelineContext) -> None:
     step_id = _step_id(step)
     if ctx.should_skip_step(step_id):
@@ -206,7 +240,11 @@ def _run_parallel_child(step: Step, ctx: PipelineContext) -> None:
         ctx.mark_parallel_step_failed(step_id, str(exc))
         raise
     else:
-        ctx.mark_parallel_step_completed(step_id)
+        if not isinstance(step, SequentialStepGroup) or all(
+            _step_id(leaf) in ctx.completed_steps or ctx.step_decisions.get(_step_id(leaf)) == "skip"
+            for leaf in step.steps
+        ):
+            ctx.mark_parallel_step_completed(step_id)
 
 
 def _describe_child_failure(step: Any, ctx: PipelineContext, exc: Exception) -> ChildFailure:

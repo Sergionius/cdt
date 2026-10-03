@@ -4,6 +4,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+import typer
 from typer.testing import CliRunner
 
 import cdt.services.appstore as appstore_service
@@ -217,7 +219,8 @@ def test_resume_from_parallel_child_step_id_runs_only_selected_branch(tmp_path, 
         ["run", "demo", "--resume-status-file", str(status), "--resume-from", "0/1"],
     )
 
-    assert result.exit_code == 0, result.output
+    assert result.exit_code != 0, result.output
+    assert "Complete remaining branches" in result.output
     assert not (tmp_path / "skipped.txt").exists()
     assert (tmp_path / "selected.txt").exists()
 
@@ -248,10 +251,133 @@ def test_resume_from_nested_sequence_step_skips_prior_step_and_sibling_branch(tm
         ["run", "demo", "--resume-status-file", str(status), "--resume-from", "0/1/1"],
     )
 
-    assert result.exit_code == 0, result.output
+    assert result.exit_code != 0, result.output
+    assert "Complete remaining branches" in result.output
     assert not (tmp_path / "ios.txt").exists()
     assert not (tmp_path / "aab.txt").exists()
     assert (tmp_path / "apk.txt").exists()
+
+
+def test_parallel_values_resume_restores_leaf_checkpoints_without_sibling_leaks(tmp_path):
+    from cdt.pipeline import ParallelStepGroup, PipelineContext, PipelineExecutor, SequentialStepGroup
+    from cdt.pipeline.runner import _restore_resume_status
+    from cdt.runner import CommandRunner
+    from tests.test_pipeline_executor import CallbackStep
+
+    calls = []
+    fail = True
+    status = tmp_path / "state.json"
+
+    def produce(ctx):
+        calls.append("produce")
+        ctx.values["local"] = "preserved"
+
+    def consume(ctx):
+        assert ctx.values["local"] == "preserved"
+        assert "sibling" not in ctx.values
+        if fail:
+            ctx.values["failed-write"] = "discard"
+            raise typer.BadParameter("offline")
+        assert "failed-write" not in ctx.values
+        ctx.values["done"] = "yes"
+
+    def sibling(ctx):
+        calls.append("sibling")
+        assert "local" not in ctx.values
+        ctx.values["sibling"] = "yes"
+
+    steps = [
+        ParallelStepGroup(
+            [
+                SequentialStepGroup([CallbackStep("0/0/0", produce), CallbackStep("0/0/1", consume)], "0/0"),
+                CallbackStep("0/1", sibling),
+            ],
+            "0",
+        )
+    ]
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner(), status_file=status)
+    with pytest.raises(typer.BadParameter, match="offline"):
+        PipelineExecutor().run(steps, ctx)
+    assert ctx.values == {}
+    saved = json.loads(status.read_text())
+    assert saved["values_state"]["groups"]["0"]["branches"]["0/0"] == {"local": "preserved"}
+    fail = False
+    restored = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner(), skip_completed=True, status_file=status)
+    _restore_resume_status(restored, status)
+    PipelineExecutor().run(steps, restored)
+    assert restored.values == {"local": "preserved", "done": "yes", "sibling": "yes"}
+    assert calls == ["produce", "sibling"] or calls == ["sibling", "produce"]
+    assert json.loads(status.read_text())["values_state"]["groups"] == {}
+
+
+def test_partial_resume_keeps_unfinished_delta_private_until_remaining_branches_finish(tmp_path):
+    from cdt.pipeline import ParallelStepGroup, PipelineContext, PipelineExecutor, SequentialStepGroup
+    from cdt.pipeline.runner import _restore_resume_status
+    from cdt.runner import CommandRunner
+    from tests.test_pipeline_executor import CallbackStep
+
+    status = tmp_path / "state.json"
+    calls = []
+    fail = True
+
+    def first(ctx):
+        calls.append("first")
+        ctx.values["unfinished"] = "private"
+
+    def last(ctx):
+        assert ctx.values["unfinished"] == "private"
+        assert "selected" not in ctx.values
+        if fail:
+            raise typer.BadParameter("offline")
+        calls.append("last")
+
+    def selected(ctx):
+        assert "unfinished" not in ctx.values
+        calls.append("selected")
+        ctx.values["selected"] = "yes"
+
+    steps = [
+        ParallelStepGroup(
+            [
+                SequentialStepGroup([CallbackStep("0/0/0", first), CallbackStep("0/0/1", last)], "0/0"),
+                CallbackStep("0/1", selected),
+            ],
+            "0",
+        )
+    ]
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner(), status_file=status)
+    with pytest.raises(typer.BadParameter, match="offline"):
+        PipelineExecutor().run(steps, ctx)
+
+    resumed = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner(), status_file=status, skip_completed=True)
+    _restore_resume_status(resumed, status)
+    with pytest.raises(typer.BadParameter, match="Complete remaining branches"):
+        PipelineExecutor().run(steps, resumed, resume_from="0/1")
+    assert resumed.values == {}
+    assert "0" not in resumed.completed_steps
+    assert json.loads(status.read_text())["values_state"]["groups"]["0"]["branches"]["0/0"] == {"unfinished": "private"}
+    fail = False
+    final = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner(), status_file=status, skip_completed=True)
+    _restore_resume_status(final, status)
+    PipelineExecutor().run(steps, final)
+    assert final.values == {"unfinished": "private", "selected": "yes"}
+    assert sorted(calls) == ["first", "last", "selected"]
+
+
+def test_legacy_partial_parallel_resume_is_rejected_before_any_step(tmp_path):
+    from cdt.pipeline import ParallelStepGroup, PipelineContext, PipelineExecutor
+    from cdt.runner import CommandRunner
+    from tests.test_pipeline_executor import CallbackStep
+
+    calls = []
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner(), completed_steps=["1/0"], skip_completed=True)
+    steps = [
+        CallbackStep("0", lambda ctx: calls.append("ran")),
+        ParallelStepGroup([CallbackStep("1/0", lambda ctx: None)], "1"),
+    ]
+    with pytest.raises(typer.BadParameter, match="missing values checkpoint"):
+        PipelineExecutor().run(steps, ctx)
+    assert calls == []
 
 
 def test_resume_requires_resume_status_file_even_with_status_file(tmp_path, monkeypatch):

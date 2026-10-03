@@ -62,6 +62,83 @@ def test_mixed_sequence_skips_before_runtime_construction(tmp_path):
     assert "0/0" not in ctx.completed_steps
 
 
+class CallbackStep:
+    def __init__(self, step_id, callback):
+        self.step_id = step_id
+        self.name = "callback"
+        self.callback = callback
+
+    def run(self, ctx):
+        self.callback(ctx)
+
+
+def test_parallel_values_isolated_with_sequence_and_nested_mutation(tmp_path):
+    barrier = threading.Barrier(2)
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner(), values={"nested": []})
+
+    def first(ctx):
+        ctx.values["nested"].append("local")
+        ctx.values["left"] = "yes"
+        barrier.wait(timeout=2)
+
+    def sibling(ctx):
+        barrier.wait(timeout=2)
+        assert ctx.values == {"nested": []}
+        ctx.values["right"] = "yes"
+
+    def following(ctx):
+        assert ctx.values["left"] == "yes"
+        assert "right" not in ctx.values
+
+    PipelineExecutor().run(
+        [
+            ParallelStepGroup(
+                [
+                    SequentialStepGroup([CallbackStep("0/0/0", first), CallbackStep("0/0/1", following)], "0/0"),
+                    CallbackStep("0/1", sibling),
+                ],
+                "0",
+            )
+        ],
+        ctx,
+    )
+    assert ctx.values == {"nested": ["local"], "left": "yes", "right": "yes"}
+
+
+@pytest.mark.parametrize("right,conflict", [("same", False), ("different", True), (None, True)])
+def test_parallel_values_merge_conflicts_are_atomic(tmp_path, right, conflict):
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner(), values={"key": "old"})
+
+    def left(ctx):
+        ctx.values.update(key="same", independent="private")
+
+    def sibling(ctx):
+        if right is None:
+            del ctx.values["key"]
+        else:
+            ctx.values["key"] = right
+
+    steps = [ParallelStepGroup([CallbackStep("0/0", left), CallbackStep("0/1", sibling)], "0")]
+    if conflict:
+        with pytest.raises(PipelineExecutionError, match="key.*0/0.*0/1") as error:
+            PipelineExecutor().run(steps, ctx)
+        assert "private" not in str(error.value)
+        assert "different" not in str(error.value)
+        assert ctx.values == {"key": "old"}
+    else:
+        PipelineExecutor().run(steps, ctx)
+        assert ctx.values == {"key": "same", "independent": "private"}
+
+
+def test_parallel_values_identical_deletions_and_skipped_leaf(tmp_path):
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner(), values={"key": "old"})
+    children = [CallbackStep(f"0/{i}", lambda ctx: ctx.values.pop("key")) for i in range(3)]
+    children[-1].when = {"input": "absent", "present": True}
+    PipelineExecutor().run([ParallelStepGroup(children, "0")], ctx)
+    assert ctx.values == {}
+    assert "0/2" not in ctx.completed_steps
+
+
 class RecordingStep:
     def __init__(self, name: str, events: list[str], fail: bool = False):
         self.name = name

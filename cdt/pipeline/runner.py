@@ -200,6 +200,8 @@ def _restore_resume_status(ctx: PipelineContext, status_file: Path | None) -> No
     completed_steps = [step for step in raw_completed_steps if isinstance(step, str)]
     _validate_resume_step_ids(completed_steps)
     ctx.completed_steps = completed_steps
+    if "values_state" in payload:
+        ctx.restore_values(payload["values_state"])
     raw_inputs = payload.get("inputs")
     saved_inputs = _validate_resume_inputs(raw_inputs)
     if saved_inputs != ctx.inputs:

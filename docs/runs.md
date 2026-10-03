@@ -175,6 +175,30 @@ cdt run prod \
 
 See [Resuming a failed TestFlight upload](pipelines.md#resuming-a-failed-testflight-upload) in the pipeline documentation for the full description.
 
+### Parallel values checkpoints
+
+The optional `values_state` status field has its own `version: 1`. It stores root
+values and, for unfinished parallel groups, the original base and each branch's
+snapshot at its last successfully completed leaf. Completion IDs and checkpoints
+are written under the same lock. Failed-leaf writes are not restored. Resume with
+`--skip-completed` preserves completed side effects and branch-local values without
+exposing them to siblings; the root changes only when the whole group can merge.
+
+Selecting only part of an unfinished group with `--resume-from` does not merge
+unfinished branches or declare the group complete. CDT saves the selected leaves
+and reports which leaves remain; continue from that new status using
+`--skip-completed` without `--resume-from`. Conflicting completed writes require
+manual reconciliation, not automatic repetition of completed side effects.
+
+Checkpoints use normal secret redaction, including values keys. If redaction
+changes required state, `restorable: false` prevents resume before any new step;
+CDT never restores `***` in place of a secret. Keep values non-secret. Legacy
+statuses remain usable outside partially completed parallel groups; missing
+branch state for such a group is rejected before execution. Use the same pipeline
+configuration when resuming: IDs are positional, not a configuration fingerprint.
+This is not rollback of artifacts, files or external effects, nor an exactly-once
+guarantee if a process dies between a side effect and its successful checkpoint.
+
 ### Google Play publication checkpoints
 
 `google_play.upload_aab` keeps durable operation state under `.cdt/google-play/operations/<operation-id>.json`, separate from `status.json`. Checkpoints store only non-secret publication data — package, track, release parameters, AAB hash, edit metadata, version code, phase, and the confirmed result once known — and are written atomically before every external mutation.

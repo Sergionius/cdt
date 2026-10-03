@@ -1,6 +1,8 @@
 import json
 import sys
 
+import pytest
+import typer
 from typer.testing import CliRunner
 
 from cdt.cli import app
@@ -10,6 +12,54 @@ from cdt.services.appstore_state import save_upload_record
 from tests.test_services_appstore_state import FakeAsc, _stub_client
 
 runner = CliRunner()
+
+
+@pytest.mark.parametrize("secret_key", [False, True])
+def test_values_checkpoint_redaction_blocks_resume(tmp_path, secret_key):
+    from cdt.pipeline import PipelineContext
+    from cdt.pipeline.runner import _restore_resume_status
+    from cdt.runner import CommandRunner
+
+    status = tmp_path / "status.json"
+    secret = "super-sensitive-value"
+    values = {secret: "value"} if secret_key else {"data": secret}
+    ctx = PipelineContext(
+        cwd=tmp_path, env={"API_TOKEN": secret}, runner=CommandRunner(), values=values, status_file=status
+    )
+    ctx.write_status("failed")
+    assert secret not in status.read_text()
+    assert json.loads(status.read_text())["values_state"]["restorable"] is False
+    restored = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner())
+    with pytest.raises(typer.BadParameter, match="not restorable"):
+        _restore_resume_status(restored, status)
+
+
+def test_status_parallel_completion_and_checkpoint_are_one_snapshot(tmp_path):
+    from cdt.pipeline import ParallelStepGroup, PipelineContext, PipelineExecutor
+    from cdt.runner import CommandRunner
+    from tests.test_pipeline_executor import CallbackStep
+
+    status = tmp_path / "status.json"
+    ctx = PipelineContext(cwd=tmp_path, env={}, runner=CommandRunner(), status_file=status)
+    snapshots = []
+    original = ctx.write_status
+
+    def capture(state):
+        # Called under the same status lock as mutations.
+        with ctx._status_lock:
+            original(state)
+            snapshots.append(json.loads(status.read_text()))
+
+    ctx.write_status = capture
+    steps = [CallbackStep(f"0/{i}", lambda ctx, i=i: ctx.values.update({str(i): str(i)})) for i in range(12)]
+    PipelineExecutor().run([ParallelStepGroup(steps, "0")], ctx)
+    for snapshot in snapshots:
+        groups = snapshot["values_state"]["groups"]
+        for i in range(12):
+            if f"0/{i}" in snapshot["completed_steps"]:
+                values = groups["0"]["branches"][f"0/{i}"] if groups else snapshot["values_state"]["root"]
+                assert values[str(i)] == str(i)
+    assert len(ctx.values) == 12
 
 
 def test_status_separates_skipped_leaves_from_completed(tmp_path, monkeypatch):

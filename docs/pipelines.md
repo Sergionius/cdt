@@ -192,8 +192,10 @@ Parallel branches start together, already-started branches are not cancelled on 
 Parallel context limitations:
 
 - `ctx.artifacts` registration is thread-safe.
-- Writing to `ctx.values` from parallel branches is not guaranteed to be thread-safe.
-- Parallel branches should not depend on each other through `ctx.values`; produce values before the parallel group or join via explicit artifacts/steps after it.
+- `ctx.values` is a mutable mapping (ordinary dictionaries are still accepted by the context constructor). Unlike the former shared dictionary, each branch receives an isolated snapshot made before workers start. Steps in one `sequence` see earlier writes in that branch; siblings never see them.
+- After every branch succeeds, CDT atomically merges changed keys, including deletions. Identical final writes or deletions are allowed; different writes or a deletion versus a write conflict. Conflicts report key names and step IDs, not values. Failure or conflict leaves the root values unchanged.
+- Only `values` is isolated. Other context fields, filesystem changes and external service effects are not transactional and are not rolled back by a failed values merge. Registered artifacts remain available even after failure.
+- Keep values non-secret and JSON-compatible (the supported contract is string keys and string values). Successful leaf boundaries are checkpointed for [safe resume](runs.md#parallel-values-checkpoints); a redacted checkpoint cannot be restored.
 - Parallel artifact dependencies follow the same rule: branches can only consume artifacts that existed before the group started, while artifacts produced by branches become available after the group completes.
 
 ## Built-ins
