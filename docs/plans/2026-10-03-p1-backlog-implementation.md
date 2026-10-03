@@ -185,19 +185,19 @@ timeout_seconds: 30
 - Modify: `docs/pipelines.md`
 - Modify: `docs/runs.md`
 
-- [ ] Ввести mapping-совместимое хранилище `values` с корневым словарём и scoped branch-local словарями; сохранить передачу обычного dict в конструктор context и привычные операции чтения/записи.
-- [ ] Привязывать branch scope внутри worker через context manager; очищать scope в `finally`, включая ошибки, пропуски и повторное использование потока.
-- [ ] Создавать снимки всех веток до их запуска; последовательным шагам одной ветки передавать один scope, не клонируя остальные поля context.
-- [ ] Вычислять delta относительно исходного снимка, включая удаления; после завершения всех веток проверять конфликты и применять общий результат атомарно только при успехе.
-- [ ] Сообщать конфликт по step IDs и именам ключей без вывода значений; при нескольких ошибках сохранять детерминированный порядок существующего отчёта.
-- [ ] Синхронизировать изменение status-коллекций вместе с созданием снимка статуса; применять единый порядок захвата locks без повторного захвата нерекурсивного lock.
-- [ ] Добавить версионированное необязательное состояние values в status: корневые values, исходный снимок незавершённой группы и branch snapshots на границах успешно завершённых листьев.
-- [ ] При resume восстанавливать исходную базу группы и branch snapshots, чтобы пропуск завершённых листьев не терял их values и не делал их видимыми соседним веткам.
-- [ ] При частичном resume группы не объединять delta неисполненной незавершённой ветки; объяснять необходимость завершения остальных веток.
-- [ ] Сохранять checkpoints через существующую redaction. Если redaction изменила данные, необходимые для восстановления, отмечать снимок невосстановимым и отклонять такой resume вместо восстановления `***` или повторения завершённых side effects.
-- [ ] Для старых статусов сохранить прежний resume вне затронутого сценария; при необходимости восстановить отсутствующее состояние частично завершённой parallel-группы выдавать понятную ошибку до новых шагов.
-- [ ] Проверить изоляцию sibling branches, видимость внутри sequence, одинаковые и конфликтующие записи, удаления, ошибку ветки, skipped leaves и восстановление после частичного выполнения.
-- [ ] Документировать изменение прежнего общего `values`, ограничения остальных полей context и отсутствие rollback внешних эффектов; выполнить применимые проверки.
+- [x] Ввести mapping-совместимое хранилище `values` с корневым словарём и scoped branch-local словарями; сохранить передачу обычного dict в конструктор context и привычные операции чтения/записи.
+- [x] Привязывать branch scope внутри worker через context manager; очищать scope в `finally`, включая ошибки, пропуски и повторное использование потока.
+- [x] Создавать снимки всех веток до их запуска; последовательным шагам одной ветки передавать один scope, не клонируя остальные поля context.
+- [x] Вычислять delta относительно исходного снимка, включая удаления; после завершения всех веток проверять конфликты и применять общий результат атомарно только при успехе.
+- [x] Сообщать конфликт по step IDs и именам ключей без вывода значений; при нескольких ошибках сохранять детерминированный порядок существующего отчёта.
+- [x] Синхронизировать изменение status-коллекций вместе с созданием снимка статуса; применять единый порядок захвата locks без повторного захвата нерекурсивного lock.
+- [x] Добавить версионированное необязательное состояние values в status: корневые values, исходный снимок незавершённой группы и branch snapshots на границах успешно завершённых листьев.
+- [x] При resume восстанавливать исходную базу группы и branch snapshots, чтобы пропуск завершённых листьев не терял их values и не делал их видимыми соседним веткам.
+- [x] При частичном resume группы не объединять delta неисполненной незавершённой ветки; объяснять необходимость завершения остальных веток.
+- [x] Сохранять checkpoints через существующую redaction. Если redaction изменила данные, необходимые для восстановления, отмечать снимок невосстановимым и отклонять такой resume вместо восстановления `***` или повторения завершённых side effects.
+- [x] Для старых статусов сохранить прежний resume вне затронутого сценария; при необходимости восстановить отсутствующее состояние частично завершённой parallel-группы выдавать понятную ошибку до новых шагов.
+- [x] Проверить изоляцию sibling branches, видимость внутри sequence, одинаковые и конфликтующие записи, удаления, ошибку ветки, skipped leaves и восстановление после частичного выполнения.
+- [x] Документировать изменение прежнего общего `values`, ограничения остальных полей context и отсутствие rollback внешних эффектов; выполнить применимые проверки.
 
 ### Task 3: Реализовать opt-in retry policy для безопасных шагов
 
@@ -446,4 +446,16 @@ python -m build
 - Validation: the listed runtime test command passed, **260 tests**. Its initial legacy inspect JSON failure was fixed by omitting `when` for unconditional inspect nodes; the complete command was rerun successfully.
 - Additional validation: `pytest` passed **1003 tests**; `ruff check .` passed; `python -m build` produced wheel and sdist with the bundled schema.
 - Relative links in the changed documentation and the conditional YAML example were validated locally. No production pipelines, uploads, publication, or service credential checks were performed.
+
+### Task 2
+
+- Implemented only Task 2; Tasks 3–8 and backlog files are unchanged. The scoped-values implementation landed in the working tree before this run and was verified item by item here; this commit adds the remaining plan updates.
+- `cdt/pipeline/values.py` provides `ScopedValues`: a `MutableMapping` over a root dict plus thread-local branch scopes. Plain dicts are still accepted by the context constructor and wrapped in `__post_init__`; all existing `ctx.values[...]`/`get`/`pop` call sites keep working.
+- `ParallelStepGroup.run` snapshots the base and every branch in `begin_values_group` before submitting workers; each worker binds one scope for its whole child (including `sequence` leaves) and the scope is cleared in `finally`, so skips, failures and thread reuse cannot leak values. Other context fields are never cloned.
+- After all children finish, deltas versus the base (including deletions) are merged only when no branch failed and no leaf is incomplete; conflicting writes or a deletion-versus-write conflict raise with step IDs and key names, never values. Failure or conflict leaves the root unchanged.
+- Status writes keep mutating collections and serializing the snapshot under the same `RLock`; `values_state` (`version: 1`) records root values plus base and per-branch snapshots of unfinished groups, updated at each successfully completed leaf.
+- Resume restores `values_state` when present; redacted checkpoints are serialized with `restorable: false` and rejected instead of restoring `***`. Legacy statuses without `values_state` resume as before; a partially completed parallel group without a checkpoint is rejected before any step runs. Partial `--resume-from` into an unfinished group never merges and names the remaining leaves.
+- Regression coverage: sibling isolation and sequence visibility, identical and conflicting writes, deletions, failed branches, skipped leaves, redaction-blocked resume, one-snapshot completion/checkpoint, leaf-checkpoint resume without sibling leaks, partial resume privacy, and legacy rejection (`test_pipeline_executor.py`, `test_pipeline_context.py`, `test_pipeline_resume.py`, `test_pipeline_status_file.py`, existing `test_pipeline_error_ux.py` ordering tests).
+- Docs: `docs/pipelines.md` documents the scoped values semantics and non-transactional limits; `docs/runs.md` documents `values_state` checkpoints and resume behavior.
+- Validation: the listed runtime command passed, **272 tests**; `ruff check .` passed; changed Python files pass `ruff format --check`; generated/bundled schema consistency is covered by the passing `tests/test_agent_first.py` schema assertions; the `runs.md#parallel-values-checkpoints` anchor was verified. No production pipelines, uploads, publication, or service credential checks were performed.
 
