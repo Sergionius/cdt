@@ -13,7 +13,7 @@ cdt doctor
 A tagged GitHub release can also be installed directly:
 
 ```bash
-pipx install "git+https://github.com/Sergionius/cdt.git@v0.5.5"
+pipx install "git+https://github.com/Sergionius/cdt.git@v0.6.0"
 ```
 
 ### Upgrade from 0.3.x

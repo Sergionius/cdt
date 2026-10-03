@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Nothing yet.
+
+## v0.6.0 - 2026-10-03
+
 - Corrected App Store Connect phased-release endpoints and review-submission payloads against Apple's API contract; explicitly request relationship linkage, reject unknown/canceling review states, and safely recover when a submitted version is no longer editable. Added exact-target recovery and ambiguous-creation regression coverage.
 - Corrected Google Play edit creation to use the Python SDK's `body` argument and raised the client minimum to `2.201.0`, whose bundled discovery supports the required `ERROR_IF_IN_REVIEW` safeguard. Added offline real-SDK request construction coverage.
 - Added `appstore.submit_review`: submits the completed TestFlight build for App Store review — creates or reuses the App Store version, binds the exact verified build, fills localized `whats_new`, sets `release_mode` (`manual`/`automatic` release after Apple approval) and `phased_release` (Apple's standard seven-day rollout), and sends the ASC `reviewSubmissions` request. The app comes from `IOS_BUNDLE_ID` and the build from the current version context or the last recorded TestFlight completion under `.cdt/appstore/uploads/` — never an arbitrary latest Apple build. Documented standalone `submit-review` pipelines, the step after TestFlight completion, and the required App Store Connect preparation.
