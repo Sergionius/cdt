@@ -257,6 +257,42 @@ def test_build_service_targets_androidpublisher_v3_offline():
     assert http.http.timeout == google_play.API_HTTP_TIMEOUT_SEC
 
 
+def test_client_requests_match_real_offline_discovery(monkeypatch, tmp_path):
+    """Construct real SDK requests; replace only execution, never discovery methods."""
+    monkeypatch.setattr(google_play, "load_credentials", lambda env, cwd: FakeCredentials())
+    client = google_play.GooglePlayClient({}, tmp_path)
+    calls = []
+
+    def execute(request, stage, *, mutation):
+        calls.append(request)
+        return {}
+
+    def upload(request, stage, http):
+        calls.append(request)
+        return {}
+
+    monkeypatch.setattr(google_play, "_execute", execute)
+    monkeypatch.setattr(google_play, "_execute_upload", upload)
+    aab = tmp_path / "app.aab"
+    aab.write_bytes(b"bundle")
+    client.create_edit("com.example.app")
+    assert calls[-1].method == "POST"
+    assert json.loads(calls[-1].body) == {}
+    client.get_edit("com.example.app", "edit-1")
+    client.list_bundles("com.example.app", "edit-1")
+    client.upload_bundle("com.example.app", "edit-1", aab)
+    assert calls[-1].resumable is not None
+    client.get_track("com.example.app", "edit-1", "internal")
+    releases = [{"status": "draft", "versionCodes": ["42"]}]
+    client.update_track("com.example.app", "edit-1", "internal", releases)
+    assert json.loads(calls[-1].body) == {"track": "internal", "releases": releases}
+    client.validate_edit("com.example.app", "edit-1")
+    client.commit_edit("com.example.app", "edit-1")
+    assert "changesInReviewBehavior=ERROR_IF_IN_REVIEW" in calls[-1].uri
+    client.delete_edit("com.example.app", "edit-1")
+    assert len(calls) == 9
+
+
 def test_authorized_http_uses_finite_timeout():
     http = google_play._build_authorized_http(FakeCredentials(), 42.0)
     assert http.http.timeout == 42.0
@@ -425,7 +461,7 @@ def test_narrow_operations_call_expected_api_methods(fake_parts):
     assert updated["track"] == "internal"
 
     assert service.recorder.calls == [
-        ("edits.insert", {"packageName": "com.example.app", "requestBody": {}}),
+        ("edits.insert", {"packageName": "com.example.app", "body": {}}),
         ("edits.get", {"packageName": "com.example.app", "editId": "edit-1"}),
         ("edits.bundles.list", {"packageName": "com.example.app", "editId": "edit-1"}),
         ("edits.tracks.get", {"packageName": "com.example.app", "editId": "edit-1", "track": "internal"}),

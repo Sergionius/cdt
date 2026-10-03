@@ -12,7 +12,7 @@ dependencies = [
     "rich>=13.0.0",
     "PyYAML>=6.0.0",
     "google-auth>=2.36.0",
-    "google-api-python-client>=2.160.0",
+    "google-api-python-client>=2.201.0",
     "filelock>=3.16.0",
 ]
 keywords = ["ai", "release", "deploy", "cli", "pipeline", "automation", "mobile", "web", "ios", "android", "flutter", "testing", "devops"]

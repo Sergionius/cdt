@@ -414,7 +414,7 @@ def test_set_release_type_rejects_unknown_mode(monkeypatch):
 
 
 def test_set_phased_release_creates_inactive_when_absent(monkeypatch):
-    path = "/v1/appStoreVersions/v-1/phasedRelease"
+    path = "/v1/appStoreVersions/v-1/appStoreVersionPhasedRelease"
     asc = ScriptedAsc(
         monkeypatch,
         [
@@ -430,9 +430,14 @@ def test_set_phased_release_creates_inactive_when_absent(monkeypatch):
     )
 
     assert review.set_phased_release("v-1", True, _stub_client(monkeypatch)) == "INACTIVE"
-    (post_call,) = asc.calls_for("POST", path)
+    assert asc.paths("GET") == [path]
+    (post_call,) = asc.calls_for("POST", "/v1/appStoreVersionPhasedReleases")
     assert post_call["retry_ambiguous"] is False
-    assert post_call["payload"]["data"]["attributes"] == {"phasedReleaseState": "INACTIVE"}
+    assert post_call["payload"] == {"data": {
+        "type": "appStoreVersionPhasedReleases",
+        "attributes": {"phasedReleaseState": "INACTIVE"},
+        "relationships": {"appStoreVersion": {"data": {"type": "appStoreVersions", "id": "v-1"}}},
+    }}
 
 
 def test_set_phased_release_keeps_existing_when_enabling(monkeypatch):
@@ -444,16 +449,16 @@ def test_set_phased_release_keeps_existing_when_enabling(monkeypatch):
 
 
 def test_set_phased_release_reconciles_after_ambiguous_creation(monkeypatch):
-    path = "/v1/appStoreVersions/v-1/phasedRelease"
+    path = "/v1/appStoreVersions/v-1/appStoreVersionPhasedRelease"
     existing = {"id": "ph-1", "type": "appStoreVersionPhasedReleases", "attributes": {"phasedReleaseState": "INACTIVE"}}
     asc = ScriptedAsc(monkeypatch, [_http_404(path), _ambiguous_error(path), {"data": existing}])
 
     assert review.set_phased_release("v-1", True, _stub_client(monkeypatch)) == "INACTIVE"
-    assert len(asc.calls_for("POST", path)) == 1  # confirmed via GET, not repeated
+    assert len(asc.calls_for("POST", "/v1/appStoreVersionPhasedReleases")) == 1
 
 
 def test_set_phased_release_deletes_when_disabling(monkeypatch):
-    path = "/v1/appStoreVersions/v-1/phasedRelease"
+    path = "/v1/appStoreVersionPhasedReleases/ph-1"
     existing = {"id": "ph-1", "type": "appStoreVersionPhasedReleases", "attributes": {"phasedReleaseState": "ACTIVE"}}
     asc = ScriptedAsc(monkeypatch, [{"data": existing}, {}])
 
@@ -463,7 +468,7 @@ def test_set_phased_release_deletes_when_disabling(monkeypatch):
 
 
 def test_set_phased_release_is_noop_when_absent_and_disabling(monkeypatch):
-    path = "/v1/appStoreVersions/v-1/phasedRelease"
+    path = "/v1/appStoreVersions/v-1/appStoreVersionPhasedRelease"
     asc = ScriptedAsc(monkeypatch, [_http_404(path)])
 
     assert review.set_phased_release("v-1", False, _stub_client(monkeypatch)) is None
@@ -475,7 +480,7 @@ def test_set_phased_release_is_noop_when_absent_and_disabling(monkeypatch):
 
 def test_find_open_review_submission_returns_draft(monkeypatch):
     items = [
-        _submission("rs-done", "COMPLETED"),
+        _submission("rs-done", "COMPLETE"),
         _submission("rs-draft", "DRAFT", platform="IOS"),
     ]
     asc = ScriptedAsc(monkeypatch, [_list_rsp(items)])
@@ -499,15 +504,15 @@ def test_find_open_review_submission_rejects_multiple_open(monkeypatch):
 
 
 def test_find_open_review_submission_returns_none_when_only_terminal(monkeypatch):
-    ScriptedAsc(monkeypatch, [_list_rsp([_submission("rs-old", "COMPLETED")])])
+    ScriptedAsc(monkeypatch, [_list_rsp([_submission("rs-old", "COMPLETE")])])
 
     assert review.find_open_review_submission("app-1", _stub_client(monkeypatch)) is None
 
 
-def test_create_review_submission_targets_exact_version(monkeypatch):
-    asc = ScriptedAsc(monkeypatch, [{"data": _submission("rs-1", "DRAFT")}])
+def test_create_review_submission_uses_only_documented_app_relationship(monkeypatch):
+    asc = ScriptedAsc(monkeypatch, [{"data": _submission("rs-1", "READY_FOR_REVIEW")}])
 
-    result = review.create_review_submission("app-1", "v-1", _stub_client(monkeypatch))
+    result = review.create_review_submission("app-1", _stub_client(monkeypatch))
 
     assert result["id"] == "rs-1"
     (call,) = asc.calls
@@ -516,11 +521,7 @@ def test_create_review_submission_targets_exact_version(monkeypatch):
     assert call["retry_ambiguous"] is False
     payload = call["payload"]["data"]
     assert payload["attributes"] == {"platform": "IOS"}
-    assert payload["relationships"]["app"]["data"] == {"type": "apps", "id": "app-1"}
-    assert payload["relationships"]["appStoreVersionForReview"]["data"] == {
-        "type": "appStoreVersions",
-        "id": "v-1",
-    }
+    assert payload["relationships"] == {"app": {"data": {"type": "apps", "id": "app-1"}}}
 
 
 def test_add_review_submission_item_reuses_existing_item(monkeypatch):
@@ -589,10 +590,10 @@ def test_add_review_submission_item_reraises_when_reconciliation_finds_nothing(m
     assert len(asc.calls_for("POST")) == 1
 
 
-def test_submit_review_submission_sends_submitted_with_full_items_list(monkeypatch):
+def test_submit_review_submission_sends_only_documented_attributes(monkeypatch):
     asc = ScriptedAsc(monkeypatch, [{"data": _submission("rs-1", "WAITING_FOR_REVIEW")}])
 
-    result = review.submit_review_submission("rs-1", ["item-1", "item-2"], _stub_client(monkeypatch))
+    result = review.submit_review_submission("rs-1", _stub_client(monkeypatch))
 
     assert result["attributes"]["state"] == "WAITING_FOR_REVIEW"
     (call,) = asc.calls
@@ -600,11 +601,7 @@ def test_submit_review_submission_sends_submitted_with_full_items_list(monkeypat
     assert call["path"] == "/v1/reviewSubmissions/rs-1"
     assert call["retry_ambiguous"] is False
     payload = call["payload"]["data"]
-    assert payload["attributes"] == {"submitted": True}
-    assert payload["relationships"]["items"]["data"] == [
-        {"type": "reviewSubmissionItems", "id": "item-1"},
-        {"type": "reviewSubmissionItems", "id": "item-2"},
-    ]
+    assert payload == {"type": "reviewSubmissions", "id": "rs-1", "attributes": {"submitted": True}}
 
 
 def test_mutating_requests_never_use_blind_retries_across_flow(monkeypatch):
@@ -630,7 +627,7 @@ def test_mutating_requests_never_use_blind_retries_across_flow(monkeypatch):
             _list_rsp(localizations),  # localizations
             {},  # whatsNew patch
             {},  # release type patch
-            _http_404("/v1/appStoreVersions/v-1/phasedRelease"),  # phased read
+            _http_404("/v1/appStoreVersions/v-1/appStoreVersionPhasedRelease"),  # phased read
             {"data": phased},  # phased create
             _list_rsp([]),  # open submissions
             {"data": _submission("rs-1", "DRAFT")},  # create submission
@@ -650,9 +647,9 @@ def test_mutating_requests_never_use_blind_retries_across_flow(monkeypatch):
     review.set_release_type(version["id"], "manual", client)
     review.set_phased_release(version["id"], True, client)
     assert review.find_open_review_submission(app_id, client) is None  # no open submission yet
-    submission = review.create_review_submission(app_id, version["id"], client)
-    item_added = review.add_review_submission_item(submission["id"], version["id"], client)
-    review.submit_review_submission(submission["id"], [item_added["id"]], client)
+    submission = review.create_review_submission(app_id, client)
+    review.add_review_submission_item(submission["id"], version["id"], client)
+    review.submit_review_submission(submission["id"], client)
 
     mutations = asc.mutating()
     assert len(mutations) == 8  # version, build, whatsNew, releaseType, phased, submission, item, submit
@@ -719,8 +716,32 @@ def test_submission_is_submitted_classification():
     assert not review.submission_is_submitted(None)
     assert not review.submission_is_submitted(review.REVIEW_SUBMISSION_STATE_DRAFT)
     assert not review.submission_is_submitted(review.REVIEW_SUBMISSION_STATE_READY_FOR_REVIEW)
-    for submitted_state in ("WAITING_FOR_REVIEW", "IN_REVIEW", "ACCEPTED", "REJECTED", "CANCELLED"):
+    for submitted_state in ("WAITING_FOR_REVIEW", "IN_REVIEW", "COMPLETING", "COMPLETE"):
         assert review.submission_is_submitted(submitted_state)
+    for blocked_state in ("UNRESOLVED_ISSUES", "CANCELING", "UNKNOWN", "ACCEPTED", "REJECTED", "CANCELLED"):
+        assert not review.submission_is_submitted(blocked_state)
+
+
+@pytest.mark.parametrize("state", ["UNRESOLVED_ISSUES", "CANCELING", "FUTURE_STATE"])
+def test_find_open_submission_preserves_states_that_must_block(monkeypatch, state):
+    ScriptedAsc(monkeypatch, [_list_rsp([_submission("rs-blocked", state)])])
+    result = review.find_open_review_submission("app-1", _stub_client(monkeypatch))
+    assert result["attributes"]["state"] == state
+
+
+def test_relationship_reads_explicitly_request_linkage(monkeypatch):
+    asc = ScriptedAsc(monkeypatch, [
+        _list_rsp([_build("build-45", "45", "pre-1", "app-1")], included=[_pre_release("pre-1", "1.2.3")]),
+        {"data": _submission("rs-1", "READY_FOR_REVIEW")},
+        _list_rsp([]),
+    ])
+    client = _stub_client(monkeypatch)
+    review.find_build("app-1", "1.2.3", "45", client)
+    review.get_review_submission("rs-1", client)
+    review.get_review_submission_items("rs-1", client)
+    assert "include=preReleaseVersion,app" in asc.paths()[0]
+    assert asc.paths()[1] == "/v1/reviewSubmissions/rs-1?include=appStoreVersionForReview"
+    assert asc.paths()[2] == "/v1/reviewSubmissions/rs-1/items?include=appStoreVersion"
 
 
 def test_submission_and_item_version_helpers():

@@ -671,6 +671,27 @@ def test_crash_between_remote_success_and_local_record_confirms_without_mutation
     assert checkpoint.result["version_code"] == 40
 
 
+@pytest.mark.parametrize("matches", [True, False])
+def test_recovery_verifies_explicit_release_name_and_notes(tmp_path, backend, aab, matches):
+    intent = make_intent(release_name="1.2.3", release_notes={"ru": "Исправления"})
+    sha = google_play.compute_file_sha256(aab)
+    seed_checkpoint(tmp_path, intent, aab, phase=PHASE_TRACK_UPDATED, edit_id="gone", version_code=40)
+    backend.add_committed_bundle(40, sha)
+    backend.set_track("internal", [{
+        "status": "completed", "versionCodes": [40],
+        "name": "1.2.3" if matches else "other",
+        "releaseNotes": [{"language": "ru", "text": "Исправления" if matches else "other"}],
+    }])
+    operation = make_operation(backend, tmp_path, intent, aab)
+    if matches:
+        assert operation.run().version_code == 40
+    else:
+        with pytest.raises(UnknownResultError):
+            operation.run()
+    assert "edits.commit" not in backend.calls
+    assert "edits.bundles.upload" not in backend.calls
+
+
 def test_expired_edit_recovers_with_fresh_edit_after_verification(tmp_path, backend, aab):
     intent = make_intent()
     sha = google_play.compute_file_sha256(aab)

@@ -311,7 +311,7 @@ class GooglePlayClient:
 
     def create_edit(self, package_name: str) -> dict[str, Any]:
         """Open a new edit (mutation, no automatic retries)."""
-        request = self._service.edits().insert(packageName=package_name, requestBody={})
+        request = self._service.edits().insert(packageName=package_name, body={})
         return _execute(request, STAGE_EDIT_CREATE, mutation=True)
 
     def get_edit(self, package_name: str, edit_id: str) -> dict[str, Any]:

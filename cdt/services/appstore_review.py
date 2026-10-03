@@ -42,7 +42,7 @@ RELEASE_TYPE_MANUAL = "MANUAL"
 RELEASE_TYPE_AUTOMATIC = "AUTOMATIC"
 RELEASE_MODES = {"manual": RELEASE_TYPE_MANUAL, "automatic": RELEASE_TYPE_AUTOMATIC}
 
-# reviewSubmissions.state values that describe a submission still in play.
+# DRAFT is retained only as a legacy unsubmitted value; ASC uses READY_FOR_REVIEW.
 REVIEW_SUBMISSION_STATE_DRAFT = "DRAFT"
 REVIEW_SUBMISSION_STATE_READY_FOR_REVIEW = "READY_FOR_REVIEW"
 REVIEW_SUBMISSION_STATE_WAITING_FOR_REVIEW = "WAITING_FOR_REVIEW"
@@ -52,15 +52,16 @@ OPEN_REVIEW_SUBMISSION_STATES = (
     REVIEW_SUBMISSION_STATE_READY_FOR_REVIEW,
     REVIEW_SUBMISSION_STATE_WAITING_FOR_REVIEW,
     REVIEW_SUBMISSION_STATE_IN_REVIEW,
+    "UNRESOLVED_ISSUES",
+    "CANCELING",
+    "COMPLETING",
 )
 
 # appStoreVersionPhasedReleases.phasedReleaseState: enabled but not started yet.
 PHASED_RELEASE_STATE_INACTIVE = "INACTIVE"
 
-# reviewSubmissions.state values that mean the submission has not reached Apple
-# yet (the developer-side stages). Anything else — WAITING_FOR_REVIEW, IN_REVIEW
-# and the terminal ACCEPTED / REJECTED / METADATA_REJECTED / CANCELLED /
-# COMPLETED states — proves Apple accepted the submit request.
+# Only documented submitted states prove that Apple accepted the request.
+# Unknown values must never be interpreted as success.
 UNSUBMITTED_REVIEW_SUBMISSION_STATES = (
     REVIEW_SUBMISSION_STATE_DRAFT,
     REVIEW_SUBMISSION_STATE_READY_FOR_REVIEW,
@@ -170,7 +171,9 @@ def get_app_store_version(version_id: str, client: _AscClient) -> dict | None:
 def get_review_submission(submission_id: str, client: _AscClient) -> dict | None:
     """Return one reviewSubmissions resource by id, or None when it is gone."""
     try:
-        rsp = appstore._asc_request("GET", f"/v1/reviewSubmissions/{_quote(submission_id)}", client)
+        rsp = appstore._asc_request(
+            "GET", f"/v1/reviewSubmissions/{_quote(submission_id)}?include=appStoreVersionForReview", client
+        )
     except appstore.AscHttpError as exc:
         if exc.code == 404:
             return None
@@ -209,7 +212,7 @@ def submission_is_submitted(state: str | None) -> bool:
     Only such a state proves Apple accepted the submit request; a draft alone
     is never a success.
     """
-    return state is not None and state not in UNSUBMITTED_REVIEW_SUBMISSION_STATES
+    return state in {"WAITING_FOR_REVIEW", "IN_REVIEW", "COMPLETING", "COMPLETE"}
 
 
 def _asc_list_responses(path: str, client: _AscClient) -> list[dict]:
@@ -292,7 +295,7 @@ def find_build(app_id: str, marketing_version: str, build_number: str, client: _
         f"?filter[app]={_quote(app_id)}"
         f"&filter[version]={_quote(build_number)}"
         f"&filter[preReleaseVersion.version]={_quote(marketing_version)}"
-        "&include=preReleaseVersion"
+        "&include=preReleaseVersion,app"
     )
     candidates: list[dict] = []
     for rsp in _asc_list_responses(path, client):
@@ -490,7 +493,7 @@ def set_release_type(version_id: str, release_mode: str, client: _AscClient) -> 
 def get_phased_release(version_id: str, client: _AscClient) -> dict | None:
     """Return the version's phased release resource, or None when absent."""
     try:
-        rsp = appstore._asc_request("GET", f"/v1/appStoreVersions/{version_id}/phasedRelease", client)
+        rsp = appstore._asc_request("GET", f"/v1/appStoreVersions/{version_id}/appStoreVersionPhasedRelease", client)
     except appstore.AscHttpError as exc:
         if exc.code == 404:
             return None
@@ -513,12 +516,15 @@ def set_phased_release(version_id: str, enabled: bool, client: _AscClient) -> st
         try:
             rsp = appstore._asc_request(
                 "POST",
-                f"/v1/appStoreVersions/{version_id}/phasedRelease",
+                "/v1/appStoreVersionPhasedReleases",
                 client,
                 {
                     "data": {
                         "type": "appStoreVersionPhasedReleases",
                         "attributes": {"phasedReleaseState": PHASED_RELEASE_STATE_INACTIVE},
+                        "relationships": {
+                            "appStoreVersion": {"data": {"type": "appStoreVersions", "id": version_id}}
+                        },
                     }
                 },
                 retry_ambiguous=False,
@@ -534,7 +540,7 @@ def set_phased_release(version_id: str, enabled: bool, client: _AscClient) -> st
     if current is None:
         return None
     appstore._asc_request(
-        "DELETE", f"/v1/appStoreVersions/{version_id}/phasedRelease", client, retry_ambiguous=False
+        "DELETE", f"/v1/appStoreVersionPhasedReleases/{current['id']}", client, retry_ambiguous=False
     )
     return None
 
@@ -549,11 +555,14 @@ def find_open_review_submission(
     More than one open submission is an ambiguity that must be resolved in
     App Store Connect; CDT never picks one automatically.
     """
-    path = f"/v1/reviewSubmissions?filter[app]={_quote(app_id)}&filter[platform]={_quote(platform)}"
+    path = (
+        f"/v1/reviewSubmissions?filter[app]={_quote(app_id)}&filter[platform]={_quote(platform)}"
+        "&include=appStoreVersionForReview"
+    )
     matches = [
         item
         for item in _asc_list(path, client)
-        if _attributes(item).get("state") in OPEN_REVIEW_SUBMISSION_STATES
+        if _attributes(item).get("state") != "COMPLETE"
         and str(_attributes(item).get("platform") or "").upper() == platform.upper()
     ]
     if len(matches) > 1:
@@ -567,18 +576,16 @@ def find_open_review_submission(
 
 def create_review_submission(
     app_id: str,
-    version_id: str,
     client: _AscClient,
     platform: str = ASC_PLATFORM_IOS,
 ) -> dict:
-    """Create a draft review submission for the exact version."""
+    """Create an app-level draft; bind the version through a submission item."""
     payload = {
         "data": {
             "type": "reviewSubmissions",
             "attributes": {"platform": platform},
             "relationships": {
                 "app": {"data": {"type": "apps", "id": app_id}},
-                "appStoreVersionForReview": {"data": {"type": "appStoreVersions", "id": version_id}},
             },
         }
     }
@@ -590,7 +597,7 @@ def create_review_submission(
 
 def get_review_submission_items(submission_id: str, client: _AscClient) -> list[dict]:
     """Return the items of a review submission (paginated)."""
-    return _asc_list(f"/v1/reviewSubmissions/{submission_id}/items", client)
+    return _asc_list(f"/v1/reviewSubmissions/{submission_id}/items?include=appStoreVersion", client)
 
 
 def find_version_item(items: list[dict], version_id: str) -> dict | None:
@@ -633,8 +640,8 @@ def add_review_submission_item(submission_id: str, version_id: str, client: _Asc
     return rsp["data"]
 
 
-def submit_review_submission(submission_id: str, item_ids: list[str], client: _AscClient) -> dict:
-    """Submit the review submission with the complete items list.
+def submit_review_submission(submission_id: str, client: _AscClient) -> dict:
+    """Submit the review submission whose items were verified by the caller.
 
     Losing the submit response is genuinely ambiguous (Apple may have accepted
     the submission), so it always raises
@@ -646,9 +653,6 @@ def submit_review_submission(submission_id: str, item_ids: list[str], client: _A
             "type": "reviewSubmissions",
             "id": submission_id,
             "attributes": {"submitted": True},
-            "relationships": {
-                "items": {"data": [{"type": "reviewSubmissionItems", "id": item_id} for item_id in item_ids]}
-            },
         }
     }
     rsp = appstore._asc_request(

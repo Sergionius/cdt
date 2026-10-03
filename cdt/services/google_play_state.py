@@ -662,6 +662,15 @@ class GooglePlayPublishOperation:
             return False
         if _release_version_codes(release) != {version_code}:
             return False
+        if self._intent.release_name is not None and release.get("name") != self._intent.release_name:
+            return False
+        if self._intent.release_notes is not None:
+            notes = release.get("releaseNotes") or []
+            if not isinstance(notes, list) or any(not isinstance(note, dict) for note in notes):
+                return False
+            remote_notes = {note.get("language"): note.get("text") for note in notes}
+            if len(remote_notes) != len(notes) or remote_notes != self._intent.release_notes:
+                return False
         fraction = release.get("userFraction")
         if self._intent.release_status == RELEASE_STATUS_IN_PROGRESS:
             return fraction is not None and float(fraction) == float(self._intent.user_fraction)

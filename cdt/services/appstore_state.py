@@ -714,6 +714,13 @@ class AppStoreReviewOperation:
     # -- state machine ----------------------------------------------------------
 
     def _execute(self, path: Path, checkpoint: ReviewCheckpoint) -> ReviewOutcome:
+        # A submitted version is no longer editable. Reconcile before the
+        # preparation gate, including a crash after PATCH but before checkpoint save.
+        if checkpoint.submission_id is not None:
+            submission = get_review_submission(checkpoint.submission_id, self._client)
+            if submission is not None and submission_is_submitted(submission_state(submission)):
+                self._verify_confirmed(checkpoint)
+                return self._complete(path, checkpoint, submission, resumed=True)
         self._ensure_version(path, checkpoint)
         self._ensure_build_binding(path, checkpoint)
         self._ensure_whats_new(path, checkpoint)
@@ -778,9 +785,13 @@ class AppStoreReviewOperation:
         if version is None:
             # Missing versions are created; a lost creation response is
             # reconciled inside the primitive by a read-only re-lookup.
-            version = get_or_create_app_store_version(
-                checkpoint.app_id, self._intent.marketing_version, self._client, self._intent.platform
-            )
+            try:
+                version = get_or_create_app_store_version(
+                    checkpoint.app_id, self._intent.marketing_version, self._client, self._intent.platform
+                )
+            except AscAmbiguousResultError as exc:
+                self._block(path, checkpoint, "version_create_lost", "version creation remains unconfirmed", exc)
+                raise AssertionError("unreachable: _block always raises")
         ensure_version_editable(version)
         if checkpoint.version_id != version["id"]:
             checkpoint.version_id = version["id"]
@@ -981,13 +992,17 @@ class AppStoreReviewOperation:
         self._advance(path, checkpoint, PHASE_SUBMISSION_READY)  # durable intent before the POST
         try:
             return create_review_submission(
-                checkpoint.app_id or "", checkpoint.version_id or "", self._client, self._intent.platform
+                checkpoint.app_id or "", self._client, self._intent.platform
             )
         except AscAmbiguousResultError as exc:
             existing = find_open_review_submission(
                 checkpoint.app_id or "", self._client, self._intent.platform
             )
-            if existing is not None and submission_version_id(existing) == checkpoint.version_id:
+            if existing is not None:
+                # Creation has no version relationship: the draft may still be
+                # empty. Apply the same composition checks as ordinary adoption.
+                self._reject_foreign_submission(checkpoint, existing)
+                self._reject_foreign_items(checkpoint, existing["id"], include_for_review=False)
                 return existing  # adopted; confirmed by GET without repeating the POST
             self._block(
                 path,
@@ -1006,7 +1021,11 @@ class AppStoreReviewOperation:
         if ours is not None:
             return ours["id"]
         self._advance(path, checkpoint, PHASE_SUBMISSION_READY)  # durable intent before the POST
-        item = add_review_submission_item(submission_id, checkpoint.version_id or "", self._client)
+        try:
+            item = add_review_submission_item(submission_id, checkpoint.version_id or "", self._client)
+        except AscAmbiguousResultError as exc:
+            self._block(path, checkpoint, "item_create_lost", "submission item creation remains unconfirmed", exc)
+            raise AssertionError("unreachable: _block always raises")
         return item["id"]
 
     def _submit(self, path: Path, checkpoint: ReviewCheckpoint) -> ReviewOutcome:
@@ -1029,7 +1048,7 @@ class AppStoreReviewOperation:
             did_submit_here = True
             try:
                 submission = submit_review_submission(
-                    checkpoint.submission_id, [checkpoint.submission_item_id or ""], self._client
+                    checkpoint.submission_id, self._client
                 )
             except AscAmbiguousResultError as exc:
                 submission = get_review_submission(checkpoint.submission_id, self._client)
@@ -1128,6 +1147,20 @@ class AppStoreReviewOperation:
                 "before doing anything else"
             )
         self._reject_foreign_items(checkpoint, submission["id"], include_for_review=True)
+        version_id = checkpoint.version_id or ""
+        version = get_app_store_version(version_id, self._client)
+        if (
+            version is None
+            or version_string(version) != checkpoint.marketing_version
+            or version_platform(version) != checkpoint.platform
+            or get_version_build_id(version_id, self._client) != checkpoint.build_id
+            or version_release_type(version) != RELEASE_MODES[checkpoint.release_mode]
+            or not self._whats_new_applied(version_id)
+        ):
+            raise UnknownResultError(
+                "Submitted version/build/settings no longer match the saved operation; "
+                "verify the version in App Store Connect before doing anything else"
+            )
         result = checkpoint.result or {}
         return ReviewOutcome(
             operation_id=checkpoint.operation_id,
@@ -1146,7 +1179,16 @@ class AppStoreReviewOperation:
         )
 
     def _reject_foreign_submission(self, checkpoint: ReviewCheckpoint, submission: dict) -> None:
-        """Refuse to touch a submission created for another version."""
+        """Refuse foreign submissions and states unsafe to submit again."""
+        state = submission_state(submission)
+        if (
+            state not in appstore_review.UNSUBMITTED_REVIEW_SUBMISSION_STATES
+            and not submission_is_submitted(state)
+        ):
+            raise SubmissionConflictError(
+                f"Review submission {submission['id']} is in state {state!r}; "
+                "resolve it in App Store Connect before submitting"
+            )
         for_review = submission_version_id(submission)
         if for_review is not None and for_review != checkpoint.version_id:
             raise SubmissionConflictError(
@@ -1178,6 +1220,10 @@ class AppStoreReviewOperation:
                 "does not submit it automatically - resolve the submission in App Store Connect"
             )
         if include_for_review:
+            if len(items) != 1 or item_version_id(items[0]) != checkpoint.version_id:
+                raise SubmissionConflictError(
+                    f"Review submission {submission_id} must contain exactly the target version item"
+                )
             submission = get_review_submission(submission_id, self._client)
             if submission is not None:
                 self._reject_foreign_submission(checkpoint, submission)

@@ -481,6 +481,10 @@ class FakeAsc:
 
     def __call__(self, method: str, path: str, client, payload=None, retry_ambiguous=True):
         base = path.split("?")[0]
+        if base == "/v1/builds":
+            assert "include=preReleaseVersion,app" in path
+        if base.endswith("/items"):
+            assert "include=appStoreVersion" in path
         self.calls.append(
             {
                 "method": method,
@@ -591,42 +595,48 @@ class FakeAsc:
                         loc["attributes"].update(((payload or {}).get("data") or {}).get("attributes") or {})
                         return {"data": loc}
             raise _http_404(method, base)
-        m = re.fullmatch(r"/v1/appStoreVersions/([^/]+)/phasedRelease", base)
-        if m:
-            version = self.versions.get(m.group(1))
-            if version is None:
+        m = re.fullmatch(r"/v1/appStoreVersions/([^/]+)/appStoreVersionPhasedRelease", base)
+        if m and method == "GET":
+            if m.group(1) not in self.versions:
                 raise _http_404(method, base)
-            if method == "GET":
-                current = self.phased.get(m.group(1))
-                if current is None:
-                    raise _http_404(method, base)
-                return {"data": current}
-            if method == "POST":
-                phased = {
-                    "id": f"ph-{self._next_id}",
-                    "type": "appStoreVersionPhasedReleases",
-                    "attributes": {"phasedReleaseState": "INACTIVE"},
-                }
-                self._next_id += 1
-                self.phased[m.group(1)] = phased
-                return {"data": phased}
-            if method == "DELETE":
-                self.phased[m.group(1)] = None
-                return {}
+            return {"data": self.phased.get(m.group(1))}
+        if base == "/v1/appStoreVersionPhasedReleases" and method == "POST":
+            data = payload["data"]
+            assert set(data) == {"type", "attributes", "relationships"}
+            assert data["type"] == "appStoreVersionPhasedReleases"
+            assert set(data["relationships"]) == {"appStoreVersion"}
+            version_id = data["relationships"]["appStoreVersion"]["data"]["id"]
+            assert version_id in self.versions
+            phased = {
+                "id": f"ph-{self._next_id}",
+                "type": "appStoreVersionPhasedReleases",
+                "attributes": {"phasedReleaseState": "INACTIVE"},
+            }
+            self._next_id += 1
+            self.phased[version_id] = phased
+            return {"data": phased}
+        m = re.fullmatch(r"/v1/appStoreVersionPhasedReleases/([^/]+)", base)
+        if m and method == "DELETE":
+            for version_id, phased in self.phased.items():
+                if phased and phased["id"] == m.group(1):
+                    self.phased[version_id] = None
+                    return {}
+            raise _http_404(method, base)
         if base == "/v1/reviewSubmissions" and method == "GET":
             return {"data": list(self.submissions.values()), "links": {}}
         if base == "/v1/reviewSubmissions" and method == "POST":
             data = (payload or {}).get("data") or {}
-            target_version = data["relationships"]["appStoreVersionForReview"]["data"]["id"]
+            assert set(data) == {"type", "attributes", "relationships"}
+            assert data["relationships"] == {"app": {"data": {"type": "apps", "id": self.app_id}}}
             submission_id = f"rs-{self._next_id}"
             self._next_id += 1
             submission = {
                 "id": submission_id,
                 "type": "reviewSubmissions",
-                "attributes": {"state": "DRAFT", "platform": "IOS"},
+                "attributes": {"state": "READY_FOR_REVIEW", "platform": "IOS"},
                 "relationships": {
                     "app": {"data": {"type": "apps", "id": self.app_id}},
-                    "appStoreVersionForReview": {"data": {"type": "appStoreVersions", "id": target_version}},
+                    "appStoreVersionForReview": {"data": None},
                 },
             }
             self.submissions[submission_id] = submission
@@ -640,9 +650,14 @@ class FakeAsc:
             if method == "GET":
                 return {"data": submission}
             if method == "PATCH":
-                attrs = ((payload or {}).get("data") or {}).get("attributes") or {}
-                if attrs.get("submitted"):
-                    submission["attributes"]["state"] = "WAITING_FOR_REVIEW"
+                assert payload["data"] == {
+                    "type": "reviewSubmissions", "id": m.group(1), "attributes": {"submitted": True},
+                }
+                assert len(self.items[m.group(1)]) == 1
+                submission["attributes"]["state"] = "WAITING_FOR_REVIEW"
+                for item in self.items[m.group(1)]:
+                    version_id = item["relationships"]["appStoreVersion"]["data"]["id"]
+                    self.versions[version_id]["attributes"]["appStoreState"] = "WAITING_FOR_REVIEW"
                 return {"data": submission}
         m = re.fullmatch(r"/v1/reviewSubmissions/([^/]+)/items", base)
         if m and method == "GET":
@@ -661,6 +676,9 @@ class FakeAsc:
             }
             self._next_id += 1
             self.items.setdefault(target_submission, []).append(item)
+            self.submissions[target_submission]["relationships"]["appStoreVersionForReview"] = {
+                "data": {"type": "appStoreVersions", "id": target_version}
+            }
             return {"data": item}
         raise AssertionError(f"FakeAsc: unexpected call {method} {base}")
 
@@ -868,7 +886,7 @@ def test_fresh_run_creates_version_prepares_and_submits(tmp_path, monkeypatch):
     assert len([c for c in mutating if c["path"] == "/v1/appStoreVersions" and c["method"] == "POST"]) == 1
     assert len([c for c in mutating if c["path"].startswith("/v1/reviewSubmissions") and c["method"] == "POST"]) == 1
     assert len([c for c in mutating if c["path"] == "/v1/reviewSubmissionItems"]) == 1
-    assert len([c for c in mutating if c["path"].endswith("/phasedRelease")]) == 1
+    assert len([c for c in mutating if c["path"] == "/v1/appStoreVersionPhasedReleases"]) == 1
 
 
 @pytest.mark.parametrize("stop_after", [1, 2, 3, 4, 5, 6, 7, 8])
@@ -1179,7 +1197,7 @@ def test_lost_phased_release_delete_blocks_when_not_applied(tmp_path, monkeypatc
         "type": "appStoreVersionPhasedReleases",
         "attributes": {"phasedReleaseState": "INACTIVE"},
     }
-    delete_path = "/v1/appStoreVersions/v-1/phasedRelease"
+    delete_path = "/v1/appStoreVersionPhasedReleases/ph-1"
     asc.fail_on("DELETE", delete_path, _ambiguous("DELETE", delete_path), apply=False)
 
     with pytest.raises(appstore_state.UnknownResultError, match="blocked"):
@@ -1197,8 +1215,53 @@ def test_phased_release_disabled_is_a_noop_when_absent(tmp_path, monkeypatch):
     outcome = _operation(tmp_path, monkeypatch, _intent(phased_release=False)).run()
 
     assert outcome.phased_release is False
-    assert not any(c["path"].endswith("/phasedRelease") and c["method"] != "GET" for c in asc.calls)
+    assert not any(c["path"].startswith("/v1/appStoreVersionPhasedReleases") for c in asc.mutating())
     assert asc.phased[outcome.version_id] is None
+
+
+@pytest.mark.parametrize("state", ["UNRESOLVED_ISSUES", "CANCELING", "UNKNOWN"])
+def test_unsafe_submission_state_never_submits_or_creates_duplicate(tmp_path, monkeypatch, state):
+    asc = FakeAsc(monkeypatch)
+    asc.add_version("v-1")
+    asc.add_submission("rs-user", state=state, version_id="v-1", item_version_ids=("v-1",))
+    with pytest.raises(review.SubmissionConflictError, match="state"):
+        _operation(tmp_path, monkeypatch).run()
+    assert not any(c["path"].startswith("/v1/reviewSubmission") for c in asc.mutating())
+
+
+@pytest.mark.parametrize("change", ["build", "empty_items", "duplicate_items", "unknown_state"])
+def test_confirmed_operation_requires_exact_remote_target(tmp_path, monkeypatch, change):
+    asc = FakeAsc(monkeypatch)
+    outcome = _operation(tmp_path, monkeypatch).run()
+    if change == "build":
+        asc.versions[outcome.version_id]["relationships"]["build"]["data"]["id"] = "other-build"
+    elif change == "empty_items":
+        asc.items[outcome.submission_id].clear()
+    elif change == "duplicate_items":
+        asc.items[outcome.submission_id] *= 2
+    else:
+        asc.submissions[outcome.submission_id]["attributes"]["state"] = "UNKNOWN"
+    asc.calls.clear()
+    with pytest.raises((appstore_state.UnknownResultError, review.SubmissionConflictError)):
+        _operation(tmp_path, monkeypatch).run()
+    assert asc.mutating() == []
+
+
+@pytest.mark.parametrize("endpoint,category", [
+    ("/v1/appStoreVersions", "version_create_lost"),
+    ("/v1/reviewSubmissionItems", "item_create_lost"),
+])
+def test_unconfirmed_creation_is_blocked_across_runs(tmp_path, monkeypatch, endpoint, category):
+    asc = FakeAsc(monkeypatch)
+    asc.fail_on("POST", endpoint, _ambiguous("POST", endpoint), apply=False)
+    with pytest.raises(appstore_state.UnknownResultError, match="blocked"):
+        _operation(tmp_path, monkeypatch).run()
+    checkpoint = _confirmed_checkpoint(tmp_path, appstore_state.compute_operation_id(_intent()))
+    assert checkpoint.blocked["category"] == category
+    asc.calls.clear()
+    with pytest.raises(appstore_state.UnknownResultError, match="blocked"):
+        _operation(tmp_path, monkeypatch).run()
+    assert asc.calls == []
 
 
 # --- checkpoint bookkeeping, conflicts and coordination -------------------------------
