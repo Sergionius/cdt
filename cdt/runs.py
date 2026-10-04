@@ -163,7 +163,11 @@ def resolve_run(cwd: Path, *, run_id: str | None = None, pipeline: str | None = 
         except (OSError, ValueError):
             paths = None
         if paths is not None and paths.root.is_dir():
-            return paths
+            manifest = read_json(paths.manifest) or {}
+            status = read_json(paths.status) or {}
+            # Different names can share a filesystem-safe marker slug.
+            if (status.get("pipeline") or manifest.get("pipeline")) == pipeline:
+                return paths
         recent = list_runs(cwd, limit=1, pipeline=pipeline)
         return run_paths(cwd, recent[0]["run_id"]) if recent else None
     recent = list_runs(cwd, limit=1)
@@ -352,7 +356,7 @@ class RunOutputRecorder:
 def read_json(path: Path) -> dict[str, Any] | None:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return None
     return payload if isinstance(payload, dict) else None
 

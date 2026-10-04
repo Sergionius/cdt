@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-- Nothing yet.
+- Fixed rejected resume attempts leaving nonterminal run records: failures now persist a terminal status, exit code, and redacted diagnostic log.
+- Fixed pipeline-specific status/log lookup selecting another pipeline's run when names share the same filesystem-safe marker.
+- Made run history tolerate metadata files containing invalid UTF-8.
 
 ## v0.8.0 - 2026-10-03
 

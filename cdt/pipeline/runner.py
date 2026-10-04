@@ -10,7 +10,7 @@ import typer
 from ..artifacts import BuildArtifact
 from ..redaction import SecretRedactor
 from ..runner import CommandRunner
-from ..runs import RunOutputRecorder, ensure_run, write_exit_code, write_text_atomic
+from ..runs import RunOutputRecorder, ensure_run, now, write_exit_code, write_text_atomic
 from ..runs import run_paths as run_paths_for_id
 from .builtins import register_builtin_steps
 from .config import configured_steps, load_pipeline_config, load_plugins, validate_pipeline_inputs
@@ -103,9 +103,9 @@ def run_configured_pipeline(
         skip_completed=skip_completed,
     )
     try:
-        if resume_from or skip_completed:
-            _restore_resume_status(ctx, resume_status_file)
         try:
+            if resume_from or skip_completed:
+                _restore_resume_status(ctx, resume_status_file)
             # Recompute all conditions in the executor after resume input matching.
             # Saved decisions/skips are informational, never execution authority;
             # older status files need neither field.
@@ -115,6 +115,11 @@ def run_configured_pipeline(
                 write_exit_code(run_paths.exit, 1)
             if recorder is not None:
                 recorder.record_line(_terminal_failure_summary(exc))
+            if ctx.finished_at is None:
+                # Resume validation can fail before the executor writes a status.
+                ctx.error = ctx.redact(_terminal_failure_summary(exc))
+                ctx.finished_at = now()
+                ctx.write_status("failed")
             _rollback_release_files(ctx)
             raise
         else:
