@@ -117,6 +117,11 @@ def _terminate_process_group(proc: subprocess.Popen) -> None:
                 os.killpg(proc.pid, 0)
             except ProcessLookupError:
                 return
+            except PermissionError:
+                # A denied probe does not prove the group has exited. Keep
+                # the bounded grace and KILL attempt instead of masking the
+                # original timeout/interrupt with the probe error.
+                pass
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
