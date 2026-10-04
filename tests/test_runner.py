@@ -271,6 +271,27 @@ def test_cleanup_kills_remaining_group_after_parent_exits(tmp_path, monkeypatch,
     assert proc.wait_calls == [3, 0, 0]
 
 
+@pytest.mark.parametrize("interruption", [subprocess.TimeoutExpired(["hook"], 3), KeyboardInterrupt()])
+def test_cleanup_probe_permission_error_preserves_escalation(tmp_path, monkeypatch, interruption):
+    proc = ScriptedProc(4242, [interruption, -15, -15])
+    _patch_popen(monkeypatch, proc)
+    signals = []
+
+    def killpg(pid, sig):
+        if sig == 0:
+            raise PermissionError("group probe denied")
+        signals.append((pid, sig))
+
+    monkeypatch.setattr(runner.os, "killpg", killpg)
+    monkeypatch.setattr(runner, "PROCESS_GROUP_TERMINATE_GRACE_SECONDS", 0)
+
+    with pytest.raises(type(interruption)):
+        runner.run_managed_subprocess(["hook"], cwd=tmp_path, timeout=3)
+
+    assert signals == [(4242, signal.SIGTERM), (4242, signal.SIGKILL)]
+    assert proc.wait_calls == [3, 0, 0]
+
+
 @pytest.mark.skipif(os.name != "posix", reason="POSIX process groups are required")
 def test_managed_timeout_kills_child_ignoring_term_after_parent_exits(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "PROCESS_GROUP_TERMINATE_GRACE_SECONDS", 0.2)
