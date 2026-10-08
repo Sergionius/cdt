@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Nothing yet.
+
+## v0.8.2 - 2026-10-08
+
 - Save a redacted verbose Flutter/Xcode transcript for failed iOS IPA builds under the run directory, and report specific Xcode errors when available without repeating the build.
 
 ## v0.8.1 - 2026-10-04
