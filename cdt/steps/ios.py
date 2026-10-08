@@ -78,12 +78,25 @@ class IosFlutterBuildIpaStep:
             "extra_args": self.extra_args,
         }
         command = _build_ios_ipa_command(profile=self.profile, **options)
-        exit_code = ctx.runner.run(command, cwd=ctx.cwd)
+        diagnostics = ""
+        diagnostic_path = None
+        diagnostic_runner = getattr(ctx.runner, "run_with_diagnostics", None)
+        if ctx.run_dir is not None and callable(diagnostic_runner):
+            # Verbose Flutter includes the xcodebuild transcript omitted by its
+            # default progress UI. This is still a single build, not a retry.
+            command.append("-v")
+            exit_code, diagnostics, diagnostic_path = diagnostic_runner(
+                command, cwd=ctx.cwd, run_dir=ctx.run_dir, env=ctx.env
+            )
+        else:
+            exit_code = ctx.runner.run(command, cwd=ctx.cwd)
         if exit_code != 0:
             _play_fail_sound(ctx.env, ctx.cwd)
-            raise CommandExecutionError(
-                "iOS IPA build failed. Check the Flutter/Xcode output above for details.",
-                command=command,
-                exit_code=exit_code,
-            )
+            if diagnostics:
+                cause = f"iOS IPA build failed. Xcode reported: {diagnostics}"
+            else:
+                cause = "iOS IPA build failed. Xcode did not provide a specific error in its captured output."
+            if diagnostic_path is not None:
+                cause += f"\nDiagnostic log: {diagnostic_path}"
+            raise CommandExecutionError(cause, command=command, exit_code=exit_code)
         ctx.register_artifact(self.artifact, _ios_ipa_artifact(ctx.cwd))

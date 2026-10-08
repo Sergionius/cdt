@@ -483,7 +483,7 @@ def test_cli_parallel_ios_failure_renders_readable_summary(tmp_path, monkeypatch
     assert result.exit_code == 1
     output = result.output
     assert "Pipeline failed at step 0/0 (ios.flutter_build_ipa)." in output
-    assert "iOS IPA build failed. Check the Flutter/Xcode output above for details." in output
+    assert "iOS IPA build failed. Xcode did not provide a specific error in its captured output." in output
     assert "Command: flutter build ipa --obfuscate --split-debug-info=obfsymbols --no-pub" in output
     assert "Exit code: 74" in output
     assert "Other parallel steps were allowed to finish." in output

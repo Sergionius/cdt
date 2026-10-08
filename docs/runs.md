@@ -152,9 +152,10 @@ A failed `cdt run` ends with a readable English summary instead of CLI usage hel
 
 ```text
 Pipeline failed at step 0/0 (ios.flutter_build_ipa).
-iOS IPA build failed. Check the Flutter/Xcode output above for details.
-Command: flutter build ipa --obfuscate --split-debug-info=obfsymbols --no-pub
-Exit code: 74
+iOS IPA build failed. Xcode reported: error: provisioning profile expired
+Diagnostic log: /project/.cdt/runs/<run-id>/ios-build.log
+Command: flutter build ipa --obfuscate --split-debug-info=obfsymbols --no-pub -v
+Exit code: 1
 Other parallel steps were allowed to finish.
 Artifacts produced: android_aab
 ```
@@ -180,7 +181,7 @@ Note that `Artifacts produced:` covers only what the failing step or group itsel
 
 The displayed exit code is the return code of the Flutter command itself, not an embedded Xcode diagnostic. Xcode may report its own error codes (such as 74) inside the build log; CDT neither substitutes nor guesses them and reports Flutter's return value as-is, so use the build output to find the actual Xcode failure.
 
-The summary identifies the failing step; it does not diagnose the underlying tool failure. Read the streamed Flutter/Xcode build output above the summary in the terminal, or inspect the saved record afterwards with `cdt logs <run-id>` — the same redacted summary is persisted in `output.log` and in the `status.json` error field.
+For `ios.flutter_build_ipa`, CDT runs Flutter with `-v` on the **first and only** build attempt, retaining the redacted verbose transcript as `.cdt/runs/<run-id>/ios-build.log` only if the build fails. The failure summary quotes up to three specific errors from the transcript and links the diagnostic log. When even verbose Flutter output contains only a generic Xcode exit code, CDT says it did not obtain a specific error instead of claiming the summary explains the failure. Flutter may still suppress diagnostics or discard its private Xcode result bundle; CDT cannot guarantee the underlying Xcode cause in those cases. The log is owner-readable only and should be treated as sensitive even after known-secret redaction. `cdt logs <run-id>` shows the run summary; read `ios-build.log` separately for the build transcript.
 
 ## Concurrency
 

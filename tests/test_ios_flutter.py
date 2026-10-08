@@ -149,8 +149,8 @@ def test_ios_flutter_step_raises_command_error_on_failure(tmp_path, monkeypatch)
         IosFlutterBuildIpaStep().run(ctx)
 
     error = exc_info.value
-    assert str(error) == "iOS IPA build failed. Check the Flutter/Xcode output above for details."
-    assert error.cause == "iOS IPA build failed. Check the Flutter/Xcode output above for details."
+    assert str(error) == "iOS IPA build failed. Xcode did not provide a specific error in its captured output."
+    assert error.cause == str(error)
     assert error.exit_code == 74
     assert error.command == [
         "flutter",

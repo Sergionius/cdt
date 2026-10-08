@@ -1,15 +1,18 @@
 import os
+import re
 import shlex
 import signal
 import subprocess
 import tempfile
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
 import typer
 
 from . import config
+from .redaction import SecretRedactor, StreamingRedactor
 
 
 @dataclass
@@ -40,6 +43,12 @@ class CommandRunner:
         if env is None:
             return _run(command, cwd=cwd)
         return _run(command, cwd=cwd, env=env)
+
+    def run_with_diagnostics(
+        self, command: list[str], *, cwd: Path, run_dir: Path, env: dict[str, str]
+    ) -> tuple[int, str, Path | None]:
+        """Capture verbose build output once, retaining a redacted log only on failure."""
+        return _run_with_diagnostics(command, cwd=cwd, run_dir=run_dir, env=env)
 
     def spawn(self, command: list[str], *, cwd: Path) -> SpawnedProcess:
         proc, log_path = _spawn(command, cwd=cwd)
@@ -186,6 +195,70 @@ def _run(command: list[str], *, cwd: Path, env: dict[str, str] | None = None) ->
         typer.echo(tail, err=True)
         typer.echo("--- end log ---", err=True)
     return code
+
+
+def _run_with_diagnostics(
+    command: list[str], *, cwd: Path, run_dir: Path, env: dict[str, str]
+) -> tuple[int, str, Path | None]:
+    """Keep the raw Flutter stream private and temporary; persist only redacted failures.
+
+    Flutter's normal output can hide the underlying xcodebuild error. Its verbose
+    stream includes the xcodebuild transcript without invoking another build.
+    """
+    with tempfile.NamedTemporaryFile(prefix="cdt-ios-", suffix=".log", delete=False) as tmp:
+        raw_path = Path(tmp.name)
+    try:
+        with raw_path.open("wb") as output:
+            proc = subprocess.Popen(
+                command, cwd=cwd, env=os.environ | env, stdin=subprocess.DEVNULL,
+                stdout=output, stderr=subprocess.STDOUT,
+            )
+            code = proc.wait()
+        if code == 0:
+            return 0, "", None
+
+        destination = run_dir / "ios-build.log"
+        # Never persist an unredacted copy inside the project. Redact one line at
+        # a time to bound memory even for very large Xcode transcripts.
+        redactor = StreamingRedactor(SecretRedactor.from_env(env))
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        fd = os.open(destination, flags, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+            with (
+                os.fdopen(fd, "w", encoding="utf-8") as saved,
+                raw_path.open("r", encoding="utf-8", errors="replace") as source,
+            ):
+                while chunk := source.read(65536):
+                    saved.write(redactor.feed(chunk))
+                saved.write(redactor.feed("", final=True))
+        except BaseException:
+            destination.unlink(missing_ok=True)
+            raise
+        # Read the redacted copy, not the raw output, for user-facing errors.
+        details = _ios_failure_details(destination)
+        return code, details, destination
+    finally:
+        raw_path.unlink(missing_ok=True)
+
+
+def _ios_failure_details(path: Path) -> str:
+    """Select a specific Xcode failure rather than repeating Flutter's generic 74."""
+    generic = ("xcodebuild encountered an error", "failed to build ios app", "encountered error while archiving")
+    selected: deque[str] = deque(maxlen=3)
+    with path.open(encoding="utf-8", errors="replace") as log:
+        for line in log:
+            text = line.strip()
+            if not text or any(phrase in text.lower() for phrase in generic):
+                continue
+            if re.search(
+                r"\berror:|\*\* (?:archive|export) failed \*\*|Error Domain="
+                r"|provisioning profile .* (?:missing|expired|does not)",
+                text,
+                re.I,
+            ):
+                selected.append(text[:500])
+    return "\n".join(selected)
 
 
 def _spawn(command: list[str], *, cwd: Path) -> tuple[subprocess.Popen, Path | None]:
