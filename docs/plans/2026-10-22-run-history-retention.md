@@ -134,15 +134,15 @@
 - Modify: `tests/test_skills.py`
 - Modify: `CHANGELOG.md`
 
-- [ ] Заменить утверждения об отсутствии очистки на описание ручного prune и явно включаемой автоочистки.
-- [ ] Добавить примеры возраста, количества, совместной политики, `--pipeline`, предпросмотра, подтверждения и JSON.
-- [ ] Объяснить, что retention удаляет весь каталог записи любого завершённого результата, но не внешние артефакты и не другие области `.cdt`.
-- [ ] Документировать потерю логов и источника resume, границу возраста по времени начала, сохранение последних N отдельно по pipeline и причины пропуска активных/неоднозначных записей.
-- [ ] Описать экспериментальный глобальный переключатель, фиксированную политику 30 дней + 10 записей, работу только после запусков текущего проекта и отключение функции.
-- [ ] Обновить агентский skill: агент может делать dry-run, но ручное удаление и включение experimental требуют явного разрешения пользователя. Уже включённая пользователем автоочистка не требует нового согласия после каждого запуска.
-- [ ] Предписать агенту использовать `--json`, кратко сообщать объём и количество удаляемых записей, не подменять prune командами `rm`, не включать retention самовольно.
-- [ ] Уточнить, что изменения skill в репозитории не обновляют автоматически ранее скопированные пользовательские версии; сохранить существующую инструкцию copy/symlink.
-- [ ] Добавить проверки агентских инструкций и запись в changelog без изменения версии пакета.
+- [x] Заменить утверждения об отсутствии очистки на описание ручного prune и явно включаемой автоочистки.
+- [x] Добавить примеры возраста, количества, совместной политики, `--pipeline`, предпросмотра, подтверждения и JSON.
+- [x] Объяснить, что retention удаляет весь каталог записи любого завершённого результата, но не внешние артефакты и не другие области `.cdt`.
+- [x] Документировать потерю логов и источника resume, границу возраста по времени начала, сохранение последних N отдельно по pipeline и причины пропуска активных/неоднозначных записей.
+- [x] Описать экспериментальный глобальный переключатель, фиксированную политику 30 дней + 10 записей, работу только после запусков текущего проекта и отключение функции.
+- [x] Обновить агентский skill: агент может делать dry-run, но ручное удаление и включение experimental требуют явного разрешения пользователя. Уже включённая пользователем автоочистка не требует нового согласия после каждого запуска.
+- [x] Предписать агенту использовать `--json`, кратко сообщать объём и количество удаляемых записей, не подменять prune командами `rm`, не включать retention самовольно.
+- [x] Уточнить, что изменения skill в репозитории не обновляют автоматически ранее скопированные пользовательские версии; сохранить существующую инструкцию copy/symlink.
+- [x] Добавить проверки агентских инструкций и запись в changelog без изменения версии пакета.
 
 ## Validation
 
@@ -166,6 +166,13 @@ ruff check .
 Тесты очистки используют временные каталоги и изолированные пользовательские настройки. Не удалять реальные записи проекта и не запускать релизные pipeline для проверки этой функции.
 
 ## Execution Notes
+
+### Task 5
+
+- Document validation: the described contract was cross-checked against `cdt/cli.py` (`history prune` flags, preview/confirm/dry-run semantics, exit codes 0/1/2, JSON payload keys), `cdt/retention.py` (removable statuses, `manifest.started_at` UTC age, per-pipeline keep-last ordering, skip reasons, fixed 30d/10 auto policy, `latest-*` refresh, symlink refusal), and `cdt/user_settings.py` (`experimental.run-retention` global flag).
+- `.venv/bin/python -m pytest tests/test_skills.py`: 5 passed (2 initial failures were phrase mismatches inside this task's own new tests; fixed and rerun green).
+- `.venv/bin/ruff check .`: all checks passed.
+- Updated `README.md` (prune commands, experimental run-retention paragraph), `docs/runs.md` (rewritten Retention section: manual prune, scope, age/keep-last semantics, resume loss, skip reasons, experimental auto-retention), `docs/ai-agents.md` (agent retention contract), `docs/skills.md` (copied skill snapshots are not auto-updated), `skills/cdt-release/SKILL.md` (Run history retention rules), `tests/test_skills.py` (retention contract checks), `CHANGELOG.md` (Unreleased entries, package version unchanged).
 
 ### Task 4
 

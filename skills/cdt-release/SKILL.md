@@ -88,6 +88,16 @@ For an older CDT without `agent-release`, run `cdt run <pipeline>` with an expli
 4. Report failed step, error, changed version files, artifacts produced, and one recommended next action.
 5. Retry only after approval, except for a pure harness permission failure when elevated execution was already authorized.
 
+## Run history retention
+
+Run records under `.cdt/runs/<run-id>/` are release evidence and the only resume source; `cdt history prune` deletes finished records by age and count.
+
+- Retention previews need no approval: run `cdt history prune --older-than 30d --keep-last 10 --dry-run --json` (adapt the filters to the user's request) and read the JSON payload.
+- Use `--json` for prune results and report briefly how many records and how much data would be (or were) deleted before asking for approval.
+- Deleting records requires explicit user approval of the exact prune command with `--confirm`. Never use `rm` or any other shell command instead of `cdt history prune`: only the built-in prune is lifecycle-aware and skips active, unverifiable, or corrupted records.
+- Never enable `experimental.run-retention` yourself; turning this experimental auto-cleanup on is a user decision made through `cdt settings enable experimental.run-retention`.
+- When the user has already enabled `experimental.run-retention`, its fixed post-run policy (older than 30 days and outside the 10 newest records per pipeline, current project only) needs no new approval after each run.
+
 ## CDT self-release pipeline
 
 When the user asks to release CDT itself, use the repository's production `release` pipeline from the root `cdt.yaml`.
