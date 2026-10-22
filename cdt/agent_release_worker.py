@@ -7,7 +7,18 @@ from pathlib import Path
 
 from .config import _load_project_env
 from .redaction import SecretRedactor, StreamingRedactor
-from .runs import RUN_SCHEMA_VERSION, now, read_json, write_exit_code, write_json_atomic
+from .runs import (
+    RUN_LOCK_HANDOVER_TIMEOUT,
+    RUN_SCHEMA_VERSION,
+    acquire_run_lock,
+    now,
+    project_lock,
+    read_json,
+    release_run_lock,
+    run_paths,
+    write_exit_code,
+    write_json_atomic,
+)
 
 
 def main() -> int:
@@ -36,6 +47,17 @@ def main() -> int:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     exit_file = Path(args.exit_file)
     exit_file.parent.mkdir(parents=True, exist_ok=True)
+    # Take the lifecycle lock over from the detached parent, which released it
+    # when it exited. The spawned cdt run child never acquires it itself: the
+    # worker stays the single owner until status, exit code and log are final.
+    lifecycle = None
+    if args.run_id:
+        cwd = Path.cwd()
+        record = run_paths(cwd, args.run_id)
+        if record.root.is_dir():
+            with project_lock(cwd):
+                lifecycle = acquire_run_lock(record, timeout=RUN_LOCK_HANDOVER_TIMEOUT)
+    redactor = SecretRedactor.from_env(_load_project_env(Path.cwd()))
     redactor = SecretRedactor.from_env(_load_project_env(Path.cwd()))
     stream = StreamingRedactor(redactor)
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
@@ -87,6 +109,7 @@ def main() -> int:
         write_json_atomic(status_path, redactor.redact_data(payload))
     finally:
         write_exit_code(exit_file, exit_code)
+        release_run_lock(lifecycle)
     return exit_code
 
 

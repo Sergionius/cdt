@@ -1,12 +1,16 @@
 import io
 import json
 import os
+from datetime import datetime, timezone
+from pathlib import Path
 
 import yaml
 from typer.testing import CliRunner
 
 from cdt import agent_release, agent_release_worker
 from cdt.cli import app
+from cdt.retention import build_retention_plan, execute_retention
+from cdt.runs import acquire_run_lock, create_run, release_run_lock
 
 runner = CliRunner()
 
@@ -226,6 +230,71 @@ def test_agent_release_worker_marks_missing_terminal_child_status_failed(tmp_pat
     assert payload["status"] == "failed"
     assert payload["error"] == "CDT subprocess exited with code 7 before writing a terminal status"
     assert exit_path.read_text(encoding="utf-8") == "7\n"
+
+
+def test_agent_release_worker_owns_lifecycle_lock_until_finalized(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write_config(tmp_path)
+    record = create_run(tmp_path, "test", run_id="worker-run", detached=True)
+
+    observed = {}
+    original_release = agent_release_worker.release_run_lock
+
+    def spy_release(lock):
+        if lock is not None and "run_id" not in observed:
+            lock_file = Path(lock.lock_file)
+            observed["run_id"] = lock_file.parent.name
+            observed["lock_file"] = lock_file
+            plan = build_retention_plan(tmp_path, now=datetime.now(timezone.utc), keep_last=0)
+            result = execute_retention(tmp_path, plan)
+            observed["deleted"] = [item.run_id for item in result.deleted]
+            observed["skipped"] = {skip.run_id: skip.reason for skip in result.skipped}
+        original_release(lock)
+
+    monkeypatch.setattr(agent_release_worker, "release_run_lock", spy_release)
+
+    class CrashedProcess:
+        stdout = io.BytesIO(b"abrupt child exit\n")
+
+        def wait(self):
+            return 7
+
+    monkeypatch.setattr(agent_release_worker.subprocess, "Popen", lambda *args, **kwargs: CrashedProcess())
+    monkeypatch.setattr(
+        agent_release_worker.sys,
+        "argv",
+        [
+            "agent_release_worker",
+            "--pipeline",
+            "test",
+            "--run-id",
+            "worker-run",
+            "--log",
+            str(record.log),
+            "--exit-file",
+            str(record.exit),
+            "--status-file",
+            str(record.status),
+        ],
+    )
+
+    assert agent_release_worker.main() == 7
+
+    assert observed["run_id"] == "worker-run"
+    assert observed["lock_file"] == record.lock
+    assert observed["lock_file"].is_file()
+    assert observed["deleted"] == []
+    assert observed["skipped"] == {"worker-run": "run is active (lifecycle lock held by its owner)"}
+
+    # The worker released the lock after writing the final exit code.
+    owner = acquire_run_lock(record)
+    assert owner is not None
+    release_run_lock(owner)
+
+    plan = build_retention_plan(tmp_path, now=datetime.now(timezone.utc), keep_last=0)
+    outcome = execute_retention(tmp_path, plan)
+    assert [item.run_id for item in outcome.deleted] == ["worker-run"]
+    assert not record.root.exists()
 
 
 def test_agent_release_stop_handles_missing_pid(tmp_path, monkeypatch):

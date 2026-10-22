@@ -5,18 +5,29 @@ from pathlib import Path
 
 import pytest
 
+from cdt import retention as retention_module
 from cdt.retention import (
     REMOVABLE_RUN_STATUSES,
+    RetentionError,
+    RetentionFailure,
     RetentionPlan,
+    RetentionResult,
     build_retention_plan,
+    execute_retention,
     parse_older_than_days,
 )
 from cdt.runs import (
+    RUN_SCHEMA_VERSION,
     RunPaths,
+    acquire_run_lock,
     create_run,
+    latest_marker,
     list_all_runs,
     list_runs,
+    project_lock,
     read_json,
+    release_run_lock,
+    resolve_run,
     run_paths,
     write_exit_code,
     write_json_atomic,
@@ -362,3 +373,202 @@ def test_run_paths_round_trip_for_plan_entries(tmp_path):
 
     assert candidate_ids(plan) == [run.run_id]
     assert run_paths(tmp_path, plan.candidates[0].run_id).root == run.root
+
+
+def execute_plan(tmp_path: Path, **filters):
+    """Build a plan with the fixed NOW and execute it in the same project."""
+    plan = build_retention_plan(tmp_path, now=NOW, **filters)
+    return plan, execute_retention(tmp_path, plan)
+
+
+def test_execute_deletes_candidates_and_moves_latest_marker(tmp_path):
+    old = make_run(tmp_path, "test", age_days=40)
+    fresh = make_run(tmp_path, "test", age_days=1)
+
+    plan, result = execute_plan(tmp_path, older_than_days=30)
+
+    assert result.schema_version == RUN_SCHEMA_VERSION
+    assert result.mode == "delete"
+    assert [record.run_id for record in result.deleted] == [old.run_id]
+    assert result.skipped == []
+    assert result.failed == []
+    assert result.freed_bytes == result.deleted[0].size_bytes > 0
+    assert not old.root.exists()
+    assert fresh.root.exists()
+    assert latest_marker(tmp_path, "test").read_text(encoding="utf-8").strip() == fresh.run_id
+    assert resolve_run(tmp_path, pipeline="test") == fresh
+    assert plan.candidates  # the executed plan is the one built above
+
+
+def test_execute_drops_latest_marker_when_pipeline_has_no_runs_left(tmp_path):
+    run = make_run(tmp_path, "test", age_days=40)
+
+    _, result = execute_plan(tmp_path, older_than_days=30)
+
+    assert [record.run_id for record in result.deleted] == [run.run_id]
+    assert not latest_marker(tmp_path, "test").exists()
+    assert resolve_run(tmp_path, pipeline="test") is None
+    assert resolve_run(tmp_path) is None
+
+
+def test_execute_keeps_shared_slug_marker_of_surviving_pipeline(tmp_path):
+    kept = make_run(tmp_path, "test/ios", age_days=40)
+    removed = make_run(tmp_path, "test-ios", age_days=40)
+    # Both pipeline names share the latest-test-ios marker slug.
+    assert latest_marker(tmp_path, "test/ios") == latest_marker(tmp_path, "test-ios")
+
+    _, result = execute_plan(tmp_path, older_than_days=30, pipeline="test-ios")
+
+    assert [record.run_id for record in result.deleted] == [removed.run_id]
+    assert kept.root.exists()
+    # The dangling pointer is dropped instead of stealing the marker from the
+    # surviving pipeline; resolve_run falls back to the recorded history.
+    assert not latest_marker(tmp_path, "test-ios").exists()
+    assert resolve_run(tmp_path, pipeline="test/ios") == kept
+    assert resolve_run(tmp_path, pipeline="test-ios") is None
+
+
+def test_execute_skips_record_with_active_lifecycle_lock(tmp_path):
+    run = make_run(tmp_path, "test", age_days=40, status="success", exit_code=0)
+    owner = acquire_run_lock(run)
+    try:
+        _, result = execute_plan(tmp_path, older_than_days=30)
+    finally:
+        release_run_lock(owner)
+
+    assert result.deleted == []
+    assert result.failed == []
+    assert skip_reasons(result) == {run.run_id: "run is active (lifecycle lock held by its owner)"}
+    assert run.root.exists()
+
+    _, retry = execute_plan(tmp_path, older_than_days=30)
+    assert [record.run_id for record in retry.deleted] == [run.run_id]
+    assert not run.root.exists()
+
+
+def test_execute_rechecks_live_process_before_deletion(tmp_path):
+    run = make_run(tmp_path, "test", age_days=40, status="success", exit_code=0, pid=999999)
+    plan = build_retention_plan(tmp_path, now=NOW, older_than_days=30)
+    assert candidate_ids(plan) == [run.run_id]
+    # A live process appears after planning; the state is re-read and the
+    # process re-checked immediately before deletion.
+    run.pid.write_text(f"{os.getpid()}\n", encoding="utf-8")
+
+    result = execute_retention(tmp_path, plan)
+
+    assert result.deleted == []
+    assert skip_reasons(result) == {run.run_id: "the recorded process is still running"}
+    assert run.root.exists()
+
+
+def test_execute_skips_when_pid_cannot_be_checked(tmp_path, monkeypatch):
+    run = make_run(tmp_path, "test", age_days=40, status="success", exit_code=0, pid=12345)
+    plan = build_retention_plan(tmp_path, now=NOW, older_than_days=30)
+    assert candidate_ids(plan) == [run.run_id]
+    monkeypatch.setattr(os, "kill", lambda pid, signal: (_ for _ in ()).throw(PermissionError))
+
+    result = execute_retention(tmp_path, plan)
+
+    assert result.deleted == []
+    assert skip_reasons(result) == {run.run_id: "process liveness could not be verified"}
+    assert run.root.exists()
+
+
+def test_execute_reports_partial_failure_and_continues(tmp_path, monkeypatch):
+    first = make_run(tmp_path, "alpha", age_days=40)
+    second = make_run(tmp_path, "beta", age_days=40)
+    real_rmtree = shutil.rmtree
+
+    def flaky_rmtree(path, *args, **kwargs):
+        if Path(path).name == first.run_id:
+            (Path(path) / "manifest.json").unlink()  # partial progress
+            raise OSError("disk busy")
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(retention_module.shutil, "rmtree", flaky_rmtree)
+
+    _, result = execute_plan(tmp_path, older_than_days=30)
+
+    assert [record.run_id for record in result.deleted] == [second.run_id]
+    assert result.failed == [
+        RetentionFailure(run_id=first.run_id, error="could not fully remove the run directory: disk busy")
+    ]
+    assert first.root.exists()
+    assert (first.root / "status.json").exists()
+    assert not second.root.exists()
+
+
+def test_execute_refuses_symlinked_runs_directory(tmp_path):
+    run = make_run(tmp_path, "test", age_days=40)
+    runs_dir = tmp_path / ".cdt" / "runs"
+    external = tmp_path / "outside-runs"
+    shutil.move(str(runs_dir), str(external))
+    runs_dir.symlink_to(external, target_is_directory=True)
+
+    plan = build_retention_plan(tmp_path, now=NOW, older_than_days=30)
+    assert candidate_ids(plan) == [run.run_id]
+    with pytest.raises(RetentionError, match="symbolic link"):
+        execute_retention(tmp_path, plan)
+
+    assert run.root.exists()
+    assert run.root.is_dir()
+
+
+def test_execute_skips_run_directory_replaced_by_symlink(tmp_path):
+    run = make_run(tmp_path, "test", age_days=40)
+    plan = build_retention_plan(tmp_path, now=NOW, older_than_days=30)
+    external = tmp_path / "outside"
+    external.mkdir()
+    (external / "keep.txt").write_text("data", encoding="utf-8")
+    shutil.rmtree(run.root)
+    run.root.symlink_to(external, target_is_directory=True)
+
+    result = execute_retention(tmp_path, plan)
+
+    assert result.deleted == []
+    assert skip_reasons(result) == {run.run_id: "run directory is a symlink"}
+    assert (external / "keep.txt").read_text(encoding="utf-8") == "data"
+    # The lifecycle lock is never created behind a symlinked run directory.
+    assert not (external / ".lock").exists()
+
+
+def test_execute_reports_record_missing_between_plan_and_execution(tmp_path):
+    run = make_run(tmp_path, "test", age_days=40)
+    plan = build_retention_plan(tmp_path, now=NOW, older_than_days=30)
+    shutil.rmtree(run.root)
+
+    result = execute_retention(tmp_path, plan)
+
+    assert result.deleted == []
+    assert result.failed == []
+    assert skip_reasons(result) == {run.run_id: "run directory is no longer present"}
+
+
+def test_concurrent_prune_waits_for_project_lock(tmp_path):
+    run = make_run(tmp_path, "test", age_days=40)
+    plan = build_retention_plan(tmp_path, now=NOW, older_than_days=30)
+    guard = project_lock(tmp_path)
+    guard.acquire()
+    try:
+        with pytest.raises(RetentionError, match="in progress"):
+            execute_retention(tmp_path, plan, lock_timeout=0.05)
+    finally:
+        release_run_lock(guard)
+
+    assert run.root.exists()
+    result = execute_retention(tmp_path, plan)
+    assert [record.run_id for record in result.deleted] == [run.run_id]
+
+
+def test_execute_empty_plan_changes_nothing(tmp_path):
+    fresh = make_run(tmp_path, "test", age_days=1)
+
+    _, result = execute_plan(tmp_path, older_than_days=30)
+
+    assert isinstance(result, RetentionResult)
+    assert result.deleted == []
+    assert result.skipped == []
+    assert result.failed == []
+    assert result.freed_bytes == 0
+    assert fresh.root.exists()
+    assert latest_marker(tmp_path, "test").read_text(encoding="utf-8").strip() == fresh.run_id

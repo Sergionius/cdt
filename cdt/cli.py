@@ -28,10 +28,13 @@ from .pipeline.validation import inspect_payload, step_tree, steps_payload, vali
 from .redaction import SecretRedactor
 from .runs import (
     RUN_SCHEMA_VERSION,
+    acquire_run_lock,
     create_run,
     list_runs,
     now,
+    project_lock,
     read_json,
+    release_run_lock,
     resolve_run,
     write_exit_code,
     write_json_atomic,
@@ -370,6 +373,7 @@ def _run_capture_output(
         raise typer.Exit(code=1) from exc
     report_orca_status("working", name)
     failed = True
+    lifecycle = None
     try:
         paths = create_run(
             cwd,
@@ -393,6 +397,11 @@ def _run_capture_output(
         # The supervisor owns the live pid and the final exit code; the child
         # writes only the pipeline status and artifacts.
         write_text_atomic(paths.pid, f"{os.getpid()}\n")
+        with project_lock(cwd):
+            # The supervisor keeps the lifecycle lock until the final status and
+            # exit code are written, so pruning cannot race the capture; the
+            # supervised child never acquires it itself.
+            lifecycle = acquire_run_lock(paths, timeout=0.0)
         child_args = _capture_child_args(
             name,
             paths.run_id,
@@ -430,6 +439,7 @@ def _run_capture_output(
         typer.echo(f"Run: {paths.run_id}")
         return exit_code
     finally:
+        release_run_lock(lifecycle)
         report_orca_status("done", name, failed=failed)
 
 

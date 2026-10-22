@@ -9,11 +9,13 @@ import sys
 import textwrap
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
+import cdt.cli as cli_module
 from cdt.cli import app
 from cdt.foreground_run import (
     ForegroundCaptureError,
@@ -24,7 +26,8 @@ from cdt.foreground_run import (
 )
 from cdt.pipeline.registry import _clear_steps_for_tests
 from cdt.redaction import SecretRedactor
-from cdt.runs import list_runs, read_json, run_paths
+from cdt.retention import build_retention_plan, execute_retention
+from cdt.runs import acquire_run_lock, list_runs, read_json, release_run_lock, run_paths
 
 _SECRET = "capture-pipeline-secret"
 _TOKEN_ENV = "CAPTURE_TOKEN"
@@ -625,3 +628,48 @@ def test_capture_resume_skips_completed_build_leaf_without_new_timing(tmp_path, 
     # The new run record contains only its own measurements: the skipped leaf has none.
     assert status["build_timings"] == {}
     assert status["completed_steps"] == ["0"]
+
+
+def test_capture_supervisor_holds_lifecycle_lock_until_finalization(tmp_path, monkeypatch):
+    _timed_project(tmp_path, monkeypatch)
+    # The recorded process is already reaped: only the supervisor's lifecycle
+    # lock can still protect the terminal-looking record from a concurrent prune.
+    monkeypatch.setattr(os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError))
+
+    observed = {}
+    original_release = cli_module.release_run_lock
+
+    def spy_release(lock):
+        if lock is not None and "run_id" not in observed:
+            lock_file = Path(lock.lock_file)
+            observed["run_id"] = lock_file.parent.name
+            observed["lock_file"] = lock_file
+            plan = build_retention_plan(tmp_path, now=datetime.now(timezone.utc), keep_last=0)
+            result = execute_retention(tmp_path, plan)
+            observed["deleted"] = [record.run_id for record in result.deleted]
+            observed["skipped"] = {skip.run_id: skip.reason for skip in result.skipped}
+        original_release(lock)
+
+    monkeypatch.setattr(cli_module, "release_run_lock", spy_release)
+
+    result = _cli.invoke(app, ["run", "demo", "--capture-output"])
+
+    assert result.exit_code == 0, result.output
+    runs = list_runs(tmp_path)
+    assert len(runs) == 1
+    assert observed["run_id"] == runs[0]["run_id"]
+    assert observed["lock_file"] == run_paths(tmp_path, runs[0]["run_id"]).lock
+    assert observed["lock_file"].is_file()
+    assert observed["deleted"] == []
+    assert observed["skipped"] == {runs[0]["run_id"]: "run is active (lifecycle lock held by its owner)"}
+
+    # The supervisor released the lock after finalizing status and exit code.
+    paths = run_paths(tmp_path, runs[0]["run_id"])
+    owner = acquire_run_lock(paths)
+    assert owner is not None
+    release_run_lock(owner)
+
+    plan = build_retention_plan(tmp_path, now=datetime.now(timezone.utc), keep_last=0)
+    outcome = execute_retention(tmp_path, plan)
+    assert [record.run_id for record in outcome.deleted] == [runs[0]["run_id"]]
+    assert not paths.root.exists()

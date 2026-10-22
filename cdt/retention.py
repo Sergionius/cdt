@@ -1,20 +1,36 @@
-"""Selection of recorded runs for history retention.
+"""Selection and safe removal of recorded runs for history retention.
 
-This module builds a deterministic deletion plan without modifying any
-files: the actual removal is a separate step. Only finished runs may
-become candidates; active, unverifiable and corrupted records are always
-skipped with an explicit reason.
+:func:`build_retention_plan` builds a deterministic deletion plan without
+modifying any files; :func:`execute_retention` performs the actual removal.
+Only finished runs may become candidates; active, unverifiable and corrupted
+records are always skipped with an explicit reason.
 """
 
 from __future__ import annotations
 
 import os
+import shutil
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from .runs import RUN_SCHEMA_VERSION, list_all_runs, read_json, run_paths
+import filelock
+
+from .runs import (
+    PROJECT_LOCK_TIMEOUT,
+    RUN_SCHEMA_VERSION,
+    acquire_run_lock,
+    latest_marker,
+    list_all_runs,
+    list_runs,
+    project_lock,
+    read_json,
+    release_run_lock,
+    run_paths,
+    runs_dir,
+    set_latest_run,
+)
 
 TERMINAL_RUN_STATUSES = frozenset({"success", "failed", "cancelled", "blocked"})
 # A run whose recorded process is confirmed dead ("stale") can no longer make
@@ -67,6 +83,30 @@ class RetentionPlan:
     kept: list[RetentionKept]
     skipped: list[RetentionSkip]
     total_size_bytes: int
+
+
+@dataclass(frozen=True)
+class RetentionFailure:
+    """A candidate whose directory could not be fully removed."""
+
+    run_id: str
+    error: str
+
+
+@dataclass(frozen=True)
+class RetentionResult:
+    """Outcome of an executed retention pass."""
+
+    schema_version: int
+    mode: str
+    deleted: list[RetentionRecord]
+    skipped: list[RetentionSkip]
+    failed: list[RetentionFailure]
+    freed_bytes: int
+
+
+class RetentionError(RuntimeError):
+    """Retention cannot run in this project right now."""
 
 
 def parse_older_than_days(value: str | int) -> int:
@@ -150,6 +190,147 @@ def build_retention_plan(
         skipped=skipped,
         total_size_bytes=sum(record.size_bytes for record in candidates),
     )
+
+
+def execute_retention(
+    cwd: Path,
+    plan: RetentionPlan,
+    *,
+    lock_timeout: float = PROJECT_LOCK_TIMEOUT,
+) -> RetentionResult:
+    """Delete the plan's candidates with lifecycle-aware safety checks.
+
+    The whole pass runs under one project lock, which also guards record
+    creation and reuse: an owner can never take a run's lifecycle lock between
+    the safety re-check and the removal, and a starting run can never claim a
+    record mid-deletion. For every candidate the per-run lock is probed without
+    blocking, the state is re-read and the process is re-checked immediately
+    before removal, so a record that merely looks terminal cannot be deleted
+    while its owner is still writing it. Only the selected immediate directory
+    inside the real ``.cdt/runs/`` is removed; symlinks are never followed and
+    paths recorded in a status are never treated as deletion targets. A file
+    error on one candidate never stops the remaining candidates.
+    """
+    base = runs_dir(cwd)
+    if base.is_symlink():
+        raise RetentionError("Refusing to prune runs: .cdt/runs is a symbolic link")
+    guard = project_lock(cwd, timeout=lock_timeout)
+    try:
+        guard.acquire()
+    except filelock.Timeout as exc:
+        raise RetentionError("Another CDT run operation is in progress; retry pruning later") from exc
+    try:
+        deleted: list[RetentionRecord] = []
+        skipped: list[RetentionSkip] = []
+        failed: list[RetentionFailure] = []
+        now_utc = _as_utc(datetime.now(timezone.utc))
+        for record in plan.candidates:
+            outcome = _delete_candidate(cwd, base, record, now_utc=now_utc)
+            if isinstance(outcome, RetentionFailure):
+                failed.append(outcome)
+            elif isinstance(outcome, RetentionSkip):
+                skipped.append(outcome)
+            else:
+                deleted.append(outcome)
+        _refresh_latest_markers(cwd, deleted)
+    finally:
+        release_run_lock(guard)
+    return RetentionResult(
+        schema_version=RUN_SCHEMA_VERSION,
+        mode="delete",
+        deleted=deleted,
+        skipped=skipped,
+        failed=failed,
+        freed_bytes=sum(record.size_bytes for record in deleted),
+    )
+
+
+def _delete_candidate(
+    cwd: Path,
+    base: Path,
+    record: RetentionRecord,
+    *,
+    now_utc: datetime,
+) -> RetentionRecord | RetentionSkip | RetentionFailure:
+    """Remove one candidate; never raises for expected filesystem states."""
+    try:
+        paths = run_paths(cwd, record.run_id)
+    except ValueError:
+        return RetentionSkip(run_id=record.run_id, pipeline=record.pipeline, reason="invalid run id")
+    if paths.root.parent != base:
+        # run_paths already pins the record to the real .cdt/runs directory;
+        # this defensive check keeps removal inside it even if that changes.
+        return RetentionSkip(
+            run_id=record.run_id,
+            pipeline=record.pipeline,
+            reason="run directory is outside .cdt/runs",
+        )
+    if paths.root.is_symlink():
+        return RetentionSkip(run_id=record.run_id, pipeline=record.pipeline, reason="run directory is a symlink")
+    if not paths.root.is_dir():
+        return RetentionSkip(
+            run_id=record.run_id,
+            pipeline=record.pipeline,
+            reason="run directory is no longer present",
+        )
+    # Non-blocking lifecycle check: a held lock proves an owner is still
+    # finalizing the record even when status and exit code look terminal.
+    lock = acquire_run_lock(paths, timeout=0.0)
+    if lock is None:
+        return RetentionSkip(
+            run_id=record.run_id,
+            pipeline=record.pipeline,
+            reason="run is active (lifecycle lock held by its owner)",
+        )
+    try:
+        # Re-read the state and re-check the process right before deletion;
+        # records predating the lock protocol fall back to the conservative
+        # PID/status verification of _evaluate_run.
+        recheck = _evaluate_run(paths, now_utc=now_utc)
+    finally:
+        # Releasing before removal is safe under the project lock: a new owner
+        # must take the same project lock before it can acquire this run.
+        release_run_lock(lock)
+    if isinstance(recheck, RetentionSkip):
+        return recheck
+    try:
+        shutil.rmtree(paths.root)
+    except OSError as exc:
+        return RetentionFailure(
+            run_id=record.run_id,
+            error=f"could not fully remove the run directory: {exc}",
+        )
+    return recheck
+
+
+def _refresh_latest_markers(cwd: Path, deleted: list[RetentionRecord]) -> None:
+    """Point affected latest-* markers at surviving runs or drop stale ones."""
+    for pipeline in sorted({record.pipeline for record in deleted if record.pipeline}):
+        marker = latest_marker(cwd, pipeline)
+        recent = list_runs(cwd, limit=1, pipeline=pipeline)
+        if recent:
+            # Different pipeline names can share a marker slug, so the pointer
+            # is always recomputed from this pipeline's surviving records.
+            set_latest_run(cwd, pipeline, str(recent[0]["run_id"]))
+            continue
+        try:
+            current = marker.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if not current:
+            continue
+        try:
+            paths = run_paths(cwd, current)
+        except ValueError:
+            paths = None
+        if paths is None or not paths.root.is_dir():
+            # Dangling pointer: the pipeline has no records left. A marker that
+            # still resolves a live run belongs to another pipeline sharing the
+            # same slug and must survive.
+            try:
+                marker.unlink()
+            except OSError:
+                pass
 
 
 def _evaluate_run(paths: Any, *, now_utc: datetime) -> RetentionRecord | RetentionSkip:
