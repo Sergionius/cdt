@@ -298,6 +298,7 @@ def _resolve_paths(*, pipeline: str | None, run_id: str | None) -> tuple[RunPath
             log=legacy["log"],
             exit=legacy["exit"],
             pid=legacy["pid"],
+            lock=legacy["dir"] / ".lock",
         ),
         True,
     )

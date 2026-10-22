@@ -98,7 +98,7 @@ The capture stream passes the same redaction as every saved run log before it is
 
 Log completeness is bounded by the existing oversized-line protection: a single line beyond the limit is discarded behind a visible replacement marker instead of being stored raw or buffered without bound. Redaction cannot classify every possible secret format, so unknown secrets remain a residual risk — continue treating `.cdt/runs/` as sensitive project data. For the same reason, do not enable secret-bearing debug modes of external CLIs (for example `firebase --debug`): their verbose output can include credential material that CDT's redactor cannot guarantee to classify.
 
-Retention stays manual, exactly as for every other run record: CDT never deletes previous records, and the capture log is part of the record, not a separate rotation stream. See [Retention](#retention).
+The capture log is part of the run record, not a separate rotation stream: it is deleted or kept together with the whole record by the explicit manual prune (`cdt history prune`) and, when the user enables it, the experimental auto-retention. See [Retention](#retention).
 
 ## Manifest
 
@@ -211,9 +211,42 @@ Run records may still contain project paths, artifact names, task IDs, and other
 
 ## Retention
 
-CDT does not delete run records automatically. This avoids removing release evidence unexpectedly. `.cdt/` is ignored by the CDT repository template, and project owners may remove old completed directories according to their own retention policy.
+By default CDT never deletes run records: manual pruning is explicit, and the experimental auto-retention stays off until the user enables it. This avoids removing release evidence unexpectedly. `.cdt/` is ignored by the CDT repository template.
 
-Never delete a running directory. Check `cdt status <run-id>` before cleanup.
+Run records are never deleted implicitly: not by `cdt history`, not by planning or dry-runs, and not by reading commands. Deletion happens only through the explicit `cdt history prune` command below or, after the user opts in, the experimental auto-retention — and even then only finished records are removable. Check `cdt status <run-id>` before any cleanup decision.
+
+### Manual pruning with `cdt history prune`
+
+`cdt history prune` deletes recorded runs by age, by count, or by the intersection of both filters; at least one of `--older-than` or `--keep-last` is required.
+
+```bash
+cdt history prune --older-than 30d                     # preview: finished runs older than 30 days
+cdt history prune --keep-last 5                        # preview: everything except the 5 newest per pipeline
+cdt history prune --older-than 30d --keep-last 10      # preview: both conditions must hold
+cdt history prune --older-than 30d --keep-last 10 --pipeline test
+cdt history prune --older-than 14d --dry-run --json    # forced preview, machine-readable
+cdt history prune --older-than 14d --confirm --json    # real deletion
+```
+
+Without `--confirm` the command only previews: it lists run ID, pipeline, status, age, and size per candidate, shows skip reasons, and totals the candidate size without deleting anything. `--dry-run` requests the same preview explicitly, and `--dry-run --confirm` together are rejected as ambiguous. With `--confirm` the plan is rebuilt and re-checked immediately before deletion — an earlier preview never guarantees the same set, because history can change in between. Exit codes: `0` for a successful preview or deletion, including "no candidates"; `1` when read or deletion failures leave the operation incomplete; `2` for invalid arguments. `--json` returns one payload with `schema_version`, `mode` (`preview`/`delete`), `filters`, `candidates`, `deleted`, `skipped` with reasons, `errors`, `total_size_bytes`, and `freed_bytes`; JSON is never mixed with text output.
+
+Pruning removes whole record directories of any finished result — `success`, `failed`, `cancelled`, `blocked`, and confirmed-dead `stale` — not only failed runs. One record is `.cdt/runs/<run-id>/` with its manifest, status, exit code, logs, and diagnostics; pruning deletes all of it or nothing. The operation stays strictly inside the real `.cdt/runs/`: it never follows symbolic links to run directories or external targets, never touches build artifacts outside `.cdt/runs/`, never deletes store checkpoints such as `.cdt/appstore/` or `.cdt/google-play/` or any other `.cdt/` area, and refuses to run at all when `.cdt/runs` itself is a symbolic link. After deletion the `latest-<pipeline>` pointers are refreshed, or removed when a pipeline has no surviving records, so `cdt status`, `cdt logs`, and newest-run selection keep working with what remains.
+
+The age boundary comes from `manifest.started_at` in UTC: `--older-than 30d` selects runs strictly older than thirty days at the moment of the pass, and records with a missing or unparsable start time are skipped with an explicit reason instead of guessed. `--keep-last N` protects the N most recent records of every pipeline separately — ordered by start time, then run ID — so keeping the last five runs of `test` does not protect any run of `prod`; with both filters a candidate must be old enough and outside every protected window.
+
+Deleting a record destroys its logs and its value as a resume source: `--resume-status-file .cdt/runs/<run-id>/status.json` becomes impossible for a deleted run, and any release evidence stored only in that record is gone. Active and ambiguous records are skipped, never deleted: `queued` and running records, records whose recorded process is still alive (an existing `exit-code` file alone does not prove the owner finished writing the record), records whose process liveness cannot be verified, and corrupted records are all reported with explicit skip reasons and left in place.
+
+### Experimental auto-retention
+
+Auto-cleanup is disabled by default and controlled by the global per-user flag `experimental.run-retention`:
+
+```bash
+cdt settings enable experimental.run-retention
+cdt settings show
+cdt settings disable experimental.run-retention   # turn it off again
+```
+
+The setting is stored globally next to `experimental.orca-status` in the per-user settings file, but each run prunes only the current project's `.cdt/runs/` — other projects are never scanned. While the flag is enabled, the owner of every real run applies one fixed policy exactly once after finalizing the status/exit code and closing the log, after successful and failed runs alike: delete finished runs older than 30 days that also fall outside the 10 newest records of each pipeline. The policy is not configurable, and the just-finished run itself is never a candidate of its own cleanup pass. Retention problems are reported as stderr warnings only and never change the run's status, exit code, or pipeline result. Missing or unreadable settings never enable auto-prune, and the `dry-run`/preflight/history paths never trigger it.
 
 ## Recovery and resume
 

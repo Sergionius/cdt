@@ -9,8 +9,18 @@ import typer
 
 from ..artifacts import BuildArtifact
 from ..redaction import SecretRedactor
+from ..retention import auto_prune_after_run
 from ..runner import CommandRunner
-from ..runs import RunOutputRecorder, ensure_run, now, write_exit_code, write_text_atomic
+from ..runs import (
+    RunOutputRecorder,
+    acquire_run_lock,
+    ensure_run,
+    now,
+    project_lock,
+    release_run_lock,
+    write_exit_code,
+    write_text_atomic,
+)
 from ..runs import run_paths as run_paths_for_id
 from .builtins import register_builtin_steps
 from .config import configured_steps, load_pipeline_config, load_plugins, validate_pipeline_inputs
@@ -77,14 +87,20 @@ def run_configured_pipeline(
                 inputs=inputs,
                 env=env,
             )
-    if run_paths is not None and not detached and not capture_child:
-        write_text_atomic(run_paths.pid, f"{os.getpid()}\n")
     # Direct runs tee CDT-owned output into the run log. Detached workers already
     # capture the combined subprocess stream, and the supervised capture child is
     # streamed by its foreground supervisor, so no recorder is installed there:
     # recorder, pid and exit files belong to the caller that owns the process.
+    lifecycle_lock = None
     recorder: RunOutputRecorder | None = None
     if run_paths is not None and not detached and not capture_child:
+        write_text_atomic(run_paths.pid, f"{os.getpid()}\n")
+        with project_lock(cwd):
+            # The direct owner holds the run lifecycle lock until the exit code
+            # is written and the log is closed, so pruning cannot race the run.
+            # The supervised capture child and the detached worker child never
+            # acquire it themselves: their owning process already holds it.
+            lifecycle_lock = acquire_run_lock(run_paths, timeout=0.0)
         recorder = RunOutputRecorder(run_paths.log, SecretRedactor.from_env(env))
         recorder.install()
     primary_status = run_paths.status if run_paths is not None else status_file
@@ -128,6 +144,14 @@ def run_configured_pipeline(
     finally:
         if recorder is not None:
             recorder.close()
+        release_run_lock(lifecycle_lock)
+        if run_paths is not None and not detached and not capture_child:
+            # The direct owner is the only pipeline execution that triggers the
+            # experimental auto-prune. It runs exactly once, after the status,
+            # exit code and log are final, on success and on failure, and never
+            # changes the run's own outcome; supervised capture children and
+            # detached worker children finalize records their owners prune.
+            auto_prune_after_run(cwd, run_paths.run_id)
     return run_paths.run_id if run_paths is not None else None
 
 

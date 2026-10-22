@@ -1,12 +1,27 @@
 import io
 import json
 import os
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import yaml
 from typer.testing import CliRunner
 
 from cdt import agent_release, agent_release_worker
+from cdt import retention as retention_module
 from cdt.cli import app
+from cdt.retention import AUTO_PRUNE_KEEP_LAST, build_retention_plan, execute_retention
+from cdt.runs import (
+    acquire_run_lock,
+    create_run,
+    list_runs,
+    read_json,
+    release_run_lock,
+    write_exit_code,
+    write_json_atomic,
+)
+from cdt.user_settings import RUN_RETENTION, set_experimental_flag
 
 runner = CliRunner()
 
@@ -228,6 +243,71 @@ def test_agent_release_worker_marks_missing_terminal_child_status_failed(tmp_pat
     assert exit_path.read_text(encoding="utf-8") == "7\n"
 
 
+def test_agent_release_worker_owns_lifecycle_lock_until_finalized(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write_config(tmp_path)
+    record = create_run(tmp_path, "test", run_id="worker-run", detached=True)
+
+    observed = {}
+    original_release = agent_release_worker.release_run_lock
+
+    def spy_release(lock):
+        if lock is not None and "run_id" not in observed:
+            lock_file = Path(lock.lock_file)
+            observed["run_id"] = lock_file.parent.name
+            observed["lock_file"] = lock_file
+            plan = build_retention_plan(tmp_path, now=datetime.now(timezone.utc), keep_last=0)
+            result = execute_retention(tmp_path, plan)
+            observed["deleted"] = [item.run_id for item in result.deleted]
+            observed["skipped"] = {skip.run_id: skip.reason for skip in result.skipped}
+        original_release(lock)
+
+    monkeypatch.setattr(agent_release_worker, "release_run_lock", spy_release)
+
+    class CrashedProcess:
+        stdout = io.BytesIO(b"abrupt child exit\n")
+
+        def wait(self):
+            return 7
+
+    monkeypatch.setattr(agent_release_worker.subprocess, "Popen", lambda *args, **kwargs: CrashedProcess())
+    monkeypatch.setattr(
+        agent_release_worker.sys,
+        "argv",
+        [
+            "agent_release_worker",
+            "--pipeline",
+            "test",
+            "--run-id",
+            "worker-run",
+            "--log",
+            str(record.log),
+            "--exit-file",
+            str(record.exit),
+            "--status-file",
+            str(record.status),
+        ],
+    )
+
+    assert agent_release_worker.main() == 7
+
+    assert observed["run_id"] == "worker-run"
+    assert observed["lock_file"] == record.lock
+    assert observed["lock_file"].is_file()
+    assert observed["deleted"] == []
+    assert observed["skipped"] == {"worker-run": "run is active (lifecycle lock held by its owner)"}
+
+    # The worker released the lock after writing the final exit code.
+    owner = acquire_run_lock(record)
+    assert owner is not None
+    release_run_lock(owner)
+
+    plan = build_retention_plan(tmp_path, now=datetime.now(timezone.utc), keep_last=0)
+    outcome = execute_retention(tmp_path, plan)
+    assert [item.run_id for item in outcome.deleted] == ["worker-run"]
+    assert not record.root.exists()
+
+
 def test_agent_release_stop_handles_missing_pid(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
@@ -392,7 +472,6 @@ def test_release_status_passes_build_timings_through_and_stays_optional(tmp_path
 
 
 def test_capture_child_reuses_record_without_competing_for_supervisor_files(tmp_path, monkeypatch):
-    import sys
 
     from cdt.runs import create_run
 
@@ -422,3 +501,81 @@ def test_capture_child_reuses_record_without_competing_for_supervisor_files(tmp_
     assert not paths.exit.exists()
     status = json.loads(paths.status.read_text(encoding="utf-8"))
     assert status["status"] == "success"
+
+
+def _seed_old_success(root: Path, pipeline: str, *, started: datetime) -> str:
+    paths = create_run(root, pipeline, detached=True)
+    manifest = read_json(paths.manifest)
+    manifest["started_at"] = started.isoformat()
+    write_json_atomic(paths.manifest, manifest)
+    payload = read_json(paths.status)
+    payload.update({"status": "success", "started_at": started.isoformat(), "finished_at": started.isoformat()})
+    write_json_atomic(paths.status, payload)
+    write_exit_code(paths.exit, 0)
+    return paths.run_id
+
+
+def test_agent_release_worker_runs_auto_prune_once_after_finalization(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write_config(tmp_path)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    set_experimental_flag(RUN_RETENTION, True)
+    record = create_run(tmp_path, "test", run_id="worker-run", detached=True)
+    started = datetime.now(timezone.utc) - timedelta(days=40)
+    old_ids = {_seed_old_success(tmp_path, "test", started=started) for _ in range(AUTO_PRUNE_KEEP_LAST + 3)}
+
+    calls = []
+    original = retention_module.run_auto_prune
+
+    def spy(cwd, **kwargs):
+        calls.append(dict(kwargs))
+        return original(cwd, **kwargs)
+
+    monkeypatch.setattr(retention_module, "run_auto_prune", spy)
+
+    class CrashedProcess:
+        stdout = io.BytesIO(b"abrupt child exit\n")
+
+        def wait(self):
+            return 7
+
+    monkeypatch.setattr(agent_release_worker.subprocess, "Popen", lambda *args, **kwargs: CrashedProcess())
+    monkeypatch.setattr(
+        agent_release_worker.sys,
+        "argv",
+        [
+            "agent_release_worker",
+            "--pipeline",
+            "test",
+            "--run-id",
+            "worker-run",
+            "--log",
+            str(record.log),
+            "--exit-file",
+            str(record.exit),
+            "--status-file",
+            str(record.status),
+        ],
+    )
+
+    # The worker failed its child, yet still owns the finalization: the failed
+    # outcome is unchanged and the auto-prune runs exactly once afterwards.
+    assert agent_release_worker.main() == 7
+
+    payload = json.loads(record.status.read_text(encoding="utf-8"))
+    assert payload["status"] == "failed"
+    assert len(calls) == 1
+    assert calls[0] == {"exclude_run_id": "worker-run"}
+    runs = list_runs(tmp_path)
+    assert len(runs) == AUTO_PRUNE_KEEP_LAST
+    remaining_ids = {item["run_id"] for item in runs}
+    assert "worker-run" in remaining_ids
+    # Thirteen old records plus the worker's own run: the four oldest records
+    # beyond the protected window are gone, its own record survives.
+    assert len(old_ids - remaining_ids) == 4
+
+    # The lifecycle lock was released before pruning: the record can be
+    # reclaimed by a later owner.
+    lock = acquire_run_lock(record)
+    assert lock is not None
+    release_run_lock(lock)

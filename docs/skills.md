@@ -19,7 +19,7 @@ AGENTS.md
 .agents/rules/cdt-release.md
 ```
 
-Clients that support the `SKILL.md` directory layout can copy or symlink `skills/cdt-release/` into their skill directory. Repository-level agents should start from `AGENTS.md` and follow the linked release safety rule.
+Clients that support the `SKILL.md` directory layout can copy or symlink `skills/cdt-release/` into their skill directory. A copy is a snapshot: later changes to the repository's skill do not automatically update previously copied client versions, so re-copy or refresh the symlink after skill updates. Repository-level agents should start from `AGENTS.md` and follow the linked release safety rule.
 
 After installation, requests such as “отправь тестовую сборку через cdt” should load `cdt-release` when the client supports skill discovery.
 

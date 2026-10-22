@@ -1,0 +1,204 @@
+<!-- ralphex-base: b3976da67421148565dcad3aad13992ba1e39b09 -->
+
+# Очистка истории запусков и экспериментальное управление сроком хранения
+
+<!-- plan-slug: run-history-retention -->
+
+## Goal
+
+Добавить ручную очистку записей запусков CDT по возрасту и количеству, а также выключенную по умолчанию экспериментальную автоочистку.
+
+Удалять старые завершённые записи независимо от результата запуска. Сохранять работающие запуски и не выходить за пределы `.cdt/runs/`. Сделать функции доступными людям и агентам через CLI, JSON и инструкции.
+
+## Context
+
+- `cdt/runs.py` создаёт `.cdt/runs/<run-id>/`, читает историю и обслуживает указатели `latest-*`. Общей очистки записей сейчас нет.
+- Каталог запуска содержит не только логи, но и manifest, status, exit code, диагностические файлы и иногда данные восстановления. Его удаление лишает возможности использовать этот status для resume.
+- `cdt history`, `cdt status` и `cdt logs` реализованы в `cdt/cli.py`. Сейчас `history` — обычная команда, а не группа.
+- Запуски имеют три режима: обычный через `cdt/pipeline/runner.py`, foreground capture через `cdt/cli.py` и detached через `cdt/agent_release_worker.py`.
+- Наличие `exit-code` само по себе не доказывает, что процесс уже закрыл лог: отдельные владельцы исполнения ещё могут завершать запись.
+- `cdt/user_settings.py` хранит глобальные пользовательские настройки в `$XDG_CONFIG_HOME/cdt/settings.json` или `~/.config/cdt/settings.json`. Существующий experimental-флаг — `experimental.orca-status`.
+- `filelock` уже входит в зависимости проекта. Тесты используют pytest, CLI проверяется через Typer.
+- Агентский протокол описан в `skills/cdt-release/SKILL.md` и `docs/ai-agents.md`; тесты инструкций находятся в `tests/test_skills.py`.
+
+## Scope
+
+- `cdt history prune` с фильтрами возраста, количества и pipeline.
+- Предпросмотр, явное подтверждение удаления и JSON-результат.
+- Очистка всего каталога выбранного запуска независимо от его результата.
+- Обновление разрешения последнего запуска после удаления.
+- Глобальный флаг `experimental.run-retention`.
+- Автоочистка только текущего проекта после реального запуска: старше 30 дней, сохранить последние 10 записей на каждый pipeline.
+- Документация и правила использования агентами.
+
+## Out of Scope
+
+- Изменение диагностики и формата `cdt status`, отдельная команда `diagnose`.
+- Фоновый демон, расписание и сканирование других проектов.
+- Настройки retention в `cdt.yaml`, настраиваемая политика автоочистки.
+- Удаление внешних build-артефактов и checkpoint-файлов вне `.cdt/runs/`.
+- Корзина и восстановление удалённых записей.
+- Автоматическое включение experimental-флага агентом.
+
+## Implementation Steps
+
+### Task 1: Реализовать выбор записей для очистки
+
+**Files:**
+- Create: `cdt/retention.py`
+- Create: `tests/test_retention.py`
+- Modify: `cdt/runs.py`
+
+- [x] Добавить чтение всех записей для retention без ограничения истории в 20 или 500 элементов; сохранить текущий контракт `list_runs`.
+- [x] Реализовать детерминированное построение плана очистки без изменения файлов: кандидаты, сохранённые и пропущенные записи с причинами, размер кандидатов в байтах.
+- [x] Для `--older-than Nd` принимать положительное целое число дней. Возраст считать по `manifest.started_at` в UTC; при отсутствии корректной даты пропускать запись с понятной причиной.
+- [x] Для `--keep-last N` принимать целое число от нуля; сохранять N последних записей отдельно для каждого pipeline, используя сортировку по времени начала и run ID.
+- [x] При одновременных фильтрах применять пересечение: удалять только достаточно старые записи, не входящие в последние N.
+- [x] Не ограничивать кандидатов успешными запусками: разрешить завершённые `success`, `failed`, `cancelled`, `blocked`, а также `stale`, если отсутствие процесса установлено.
+- [x] Не считать один terminal-status или exit-code достаточным основанием удаления при живом процессе. При запрете проверки процесса, повреждённых данных или неоднозначном состоянии пропускать запись.
+- [x] Исключать `queued` и реально работающие записи. Не следовать символьным ссылкам на каталоги запусков; при подсчёте размера не обходить внешние цели ссылок.
+- [x] Покрыть тестами отдельные и совместные фильтры, несколько pipeline, границу возраста, одинаковые даты, `keep-last=0`, различные результаты, повреждённые записи и ссылки.
+
+### Task 2: Добавить безопасное удаление с учётом жизненного цикла запусков
+
+**Files:**
+- Modify: `cdt/retention.py`
+- Modify: `cdt/runs.py`
+- Modify: `cdt/pipeline/runner.py`
+- Modify: `cdt/agent_release_worker.py`
+- Modify: `cdt/cli.py`
+- Modify: `tests/test_retention.py`
+- Modify: `tests/test_run_record_regressions.py`
+- Modify: `tests/test_foreground_run.py`
+- Modify: `tests/test_agent_release.py`
+
+- [x] Использовать существующий `filelock` для одной проектной блокировки операций создания/повторного использования записи и удаления. Хранить lock-файл вне удаляемых каталогов запусков.
+- [x] Добавить блокировку жизненного цикла отдельного запуска: владелец удерживает её до финализации status/exit-code и закрытия лога. Не заставлять дочерние процессы повторно захватывать блокировку владельца.
+- [x] Подключить владение блокировкой к обычному запуску, foreground supervisor и detached worker; предусмотреть освобождение при ошибках и прерываниях.
+- [x] При очистке неблокирующе проверять блокировку запуска, повторно читать состояние и проверять процесс непосредственно перед удалением. Для старых записей без нового протокола использовать консервативную проверку PID и состояния.
+- [x] Защитить повторное использование существующего run ID от гонки с удалением; исключить удаление между разрешением записи и началом владения ею.
+- [x] Удалять только выбранный непосредственный каталог внутри настоящего `.cdt/runs/`; не обходить символьные ссылки на внешние каталоги. При ссылке вместо самого `.cdt/runs` отказаться от очистки.
+- [x] После удаления обновлять затронутые `latest-*` либо удалять устаревший указатель, если записей больше нет. Учитывать существующую возможность совпадения slug у разных pipeline.
+- [x] Не удалять внешние артефакты по путям из status. Явно возвращать удалённые, пропущенные и не полностью удалённые записи; продолжать обработку остальных кандидатов при файловой ошибке.
+- [x] Проверить конкурентную очистку, активных владельцев всех трёх режимов, живой процесс с уже записанным exit-code, отказ в проверке PID, частичную ошибку удаления и корректную работу `resolve_run` после очистки.
+
+### Task 3: Открыть ручную очистку через CLI
+
+**Files:**
+- Modify: `cdt/cli.py`
+- Modify: `tests/test_cli.py`
+- Modify: `tests/test_retention.py`
+- Modify: `tests/test_agent_first.py`
+
+- [x] Преобразовать `history` в Typer-группу с callback, сохранив поведение существующих `cdt history`, `--limit`, `--pipeline`, `--status` и `--json`.
+- [x] Добавить `cdt history prune --older-than Nd --keep-last N --pipeline NAME --dry-run --confirm --json`.
+- [x] Требовать хотя бы один фильтр `--older-than` или `--keep-last`. При отсутствии обоих не выполнять удаление.
+- [x] Без `--confirm` выполнять только предпросмотр. `--dry-run` явно включает предпросмотр; сочетание `--dry-run --confirm` отклонять как неоднозначное.
+- [x] При `--confirm` заново строить и проверять план; не обещать идентичность с ранее показанным dry-run, поскольку история могла измениться.
+- [x] В текстовом предпросмотре показывать run ID, pipeline, статус, возраст, размер, причины пропуска и итоговый объём кандидатов. Предупреждать, что удаляется вся запись, включая данные resume.
+- [x] Возвращать JSON с `schema_version`, режимом, фильтрами, кандидатами, удалёнными и пропущенными записями, ошибками и итоговыми размерами. Не смешивать JSON с текстовыми сообщениями.
+- [x] Определить коды выхода: 0 для успешного предпросмотра/очистки, включая отсутствие кандидатов; 1 при ошибках чтения/удаления, препятствующих операции; 2 для некорректных аргументов. Ожидаемый пропуск активной записи не считать ошибкой.
+- [x] Проверить CLI-совместимость истории, обе независимые политики, совместные фильтры, JSON, подтверждение, ошибки и отсутствие изменений при предпросмотре.
+
+### Task 4: Подключить экспериментальную автоочистку
+
+**Files:**
+- Modify: `cdt/user_settings.py`
+- Modify: `cdt/retention.py`
+- Modify: `cdt/cli.py`
+- Modify: `cdt/pipeline/runner.py`
+- Modify: `cdt/agent_release_worker.py`
+- Modify: `tests/test_retention.py`
+- Modify: `tests/test_orca_status.py`
+- Modify: `tests/test_foreground_run.py`
+- Modify: `tests/test_agent_release.py`
+- Create: `tests/test_user_settings.py`
+
+- [x] Добавить глобальный `experimental.run-retention` в существующие `settings enable`, `settings disable` и `settings show`.
+- [x] Сохранить существующий формат и поведение `experimental.orca-status`, неизвестные поля settings и атомарную запись. Отсутствующие или некорректные настройки не должны включать автоочистку.
+- [x] Зафиксировать политику автоочистки: `older-than=30d`, `keep-last=10` на pipeline, оба условия одновременно.
+- [x] При включении показывать область действия и политику: настройка глобальна, но каждый запуск чистит только свой текущий проект.
+- [x] Запускать retention один раз у владельца исполнения после финализации и закрытия логов, при успешном и неудачном исходе. Исключать только что завершившийся run ID из текущей очистки.
+- [x] Не вызывать retention в дочернем исполнителе detached/capture, на dry-run, preflight, просмотре истории или при ошибке до создания записи запуска.
+- [x] Не менять status, exit code и исходное исключение pipeline из-за ошибки retention. Предупреждения направлять в stderr, не нарушая машинный JSON-протокол.
+- [x] Проверить выключенное состояние по умолчанию, enable/disable/show, сохранение соседних настроек, изоляцию проектов, однократный вызов во всех режимах и независимость результата pipeline от очистки.
+
+### Task 5: Описать контракт для пользователей и агентов
+
+**Files:**
+- Modify: `README.md`
+- Modify: `docs/runs.md`
+- Modify: `docs/ai-agents.md`
+- Modify: `docs/skills.md`
+- Modify: `skills/cdt-release/SKILL.md`
+- Modify: `tests/test_skills.py`
+- Modify: `CHANGELOG.md`
+
+- [x] Заменить утверждения об отсутствии очистки на описание ручного prune и явно включаемой автоочистки.
+- [x] Добавить примеры возраста, количества, совместной политики, `--pipeline`, предпросмотра, подтверждения и JSON.
+- [x] Объяснить, что retention удаляет весь каталог записи любого завершённого результата, но не внешние артефакты и не другие области `.cdt`.
+- [x] Документировать потерю логов и источника resume, границу возраста по времени начала, сохранение последних N отдельно по pipeline и причины пропуска активных/неоднозначных записей.
+- [x] Описать экспериментальный глобальный переключатель, фиксированную политику 30 дней + 10 записей, работу только после запусков текущего проекта и отключение функции.
+- [x] Обновить агентский skill: агент может делать dry-run, но ручное удаление и включение experimental требуют явного разрешения пользователя. Уже включённая пользователем автоочистка не требует нового согласия после каждого запуска.
+- [x] Предписать агенту использовать `--json`, кратко сообщать объём и количество удаляемых записей, не подменять prune командами `rm`, не включать retention самовольно.
+- [x] Уточнить, что изменения skill в репозитории не обновляют автоматически ранее скопированные пользовательские версии; сохранить существующую инструкцию copy/symlink.
+- [x] Добавить проверки агентских инструкций и запись в changelog без изменения версии пакета.
+
+## Validation
+
+Фокусированные проверки по мере выполнения задач:
+
+```bash
+pytest tests/test_retention.py tests/test_run_record_regressions.py
+pytest tests/test_cli.py tests/test_agent_first.py
+pytest tests/test_agent_release.py tests/test_foreground_run.py
+pytest tests/test_user_settings.py tests/test_orca_status.py tests/test_skills.py
+ruff check .
+```
+
+Итоговая проверка:
+
+```bash
+pytest
+ruff check .
+```
+
+Тесты очистки используют временные каталоги и изолированные пользовательские настройки. Не удалять реальные записи проекта и не запускать релизные pipeline для проверки этой функции.
+
+## Execution Notes
+
+### Task 5
+
+- Document validation: the described contract was cross-checked against `cdt/cli.py` (`history prune` flags, preview/confirm/dry-run semantics, exit codes 0/1/2, JSON payload keys), `cdt/retention.py` (removable statuses, `manifest.started_at` UTC age, per-pipeline keep-last ordering, skip reasons, fixed 30d/10 auto policy, `latest-*` refresh, symlink refusal), and `cdt/user_settings.py` (`experimental.run-retention` global flag).
+- `.venv/bin/python -m pytest tests/test_skills.py`: 5 passed (2 initial failures were phrase mismatches inside this task's own new tests; fixed and rerun green).
+- `.venv/bin/ruff check .`: all checks passed.
+- Updated `README.md` (prune commands, experimental run-retention paragraph), `docs/runs.md` (rewritten Retention section: manual prune, scope, age/keep-last semantics, resume loss, skip reasons, experimental auto-retention), `docs/ai-agents.md` (agent retention contract), `docs/skills.md` (copied skill snapshots are not auto-updated), `skills/cdt-release/SKILL.md` (Run history retention rules), `tests/test_skills.py` (retention contract checks), `CHANGELOG.md` (Unreleased entries, package version unchanged).
+
+### Task 4
+
+- `pytest tests/test_retention.py tests/test_run_record_regressions.py`: 74 passed.
+- `pytest tests/test_cli.py tests/test_agent_first.py`: 98 passed.
+- `pytest tests/test_agent_release.py tests/test_foreground_run.py`: 41 passed.
+- `pytest tests/test_user_settings.py tests/test_orca_status.py tests/test_skills.py`: 26 passed.
+- `pytest` (final): 1400 passed; `ruff check .`: all checks passed.
+- Wiring: direct runs prune in `run_configured_pipeline`'s finally (guarded by `not detached and not capture_child`), the capture supervisor prunes after finalizing its record, and the detached worker prunes only when it actually took over the lifecycle lock. All three call the never-raising `auto_prune_after_run`, which excludes the just-finished run id and reports failures on stderr only.
+
+### Task 3
+
+- `pytest tests/test_cli.py tests/test_agent_first.py`: 87 passed, 11 failed — the same 11 capture/detached subprocess tests fail identically on the clean base commit (`202d436`, 11 failed / 79 passed there) with `.venv/bin/python: No module named cdt`, i.e. a pre-existing unpackaged-venv environment issue, not a regression of this task. All new Task 3 tests pass.
+- `pytest tests/test_retention.py tests/test_run_record_regressions.py`: 63 passed.
+- `pytest tests/test_agent_release.py tests/test_foreground_run.py`: 35 passed, 4 failed — the same 4 foreground capture tests fail identically on the clean base commit with the same environment cause; `test_agent_release.py` passes fully.
+- `ruff check .`: all checks passed.
+
+## Acceptance Criteria
+
+- Существующие команды истории продолжают работать без изменения формата JSON.
+- Можно очищать записи по возрасту, по количеству или по пересечению этих условий.
+- Последние N сохраняются отдельно для каждого pipeline; статус завершившегося запуска не даёт исключений из retention.
+- Без явного `--confirm` ручная команда ничего не удаляет.
+- Активный запуск не удаляется, в том числе после появления exit-code, пока владелец ещё завершает запись.
+- Очистка не выходит за пределы каталогов выбранных запусков и не удаляет внешние артефакты.
+- После удаления `cdt status`, `cdt logs` и выбор последнего запуска корректно работают с оставшимися записями.
+- Experimental-флаг выключен по умолчанию; после включения применяется политика 30 дней + последние 10 на pipeline только в текущем проекте.
+- Автоочистка выполняется один раз после завершения владельца записи и не меняет результат pipeline при собственной ошибке.
+- Агентские инструкции и JSON-интерфейс позволяют выполнять предпросмотр и согласованную очистку без чтения полных логов.

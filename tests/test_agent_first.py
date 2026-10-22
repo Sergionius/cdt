@@ -1089,6 +1089,36 @@ def test_run_ids_are_unique_and_history_is_machine_readable(tmp_path, monkeypatc
     assert statuses == {first.run_id: "success", second.run_id: "failed"}
 
 
+def test_history_json_contract_is_stable_and_prune_is_available(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    first = create_run(tmp_path, "test", run_id="first-run")
+    write_exit_code(first.exit, 0)
+
+    result = runner.invoke(app, ["history", "--json"])
+    payload = json.loads(result.stdout)
+
+    assert result.exit_code == 0
+    assert set(payload) == {"schema_version", "filters", "runs"}
+    assert payload["schema_version"] == 1
+    assert set(payload["filters"]) == {"pipeline", "status", "limit"}
+    assert set(payload["runs"][0]) == {
+        "schema_version",
+        "run_id",
+        "pipeline",
+        "status",
+        "started_at",
+        "finished_at",
+        "log",
+    }
+
+    plain = runner.invoke(app, ["history"])
+    assert plain.exit_code == 0
+    assert "first-run" in plain.stdout
+
+    prune_help = runner.invoke(app, ["history", "prune", "--help"])
+    assert prune_help.exit_code == 0
+
+
 def test_status_resolves_latest_global_and_pipeline_runs(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     first = create_run(tmp_path, "test", run_id="first-run")

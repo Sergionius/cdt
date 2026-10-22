@@ -40,6 +40,21 @@ def test_settings_keep_other_keys(tmp_path, monkeypatch):
     assert json.loads(path.read_text()) == {"other": 1, "experimental": {"another": True, "orca_status": True}}
 
 
+def test_settings_show_lists_both_experimental_flags(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    shown = runner.invoke(app, ["settings", "show"])
+    assert "experimental.orca-status: disabled" in shown.output
+    assert "experimental.run-retention: disabled" in shown.output
+    assert "global" not in shown.output
+
+    runner.invoke(app, ["settings", "enable", "experimental.run-retention"])
+    shown = runner.invoke(app, ["settings", "show"])
+    assert "experimental.orca-status: disabled" in shown.output
+    assert "experimental.run-retention: enabled" in shown.output
+    assert "global" in shown.output
+    assert "current project" in shown.output
+
+
 def test_osc_only_in_orca_manual_tty(monkeypatch):
     writes = []
 

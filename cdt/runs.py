@@ -12,11 +12,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO, Any
 
+import filelock
+
 from . import __version__
 from .redaction import SecretRedactor, StreamingRedactor
 
 RUN_SCHEMA_VERSION = 1
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+# Serializes record creation/reuse with deletion. The lock file lives next to
+# the runs directory, never inside a run directory that pruning may remove.
+PROJECT_LOCK_TIMEOUT = 10.0
+# How long the detached worker waits for the parent process to release the
+# lifecycle lock before taking the record over.
+RUN_LOCK_HANDOVER_TIMEOUT = 5.0
 
 
 @dataclass(frozen=True)
@@ -28,10 +37,54 @@ class RunPaths:
     log: Path
     exit: Path
     pid: Path
+    # Per-run lifecycle lock; held by the execution owner until the status,
+    # exit code and log are final. Lives inside the run directory so pruning
+    # removes it together with the record.
+    lock: Path
 
 
 def runs_dir(cwd: Path) -> Path:
     return cwd / ".cdt" / "runs"
+
+
+def project_lock_path(cwd: Path) -> Path:
+    """Project-wide lock file; kept outside every deletable run directory."""
+    return cwd / ".cdt" / "runs.lock"
+
+
+def project_lock(cwd: Path, *, timeout: float = PROJECT_LOCK_TIMEOUT) -> filelock.FileLock:
+    """Lock guarding record creation, reuse and retention deletion."""
+    path = project_lock_path(cwd)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return filelock.FileLock(path, timeout=timeout, thread_local=False)
+
+
+def acquire_run_lock(paths: RunPaths, *, timeout: float = 0.0) -> filelock.FileLock | None:
+    """Take the per-run lifecycle lock; ``None`` means an owner still holds it.
+
+    Every acquisition must happen under :func:`project_lock` so a retention
+    pass can never delete the record between the liveness check and the moment
+    a new owner takes over. The default ``timeout=0`` never waits for an
+    active owner.
+    """
+    if not paths.root.is_dir():
+        return None
+    lock = filelock.FileLock(paths.lock, timeout=timeout, thread_local=False)
+    try:
+        lock.acquire()
+    except filelock.Timeout:
+        return None
+    return lock
+
+
+def release_run_lock(lock: filelock.FileLock | None) -> None:
+    """Release a lifecycle lock; a no-op for ``None`` or already-free locks."""
+    if lock is None:
+        return
+    try:
+        lock.release()
+    except Exception:  # noqa: BLE001 - releasing must never break the owner
+        pass
 
 
 def create_run(
@@ -46,6 +99,33 @@ def create_run(
     env: dict[str, str] | None = None,
     capture_output: bool = False,
 ) -> RunPaths:
+    with project_lock(cwd):
+        return _create_run_locked(
+            cwd,
+            pipeline,
+            ids=ids,
+            run_id=run_id,
+            command=command,
+            detached=detached,
+            inputs=inputs,
+            env=env,
+            capture_output=capture_output,
+        )
+
+
+def _create_run_locked(
+    cwd: Path,
+    pipeline: str,
+    *,
+    ids: list[str] | None = None,
+    run_id: str | None = None,
+    command: list[str] | None = None,
+    detached: bool = False,
+    inputs: dict[str, str] | None = None,
+    env: dict[str, str] | None = None,
+    capture_output: bool = False,
+) -> RunPaths:
+    """Create a run record; the caller must hold the project lock."""
     run_id = run_id or generate_run_id(pipeline)
     paths = run_paths(cwd, run_id)
     paths.root.mkdir(parents=True, exist_ok=False)
@@ -110,21 +190,28 @@ def ensure_run(
     env: dict[str, str] | None = None,
     capture_output: bool = False,
 ) -> RunPaths:
-    if run_id is not None:
-        paths = run_paths(cwd, run_id)
-        if paths.root.exists():
-            return paths
-    return create_run(
-        cwd,
-        pipeline,
-        ids=ids,
-        run_id=run_id,
-        command=command,
-        detached=detached,
-        inputs=inputs,
-        env=env,
-        capture_output=capture_output,
-    )
+    """Reuse the record for ``run_id`` or create a new one, under the project lock.
+
+    Resolving reuse and creating the record inside one lock hold means a
+    concurrent retention pass can never delete the record between the
+    existence check and the caller taking ownership of it.
+    """
+    with project_lock(cwd):
+        if run_id is not None:
+            paths = run_paths(cwd, run_id)
+            if paths.root.exists():
+                return paths
+        return _create_run_locked(
+            cwd,
+            pipeline,
+            ids=ids,
+            run_id=run_id,
+            command=command,
+            detached=detached,
+            inputs=inputs,
+            env=env,
+            capture_output=capture_output,
+        )
 
 
 def generate_run_id(pipeline: str) -> str:
@@ -145,6 +232,7 @@ def run_paths(cwd: Path, run_id: str) -> RunPaths:
         log=root / "output.log",
         exit=root / "exit-code",
         pid=root / "pid",
+        lock=root / ".lock",
     )
 
 
@@ -181,6 +269,35 @@ def list_runs(
     pipeline: str | None = None,
     status: str | None = None,
 ) -> list[dict[str, Any]]:
+    """Return at most ``limit`` recent runs; the user-facing history contract."""
+    items = _collect_run_items(cwd, pipeline=pipeline, status=status)
+    items.sort(key=lambda item: (str(item["started_at"] or ""), item["run_id"]), reverse=True)
+    return items[: max(0, limit)]
+
+
+def list_all_runs(
+    cwd: Path,
+    *,
+    pipeline: str | None = None,
+    status: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return every recorded run without the history size limits.
+
+    Maintenance code such as retention needs the full history, not the
+    bounded views used by ``cdt history``. Item shape matches
+    :func:`list_runs` so callers can treat both lists uniformly.
+    """
+    items = _collect_run_items(cwd, pipeline=pipeline, status=status)
+    items.sort(key=lambda item: (str(item["started_at"] or ""), item["run_id"]), reverse=True)
+    return items
+
+
+def _collect_run_items(
+    cwd: Path,
+    *,
+    pipeline: str | None,
+    status: str | None,
+) -> list[dict[str, Any]]:
     base = runs_dir(cwd)
     if not base.is_dir():
         return []
@@ -207,8 +324,7 @@ def list_runs(
         if status is not None and item["status"] != status:
             continue
         result.append(item)
-    result.sort(key=lambda item: (str(item["started_at"] or ""), item["run_id"]), reverse=True)
-    return result[: max(0, limit)]
+    return result
 
 
 def latest_marker(cwd: Path, pipeline: str) -> Path:

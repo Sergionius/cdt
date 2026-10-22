@@ -92,6 +92,16 @@ Redaction cannot classify every diagnostic, and run records may still expose pro
 - `agent-release status --wait`: `0` when a compact terminal or timeout payload is returned; inspect `status` and `wait_status` rather than inferring pipeline success from the command exit code.
 - planning, validation, and preflight commands: `0` for a valid/ready result and `1` when their JSON payload contains errors.
 
+## Run history retention
+
+Run records stay until they are deleted. `cdt history prune` removes finished runs by age, by count, or by the intersection of both filters; it never deletes active or ambiguous records, never touches anything outside `.cdt/runs/`, and never touches other `.cdt/` areas such as store checkpoints. Preview the effect first:
+
+```bash
+cdt history prune --older-than 30d --keep-last 10 --dry-run --json
+```
+
+The JSON payload includes `schema_version`, `mode` (`preview`/`delete`), `filters`, `candidates` with per-record sizes, `skipped` records with reasons, `errors`, and the total/freed sizes. Agents may run previews freely and must use `--json` plus a brief count-and-volume report when discussing deletion, but deleting with `--confirm` and enabling the experimental `experimental.run-retention` flag require explicit user approval; agents must never substitute `rm` or other shell commands for the prune command. If the user has already enabled `experimental.run-retention`, its fixed post-run policy applies without a new approval after each run. See `skills/cdt-release/SKILL.md` for the full agent contract.
+
 ## Production confirmation
 
 Production must be declared explicitly:

@@ -68,6 +68,8 @@ cdt run <pipeline> --dry-run
 cdt run <pipeline> --capture-output   # POSIX: show and save the redacted combined output
 cdt history
 cdt history --pipeline test --status failed
+cdt history prune --older-than 30d --keep-last 10    # preview by default
+cdt history prune --older-than 30d --keep-last 10 --confirm
 cdt status                         # newest run globally
 cdt status <run-id>
 cdt status --pipeline test
@@ -97,6 +99,8 @@ cdt settings disable experimental.orca-status  # turn it off again
 ```
 
 When enabled, a direct `cdt run <pipeline>` in an ordinary Orca terminal reports `working` and `done` through Orca's **undocumented OSC 9999 terminal protocol**. The integration is best-effort and may break with Orca updates. It does not run on dry-runs, in detached workers, inside Pi, or with redirected output; it never changes pipeline success/failure. Settings live in `~/.config/cdt/settings.json` (or `$XDG_CONFIG_HOME/cdt/settings.json`), not in `cdt.yaml`. These escape sequences bypass CDT's saved run logs.
+
+Experimental run retention (off by default): `cdt settings enable experimental.run-retention` makes every real run prune only the current project's `.cdt/runs/` afterwards with the fixed policy "finished runs older than 30 days and outside the 10 newest records of each pipeline"; `cdt settings disable experimental.run-retention` turns it off again. Deletion always removes whole run records — including logs and resume data — and never touches other `.cdt/` areas; see [Retention](docs/runs.md#retention).
 
 Resume status migration note: current CDT status files store stable step ids (`0`, `1`, `1/0`, `1/0/1`) instead of step names. Older name-based status files are rejected because duplicate names such as anonymous `parallel` groups are ambiguous. Recreate the status file by rerunning without `--skip-completed`, or use `cdt pipeline inspect <pipeline>` / `cdt pipeline plan <pipeline>` to map completed work to step ids manually.
 

@@ -3,6 +3,7 @@ import re
 import signal
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -11,7 +12,7 @@ from cdt import __version__
 from cdt import self_update as self_update_module
 from cdt.cli import app
 from cdt.pipeline.registry import _clear_steps_for_tests
-from cdt.runs import create_run, list_runs, read_json, run_paths, write_json_atomic
+from cdt.runs import RunPaths, create_run, list_runs, read_json, run_paths, write_exit_code, write_json_atomic
 from tests._helpers import FakeResponse
 
 runner = CliRunner()
@@ -676,3 +677,200 @@ def test_capture_output_restores_terminal_signal_handlers(tmp_path, monkeypatch)
 
     assert result.exit_code == 0, result.output
     assert before == after
+
+
+def _make_finished_run(
+    root: Path,
+    pipeline: str,
+    *,
+    age_days: float | None = None,
+    status: str = "success",
+    exit_code: int | None = 0,
+) -> RunPaths:
+    """Create a finished-looking run record with a controlled start time."""
+    paths = create_run(root, pipeline)
+    if age_days is not None:
+        started = datetime.now(timezone.utc) - timedelta(days=age_days)
+        manifest = read_json(paths.manifest)
+        manifest["started_at"] = started.isoformat()
+        write_json_atomic(paths.manifest, manifest)
+        payload = read_json(paths.status)
+        payload["status"] = status
+        payload["started_at"] = started.isoformat()
+        payload["finished_at"] = started.isoformat()
+        write_json_atomic(paths.status, payload)
+    if exit_code is not None:
+        write_exit_code(paths.exit, exit_code)
+    return paths
+
+
+def test_history_group_keeps_existing_list_behavior(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    old = _make_finished_run(tmp_path, "test", age_days=5, status="failed", exit_code=1)
+    fresh = _make_finished_run(tmp_path, "test", age_days=1)
+    other = _make_finished_run(tmp_path, "other", age_days=2)
+
+    listed = runner.invoke(app, ["history"])
+    assert listed.exit_code == 0
+    assert old.run_id in listed.stdout
+    assert other.run_id in listed.stdout
+
+    json_runs = runner.invoke(app, ["history", "--json"])
+    payload = json.loads(json_runs.stdout)
+    assert json_runs.exit_code == 0
+    assert payload["schema_version"] == 1
+    assert payload["filters"] == {"pipeline": None, "status": None, "limit": 20}
+    assert {item["run_id"] for item in payload["runs"]} == {old.run_id, fresh.run_id, other.run_id}
+
+    filtered = runner.invoke(
+        app,
+        ["history", "--pipeline", "test", "--status", "failed", "--limit", "1", "--json"],
+    )
+    filtered_payload = json.loads(filtered.stdout)
+    assert filtered.exit_code == 0
+    assert [item["run_id"] for item in filtered_payload["runs"]] == [old.run_id]
+
+    prune_help = runner.invoke(app, ["history", "prune", "--help"])
+    assert prune_help.exit_code == 0
+    visible = _visible_text(prune_help.output)
+    for option in ("--older-than", "--keep-last", "--pipeline", "--dry-run", "--confirm", "--json"):
+        assert option in visible
+
+
+def test_prune_rejects_invalid_arguments_without_deleting(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    paths = _make_finished_run(tmp_path, "test", age_days=60)
+
+    cases = [
+        ["history", "prune"],
+        ["history", "prune", "--dry-run", "--confirm"],
+        ["history", "prune", "--older-than", "abc"],
+        ["history", "prune", "--older-than", "0d"],
+        ["history", "prune", "--keep-last", "-1"],
+    ]
+    for arguments in cases:
+        result = runner.invoke(app, arguments)
+        assert result.exit_code == 2, arguments
+        assert paths.root.exists(), arguments
+
+
+def test_prune_preview_changes_nothing_and_confirm_deletes(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    old = _make_finished_run(tmp_path, "test", age_days=60)
+    fresh = _make_finished_run(tmp_path, "test", age_days=1)
+
+    preview = runner.invoke(app, ["history", "prune", "--older-than", "30d"])
+    assert preview.exit_code == 0
+    assert old.run_id in preview.stdout
+    assert fresh.run_id not in preview.stdout
+    assert "nothing was deleted" in preview.stdout
+    assert "resume" in preview.stdout
+    assert old.root.exists()
+    assert fresh.root.exists()
+
+    dry_run = runner.invoke(app, ["history", "prune", "--older-than", "30d", "--dry-run", "--json"])
+    dry_payload = json.loads(dry_run.stdout)
+    assert dry_run.exit_code == 0
+    assert dry_payload["mode"] == "preview"
+    assert [record["run_id"] for record in dry_payload["candidates"]] == [old.run_id]
+    assert dry_payload["deleted"] == []
+    assert dry_payload["freed_bytes"] == 0
+    assert dry_run.stderr == ""
+    assert old.root.exists()
+
+    confirmed = runner.invoke(app, ["history", "prune", "--older-than", "30d", "--confirm", "--json"])
+    confirmed_payload = json.loads(confirmed.stdout)
+    assert confirmed.exit_code == 0
+    assert confirmed_payload["mode"] == "delete"
+    assert [record["run_id"] for record in confirmed_payload["deleted"]] == [old.run_id]
+    assert confirmed_payload["freed_bytes"] > 0
+    assert confirmed_payload["total_size_bytes"] > 0
+    assert not old.root.exists()
+    assert fresh.root.exists()
+
+
+def test_prune_age_and_keep_last_are_independent_policies(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    old = _make_finished_run(tmp_path, "test", age_days=60)
+    fresh = _make_finished_run(tmp_path, "test", age_days=1)
+    other_old = _make_finished_run(tmp_path, "other", age_days=60)
+    other_fresh = _make_finished_run(tmp_path, "other", age_days=2)
+
+    by_age = runner.invoke(app, ["history", "prune", "--older-than", "30d", "--json"])
+    by_age_payload = json.loads(by_age.stdout)
+    assert by_age.exit_code == 0
+    assert {record["run_id"] for record in by_age_payload["candidates"]} == {old.run_id, other_old.run_id}
+
+    by_count = runner.invoke(app, ["history", "prune", "--keep-last", "1", "--confirm", "--json"])
+    by_count_payload = json.loads(by_count.stdout)
+    assert by_count.exit_code == 0
+    assert {record["run_id"] for record in by_count_payload["deleted"]} == {old.run_id, other_old.run_id}
+    assert fresh.root.exists()
+    assert other_fresh.root.exists()
+
+    combined = runner.invoke(
+        app,
+        ["history", "prune", "--older-than", "30d", "--keep-last", "1", "--pipeline", "test", "--json"],
+    )
+    combined_payload = json.loads(combined.stdout)
+    assert combined.exit_code == 0
+    assert combined_payload["filters"] == {"older_than_days": 30, "keep_last": 1, "pipeline": "test"}
+    assert combined_payload["candidates"] == []
+    assert fresh.root.exists()
+
+
+def test_prune_json_and_text_report_skips_without_error_exit(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    active = create_run(tmp_path, "test")
+    finished = _make_finished_run(tmp_path, "test", age_days=60)
+
+    result = runner.invoke(app, ["history", "prune", "--older-than", "30d", "--json"])
+    payload = json.loads(result.stdout)
+    assert result.exit_code == 0
+    assert [record["run_id"] for record in payload["candidates"]] == [finished.run_id]
+    assert {skip["run_id"] for skip in payload["skipped"]} == {active.run_id}
+    assert all(skip["reason"] for skip in payload["skipped"])
+    assert payload["errors"] == []
+    assert active.root.exists()
+
+    text = runner.invoke(app, ["history", "prune", "--older-than", "30d"])
+    assert text.exit_code == 0
+    assert active.run_id in text.stdout
+    assert "Skipped records (1)" in text.stdout
+
+
+def test_prune_reports_operation_errors_with_exit_code_1(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    runs_dir = tmp_path / ".cdt" / "runs"
+    runs_dir.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    runs_dir.rmdir()
+    runs_dir.symlink_to(outside, target_is_directory=True)
+
+    json_result = runner.invoke(app, ["history", "prune", "--keep-last", "1", "--json"])
+    payload = json.loads(json_result.stdout)
+    assert json_result.exit_code == 1
+    assert payload["mode"] == "preview"
+    assert len(payload["errors"]) == 1
+    assert "symbolic link" in payload["errors"][0]["error"]
+
+    text_result = runner.invoke(app, ["history", "prune", "--keep-last", "1"])
+    assert text_result.exit_code == 1
+    assert "Error:" in text_result.stderr
+
+
+def test_prune_text_preview_lists_record_details_and_totals(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    old = _make_finished_run(tmp_path, "test", age_days=60, status="failed", exit_code=1)
+    (old.root / "log").write_text("x" * 2048, encoding="utf-8")
+
+    result = runner.invoke(app, ["history", "prune", "--older-than", "30d"])
+    assert result.exit_code == 0
+    assert old.run_id in result.stdout
+    assert "test" in result.stdout
+    assert "failed" in result.stdout
+    assert "60.0d" in result.stdout
+    assert "KiB" in result.stdout
+    assert "would be deleted" in result.stdout
+    assert "including logs and data needed to resume" in result.stdout
