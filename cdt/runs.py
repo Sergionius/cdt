@@ -181,6 +181,35 @@ def list_runs(
     pipeline: str | None = None,
     status: str | None = None,
 ) -> list[dict[str, Any]]:
+    """Return at most ``limit`` recent runs; the user-facing history contract."""
+    items = _collect_run_items(cwd, pipeline=pipeline, status=status)
+    items.sort(key=lambda item: (str(item["started_at"] or ""), item["run_id"]), reverse=True)
+    return items[: max(0, limit)]
+
+
+def list_all_runs(
+    cwd: Path,
+    *,
+    pipeline: str | None = None,
+    status: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return every recorded run without the history size limits.
+
+    Maintenance code such as retention needs the full history, not the
+    bounded views used by ``cdt history``. Item shape matches
+    :func:`list_runs` so callers can treat both lists uniformly.
+    """
+    items = _collect_run_items(cwd, pipeline=pipeline, status=status)
+    items.sort(key=lambda item: (str(item["started_at"] or ""), item["run_id"]), reverse=True)
+    return items
+
+
+def _collect_run_items(
+    cwd: Path,
+    *,
+    pipeline: str | None,
+    status: str | None,
+) -> list[dict[str, Any]]:
     base = runs_dir(cwd)
     if not base.is_dir():
         return []
@@ -207,8 +236,7 @@ def list_runs(
         if status is not None and item["status"] != status:
             continue
         result.append(item)
-    result.sort(key=lambda item: (str(item["started_at"] or ""), item["run_id"]), reverse=True)
-    return result[: max(0, limit)]
+    return result
 
 
 def latest_marker(cwd: Path, pipeline: str) -> Path:
