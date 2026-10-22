@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import os
 import shutil
-from dataclasses import dataclass
+import sys
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,7 @@ from .runs import (
     runs_dir,
     set_latest_run,
 )
+from .user_settings import run_retention_enabled
 
 TERMINAL_RUN_STATUSES = frozenset({"success", "failed", "cancelled", "blocked"})
 # A run whose recorded process is confirmed dead ("stale") can no longer make
@@ -41,6 +43,15 @@ _SECONDS_PER_DAY = 86400
 
 _KEPT_REASON_YOUNG = "younger than the age limit"
 _KEPT_REASON_PROTECTED = "protected by keep-last"
+
+# Fixed experimental auto-retention policy: both filters apply at once, so a
+# candidate must be old enough *and* outside every pipeline's protected window.
+AUTO_PRUNE_OLDER_THAN_DAYS = 30
+AUTO_PRUNE_KEEP_LAST = 10
+AUTO_PRUNE_SCOPE_TEXT = "the setting is global, but every run prunes only the current project's .cdt/runs"
+AUTO_PRUNE_POLICY_TEXT = (
+    "deletes finished runs older than 30 days and outside the 10 newest records of each pipeline"
+)
 
 
 @dataclass(frozen=True)
@@ -243,6 +254,61 @@ def execute_retention(
         failed=failed,
         freed_bytes=sum(record.size_bytes for record in deleted),
     )
+
+
+def run_auto_prune(
+    cwd: Path,
+    *,
+    exclude_run_id: str | None = None,
+    now_value: datetime | None = None,
+) -> RetentionResult | None:
+    """Apply the fixed experimental auto-retention policy to the current project.
+
+    Does nothing (returns ``None`` without touching any files) while the
+    global ``experimental.run-retention`` setting is off, unreadable or the
+    fixed policy selects no candidates. With the setting on, the one pass
+    deletes finished runs older than :data:`AUTO_PRUNE_OLDER_THAN_DAYS` days
+    that also fall outside the :data:`AUTO_PRUNE_KEEP_LAST` newest records of
+    their pipeline. ``exclude_run_id`` (the just-finished run) is never a
+    candidate of its own cleanup pass.
+    """
+    if not run_retention_enabled():
+        return None
+    moment = _as_utc(now_value) if now_value is not None else datetime.now(timezone.utc)
+    plan = build_retention_plan(
+        cwd,
+        now=moment,
+        older_than_days=AUTO_PRUNE_OLDER_THAN_DAYS,
+        keep_last=AUTO_PRUNE_KEEP_LAST,
+    )
+    if exclude_run_id is not None:
+        plan = _exclude_from_plan(plan, exclude_run_id)
+    if not plan.candidates:
+        return None
+    return execute_retention(cwd, plan)
+
+
+def auto_prune_after_run(cwd: Path, run_id: str | None = None) -> RetentionResult | None:
+    """Best-effort auto-prune for run owners; never raises and never blocks.
+
+    Every failure is reported as a stderr warning only: an auto-prune problem
+    must not change the run's status, exit code or original pipeline
+    exception. Call this exactly once, after the owner has finalized the
+    status/exit code and closed the run log.
+    """
+    try:
+        return run_auto_prune(cwd, exclude_run_id=run_id)
+    except Exception as exc:  # noqa: BLE001 - retention must never break a finished run
+        print(f"Warning: experimental run retention failed: {exc}", file=sys.stderr)
+        return None
+
+
+def _exclude_from_plan(plan: RetentionPlan, run_id: str) -> RetentionPlan:
+    """Drop one run from a plan's candidates without touching the files."""
+    candidates = [record for record in plan.candidates if record.run_id != run_id]
+    if len(candidates) == len(plan.candidates):
+        return plan
+    return replace(plan, candidates=candidates, total_size_bytes=sum(record.size_bytes for record in candidates))
 
 
 def _delete_candidate(

@@ -1,21 +1,29 @@
 import json
 import os
 import shutil
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
 from cdt import retention as retention_module
+from cdt.cli import app
+from cdt.pipeline.registry import _clear_steps_for_tests
 from cdt.retention import (
+    AUTO_PRUNE_KEEP_LAST,
+    AUTO_PRUNE_OLDER_THAN_DAYS,
     REMOVABLE_RUN_STATUSES,
     RetentionError,
     RetentionFailure,
     RetentionPlan,
     RetentionResult,
+    auto_prune_after_run,
     build_retention_plan,
     execute_retention,
     parse_older_than_days,
+    run_auto_prune,
 )
 from cdt.runs import (
     RUN_SCHEMA_VERSION,
@@ -33,10 +41,19 @@ from cdt.runs import (
     write_exit_code,
     write_json_atomic,
 )
+from cdt.user_settings import RUN_RETENTION, set_experimental_flag
+from tests.test_agent_first import _write_project
 
 NOW = datetime(2026, 10, 22, 12, 0, 0, tzinfo=timezone.utc)
 
 FINISHED_STATUSES = {"success", "failed", "cancelled", "blocked"}
+
+
+def teardown_function():
+    # Keep the shared cdt_steps package namespace clean for other test modules.
+    _clear_steps_for_tests()
+    sys.modules.pop("cdt_steps.demo", None)
+    sys.modules.pop("cdt_steps", None)
 
 
 def make_run(
@@ -611,3 +628,213 @@ def test_cli_prune_drops_latest_marker_when_pipeline_has_no_runs_left(tmp_path, 
     assert not only.root.exists()
     assert not latest_marker(tmp_path, "test").exists()
     assert resolve_run(tmp_path, pipeline="test") is None
+
+
+# -- Experimental auto-prune -------------------------------------------------------
+
+
+def enable_auto_prune(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    set_experimental_flag(RUN_RETENTION, True)
+
+
+def spy_auto_prune(monkeypatch):
+    """Count run_auto_prune invocations while keeping the real behaviour."""
+    calls = []
+    original = retention_module.run_auto_prune
+
+    def spy(cwd, **kwargs):
+        calls.append(dict(kwargs))
+        return original(cwd, **kwargs)
+
+    monkeypatch.setattr(retention_module, "run_auto_prune", spy)
+    return calls
+
+
+def seed_old_runs(root: Path, pipeline: str, *, count: int, age_days: float = 40) -> list[RunPaths]:
+    started = datetime.now(timezone.utc) - timedelta(days=age_days)
+    return [make_run(root, pipeline, started=started) for _ in range(count)]
+
+
+def test_auto_prune_policy_is_fixed():
+    assert AUTO_PRUNE_OLDER_THAN_DAYS == 30
+    assert AUTO_PRUNE_KEEP_LAST == 10
+
+
+def test_auto_prune_disabled_by_default_touches_nothing(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    (old,) = seed_old_runs(tmp_path, "test", count=1)
+
+    result = run_auto_prune(tmp_path)
+
+    assert result is None
+    assert old.root.exists()
+
+
+def test_auto_prune_applies_age_and_keep_last_together(tmp_path, monkeypatch):
+    enable_auto_prune(monkeypatch, tmp_path)
+    # The fresh run is the newest record, so it consumes one keep-last slot.
+    protected = seed_old_runs(tmp_path, "test", count=AUTO_PRUNE_KEEP_LAST - 1)
+    middle = make_run(tmp_path, "test", started=datetime.now(timezone.utc) - timedelta(days=41))
+    oldest = make_run(tmp_path, "test", started=datetime.now(timezone.utc) - timedelta(days=45))
+    fresh = make_run(tmp_path, "test", started=datetime.now(timezone.utc) - timedelta(days=1))
+
+    result = run_auto_prune(tmp_path)
+
+    assert isinstance(result, RetentionResult)
+    assert [record.run_id for record in result.deleted] == sorted([middle.run_id, oldest.run_id])
+    assert not middle.root.exists()
+    assert not oldest.root.exists()
+    for run in [*protected, fresh]:
+        assert run.root.exists()
+
+
+def test_auto_prune_keeps_newest_per_pipeline_across_pipelines(tmp_path, monkeypatch):
+    enable_auto_prune(monkeypatch, tmp_path)
+    alpha = seed_old_runs(tmp_path, "alpha", count=AUTO_PRUNE_KEEP_LAST + 1)
+    beta = seed_old_runs(tmp_path, "beta", count=AUTO_PRUNE_KEEP_LAST + 1)
+
+    result = run_auto_prune(tmp_path)
+
+    # keep-last protects the newest records of every pipeline independently,
+    # so exactly one old record beyond the window is deleted per pipeline.
+    assert result is not None
+    assert len(result.deleted) == 2
+    by_pipeline: dict[str, list[str]] = {}
+    for record in result.deleted:
+        by_pipeline.setdefault(record.pipeline or "", []).append(record.run_id)
+    assert sorted(by_pipeline) == ["alpha", "beta"]
+    assert all(len(ids) == 1 for ids in by_pipeline.values())
+    deleted_ids = {record.run_id for record in result.deleted}
+    assert all(run.root.exists() for run in alpha + beta if run.run_id not in deleted_ids)
+    assert len(list_runs(tmp_path, pipeline="alpha")) == AUTO_PRUNE_KEEP_LAST
+    assert len(list_runs(tmp_path, pipeline="beta")) == AUTO_PRUNE_KEEP_LAST
+
+
+def test_auto_prune_excludes_the_just_finished_run_from_its_own_pass(tmp_path, monkeypatch):
+    enable_auto_prune(monkeypatch, tmp_path)
+    (finished,) = seed_old_runs(tmp_path, "test", count=1)
+
+    result = run_auto_prune(tmp_path, exclude_run_id=finished.run_id)
+
+    # The excluded run would otherwise be the only candidate.
+    assert result is None
+    assert finished.root.exists()
+
+
+def test_auto_prune_without_candidates_is_a_noop(tmp_path, monkeypatch):
+    enable_auto_prune(monkeypatch, tmp_path)
+    fresh = make_run(tmp_path, "test", started=datetime.now(timezone.utc) - timedelta(days=1))
+
+    assert run_auto_prune(tmp_path) is None
+    assert fresh.root.exists()
+
+
+def test_auto_prune_is_scoped_to_the_current_project(tmp_path, monkeypatch):
+    enable_auto_prune(monkeypatch, tmp_path)
+    other = tmp_path / "other-project"
+    other.mkdir()
+    foreign = seed_old_runs(other, "test", count=AUTO_PRUNE_KEEP_LAST + 1)
+    seed_old_runs(tmp_path, "test", count=AUTO_PRUNE_KEEP_LAST + 1)
+
+    result = run_auto_prune(tmp_path)
+
+    # Exactly one record beyond the protected window per pipeline is deleted,
+    # and only in the current project; the other project stays untouched.
+    assert result is not None and len(result.deleted) == 1
+    assert len(list_runs(tmp_path)) == AUTO_PRUNE_KEEP_LAST
+    assert len(list_runs(other)) == AUTO_PRUNE_KEEP_LAST + 1
+    assert all(run.root.exists() for run in foreign)
+
+
+def test_auto_prune_raises_on_unusable_project_and_helper_warns_on_stderr(tmp_path, monkeypatch, capsys):
+    enable_auto_prune(monkeypatch, tmp_path)
+    old = seed_old_runs(tmp_path, "test", count=AUTO_PRUNE_KEEP_LAST + 1)
+    runs_root = tmp_path / ".cdt" / "runs"
+    external = tmp_path / "outside-runs"
+    shutil.move(str(runs_root), str(external))
+    runs_root.symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(RetentionError, match="symbolic link"):
+        run_auto_prune(tmp_path)
+
+    result = auto_prune_after_run(tmp_path)
+
+    assert result is None
+    captured = capsys.readouterr()
+    assert "experimental run retention failed" in captured.err
+    assert captured.out == ""
+    assert all(run.root.exists() for run in old)
+
+
+def test_run_modes_trigger_auto_prune_only_for_the_direct_owner(tmp_path, monkeypatch):
+    _write_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    enable_auto_prune(monkeypatch, tmp_path)
+    calls = spy_auto_prune(monkeypatch)
+    runner = CliRunner()
+
+    # Dry-run never creates a record and never prunes.
+    assert runner.invoke(app, ["run", "test", "--dry-run"]).exit_code == 0
+    assert calls == []
+
+    # The detached worker child is not the owner: its worker prunes instead.
+    detached = create_run(tmp_path, "test", run_id="detached-child", detached=True)
+    assert runner.invoke(app, ["run", "test", "--run-id", "detached-child"]).exit_code == 0
+    assert calls == []
+    assert detached.root.exists()
+
+    # The supervised capture child is not the owner either: its supervisor prunes.
+    capture = create_run(tmp_path, "test", run_id="capture-child")
+    assert runner.invoke(app, ["run", "test", "--run-id", "capture-child", "--capture-child"]).exit_code == 0
+    assert calls == []
+    assert capture.root.exists()
+
+    # The direct owner prunes exactly once, excluding its own record.
+    assert runner.invoke(app, ["run", "test"]).exit_code == 0
+    assert len(calls) == 1
+    runs = list_runs(tmp_path)
+    assert calls[0] == {"exclude_run_id": runs[0]["run_id"]}
+
+
+def test_direct_run_auto_prune_keeps_fixed_number_of_records(tmp_path, monkeypatch):
+    _write_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    enable_auto_prune(monkeypatch, tmp_path)
+    seed_old_runs(tmp_path, "test", count=AUTO_PRUNE_KEEP_LAST + 3)
+
+    result = CliRunner().invoke(app, ["run", "test"])
+
+    assert result.exit_code == 0, result.output
+    runs = list_runs(tmp_path)
+    assert len(runs) == AUTO_PRUNE_KEEP_LAST
+    assert runs[0]["status"] == "success"
+    resolved = resolve_run(tmp_path, pipeline="test")
+    assert resolved is not None and resolved.run_id == runs[0]["run_id"]
+
+
+def test_retention_failure_never_changes_the_pipeline_outcome(tmp_path, monkeypatch):
+    _write_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    enable_auto_prune(monkeypatch, tmp_path)
+    seed_old_runs(tmp_path, "test", count=AUTO_PRUNE_KEEP_LAST + 1)
+    runs_root = tmp_path / ".cdt" / "runs"
+    external = tmp_path / "outside-runs"
+    shutil.move(str(runs_root), str(external))
+    runs_root.symlink_to(external, target_is_directory=True)
+
+    result = CliRunner().invoke(app, ["run", "test"])
+
+    assert result.exit_code == 0, result.output
+    runs = list_runs(tmp_path)
+    assert len(runs) == AUTO_PRUNE_KEEP_LAST + 2  # nothing was pruned: retention failed harmlessly
+    assert runs[0]["status"] == "success"
+    warnings_text = result.output
+    try:
+        warnings_text += result.stderr
+    except ValueError:  # pragma: no cover - CliRunner mixing variants
+        pass
+    assert "experimental run retention failed" in warnings_text

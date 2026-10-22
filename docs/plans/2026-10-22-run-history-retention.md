@@ -114,14 +114,14 @@
 - Modify: `tests/test_agent_release.py`
 - Create: `tests/test_user_settings.py`
 
-- [ ] Добавить глобальный `experimental.run-retention` в существующие `settings enable`, `settings disable` и `settings show`.
-- [ ] Сохранить существующий формат и поведение `experimental.orca-status`, неизвестные поля settings и атомарную запись. Отсутствующие или некорректные настройки не должны включать автоочистку.
-- [ ] Зафиксировать политику автоочистки: `older-than=30d`, `keep-last=10` на pipeline, оба условия одновременно.
-- [ ] При включении показывать область действия и политику: настройка глобальна, но каждый запуск чистит только свой текущий проект.
-- [ ] Запускать retention один раз у владельца исполнения после финализации и закрытия логов, при успешном и неудачном исходе. Исключать только что завершившийся run ID из текущей очистки.
-- [ ] Не вызывать retention в дочернем исполнителе detached/capture, на dry-run, preflight, просмотре истории или при ошибке до создания записи запуска.
-- [ ] Не менять status, exit code и исходное исключение pipeline из-за ошибки retention. Предупреждения направлять в stderr, не нарушая машинный JSON-протокол.
-- [ ] Проверить выключенное состояние по умолчанию, enable/disable/show, сохранение соседних настроек, изоляцию проектов, однократный вызов во всех режимах и независимость результата pipeline от очистки.
+- [x] Добавить глобальный `experimental.run-retention` в существующие `settings enable`, `settings disable` и `settings show`.
+- [x] Сохранить существующий формат и поведение `experimental.orca-status`, неизвестные поля settings и атомарную запись. Отсутствующие или некорректные настройки не должны включать автоочистку.
+- [x] Зафиксировать политику автоочистки: `older-than=30d`, `keep-last=10` на pipeline, оба условия одновременно.
+- [x] При включении показывать область действия и политику: настройка глобальна, но каждый запуск чистит только свой текущий проект.
+- [x] Запускать retention один раз у владельца исполнения после финализации и закрытия логов, при успешном и неудачном исходе. Исключать только что завершившийся run ID из текущей очистки.
+- [x] Не вызывать retention в дочернем исполнителе detached/capture, на dry-run, preflight, просмотре истории или при ошибке до создания записи запуска.
+- [x] Не менять status, exit code и исходное исключение pipeline из-за ошибки retention. Предупреждения направлять в stderr, не нарушая машинный JSON-протокол.
+- [x] Проверить выключенное состояние по умолчанию, enable/disable/show, сохранение соседних настроек, изоляцию проектов, однократный вызов во всех режимах и независимость результата pipeline от очистки.
 
 ### Task 5: Описать контракт для пользователей и агентов
 
@@ -166,6 +166,15 @@ ruff check .
 Тесты очистки используют временные каталоги и изолированные пользовательские настройки. Не удалять реальные записи проекта и не запускать релизные pipeline для проверки этой функции.
 
 ## Execution Notes
+
+### Task 4
+
+- `pytest tests/test_retention.py tests/test_run_record_regressions.py`: 74 passed.
+- `pytest tests/test_cli.py tests/test_agent_first.py`: 98 passed.
+- `pytest tests/test_agent_release.py tests/test_foreground_run.py`: 41 passed.
+- `pytest tests/test_user_settings.py tests/test_orca_status.py tests/test_skills.py`: 26 passed.
+- `pytest` (final): 1400 passed; `ruff check .`: all checks passed.
+- Wiring: direct runs prune in `run_configured_pipeline`'s finally (guarded by `not detached and not capture_child`), the capture supervisor prunes after finalizing its record, and the detached worker prunes only when it actually took over the lifecycle lock. All three call the never-raising `auto_prune_after_run`, which excludes the just-finished run id and reports failures on stderr only.
 
 ### Task 3
 

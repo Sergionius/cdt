@@ -9,13 +9,14 @@ import sys
 import textwrap
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
 import cdt.cli as cli_module
+from cdt import retention as retention_module
 from cdt.cli import app
 from cdt.foreground_run import (
     ForegroundCaptureError,
@@ -26,8 +27,22 @@ from cdt.foreground_run import (
 )
 from cdt.pipeline.registry import _clear_steps_for_tests
 from cdt.redaction import SecretRedactor
-from cdt.retention import build_retention_plan, execute_retention
-from cdt.runs import acquire_run_lock, list_runs, read_json, release_run_lock, run_paths
+from cdt.retention import (
+    AUTO_PRUNE_KEEP_LAST,
+    build_retention_plan,
+    execute_retention,
+)
+from cdt.runs import (
+    acquire_run_lock,
+    create_run,
+    list_runs,
+    read_json,
+    release_run_lock,
+    run_paths,
+    write_exit_code,
+    write_json_atomic,
+)
+from cdt.user_settings import RUN_RETENTION, set_experimental_flag
 
 _SECRET = "capture-pipeline-secret"
 _TOKEN_ENV = "CAPTURE_TOKEN"
@@ -673,3 +688,44 @@ def test_capture_supervisor_holds_lifecycle_lock_until_finalization(tmp_path, mo
     outcome = execute_retention(tmp_path, plan)
     assert [record.run_id for record in outcome.deleted] == [runs[0]["run_id"]]
     assert not paths.root.exists()
+
+
+def _seed_old_success(root: Path, pipeline: str, *, started: datetime) -> str:
+    """Record a finished-looking run with a controlled start time."""
+    paths = create_run(root, pipeline)
+    manifest = read_json(paths.manifest)
+    manifest["started_at"] = started.isoformat()
+    write_json_atomic(paths.manifest, manifest)
+    payload = read_json(paths.status)
+    payload.update({"status": "success", "started_at": started.isoformat(), "finished_at": started.isoformat()})
+    write_json_atomic(paths.status, payload)
+    write_exit_code(paths.exit, 0)
+    return paths.run_id
+
+
+def test_capture_supervisor_runs_auto_prune_once_and_keeps_its_own_record(tmp_path, monkeypatch):
+    _timed_project(tmp_path, monkeypatch)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    set_experimental_flag(RUN_RETENTION, True)
+    started = datetime.now(timezone.utc) - timedelta(days=40)
+    old_ids = {_seed_old_success(tmp_path, "demo", started=started) for _ in range(AUTO_PRUNE_KEEP_LAST + 3)}
+
+    calls = []
+    original = retention_module.run_auto_prune
+
+    def spy(cwd, **kwargs):
+        calls.append(dict(kwargs))
+        return original(cwd, **kwargs)
+
+    monkeypatch.setattr(retention_module, "run_auto_prune", spy)
+
+    result = _cli.invoke(app, ["run", "demo", "--capture-output"])
+
+    assert result.exit_code == 0, result.output
+    # The supervisor, not the supervised child, pruned exactly once.
+    assert len(calls) == 1
+    runs = list_runs(tmp_path)
+    assert len(runs) == AUTO_PRUNE_KEEP_LAST
+    assert runs[0]["status"] == "success"
+    assert runs[0]["run_id"] not in old_ids
+    assert calls[0] == {"exclude_run_id": runs[0]["run_id"]}

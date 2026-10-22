@@ -28,7 +28,10 @@ from .pipeline.runner import run_configured_pipeline
 from .pipeline.validation import inspect_payload, step_tree, steps_payload, validate_payload, validate_pipeline
 from .redaction import SecretRedactor
 from .retention import (
+    AUTO_PRUNE_POLICY_TEXT,
+    AUTO_PRUNE_SCOPE_TEXT,
     RetentionError,
+    auto_prune_after_run,
     build_retention_plan,
     execute_retention,
     parse_older_than_days,
@@ -50,7 +53,14 @@ from .runs import (
 )
 from .schema import bundled_schema_path
 from .self_update import SelfUpdateError, run_self_update
-from .user_settings import ORCA_STATUS, orca_status_enabled, set_orca_status
+from .user_settings import (
+    EXPERIMENTAL_FLAGS,
+    ORCA_STATUS,
+    RUN_RETENTION,
+    orca_status_enabled,
+    run_retention_enabled,
+    set_experimental_flag,
+)
 
 app = typer.Typer(no_args_is_help=True)
 pipeline_app = typer.Typer(no_args_is_help=True)
@@ -138,16 +148,30 @@ def settings_disable(name: str = typer.Argument(..., help="Experimental setting 
 def settings_show():
     """Show per-user experimental settings."""
     typer.echo(f"{ORCA_STATUS}: {'enabled' if orca_status_enabled() else 'disabled'}")
+    retention_enabled = run_retention_enabled()
+    typer.echo(f"{RUN_RETENTION}: {'enabled' if retention_enabled else 'disabled'}")
+    if retention_enabled:
+        _echo_auto_prune_scope_and_policy()
+
+
+def _echo_auto_prune_scope_and_policy() -> None:
+    typer.echo(f"  scope: {AUTO_PRUNE_SCOPE_TEXT}")
+    typer.echo(f"  policy: {AUTO_PRUNE_POLICY_TEXT}")
 
 
 def _set_experimental_setting(name: str, enabled: bool) -> None:
-    if name != ORCA_STATUS:
-        raise typer.BadParameter(f"Unknown setting: {name}. Available: {ORCA_STATUS}")
+    if name not in EXPERIMENTAL_FLAGS:
+        available = ", ".join(EXPERIMENTAL_FLAGS)
+        raise typer.BadParameter(f"Unknown setting: {name}. Available: {available}")
     try:
-        path = set_orca_status(enabled)
+        path = set_experimental_flag(name, enabled)
     except (OSError, ValueError) as exc:
         raise typer.BadParameter(f"Cannot save CDT settings: {exc}") from exc
     typer.echo(f"{name}: {'enabled' if enabled else 'disabled'} ({path})")
+    if name == RUN_RETENTION and enabled:
+        # Make the experimental scope explicit: the flag is stored globally,
+        # but the auto-prune itself only ever touches the current project.
+        _echo_auto_prune_scope_and_policy()
 
 
 @app.command(name="doctor")
@@ -557,6 +581,7 @@ def _run_capture_output(
     report_orca_status("working", name)
     failed = True
     lifecycle = None
+    captured_run_id: str | None = None
     try:
         paths = create_run(
             cwd,
@@ -585,6 +610,7 @@ def _run_capture_output(
             # exit code are written, so pruning cannot race the capture; the
             # supervised child never acquires it itself.
             lifecycle = acquire_run_lock(paths, timeout=0.0)
+        captured_run_id = paths.run_id
         child_args = _capture_child_args(
             name,
             paths.run_id,
@@ -623,6 +649,11 @@ def _run_capture_output(
         return exit_code
     finally:
         release_run_lock(lifecycle)
+        if captured_run_id is not None:
+            # The supervisor is the capture owner: after finalizing status, exit
+            # code and log it runs the experimental auto-prune exactly once,
+            # excluding the just-finished record from its own cleanup pass.
+            auto_prune_after_run(cwd, captured_run_id)
         report_orca_status("done", name, failed=failed)
 
 

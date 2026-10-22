@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .config import _load_project_env
 from .redaction import SecretRedactor, StreamingRedactor
+from .retention import auto_prune_after_run
 from .runs import (
     RUN_LOCK_HANDOVER_TIMEOUT,
     RUN_SCHEMA_VERSION,
@@ -110,6 +111,11 @@ def main() -> int:
     finally:
         write_exit_code(exit_file, exit_code)
         release_run_lock(lifecycle)
+        if lifecycle is not None:
+            # The worker is the detached owner: after the final exit code is
+            # written and the lifecycle lock released, it runs the experimental
+            # auto-prune exactly once, excluding the just-finished record.
+            auto_prune_after_run(Path.cwd(), args.run_id)
     return exit_code
 
 
