@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 from datetime import datetime, timedelta, timezone
@@ -572,3 +573,41 @@ def test_execute_empty_plan_changes_nothing(tmp_path):
     assert result.freed_bytes == 0
     assert fresh.root.exists()
     assert latest_marker(tmp_path, "test").read_text(encoding="utf-8").strip() == fresh.run_id
+
+
+def test_cli_prune_confirm_updates_latest_marker_and_resolve_run(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from cdt.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    old = make_run(tmp_path, "test", age_days=60)
+    fresh = make_run(tmp_path, "test", age_days=1)
+    assert latest_marker(tmp_path, "test").read_text(encoding="utf-8").strip() == fresh.run_id
+
+    result = CliRunner().invoke(app, ["history", "prune", "--older-than", "30d", "--confirm", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["mode"] == "delete"
+    assert [record["run_id"] for record in payload["deleted"]] == [old.run_id]
+    assert not old.root.exists()
+    assert fresh.root.exists()
+    assert latest_marker(tmp_path, "test").read_text(encoding="utf-8").strip() == fresh.run_id
+    assert resolve_run(tmp_path, pipeline="test") == fresh
+
+
+def test_cli_prune_drops_latest_marker_when_pipeline_has_no_runs_left(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from cdt.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    only = make_run(tmp_path, "test", age_days=60)
+
+    result = CliRunner().invoke(app, ["history", "prune", "--older-than", "30d", "--confirm"])
+
+    assert result.exit_code == 0
+    assert not only.root.exists()
+    assert not latest_marker(tmp_path, "test").exists()
+    assert resolve_run(tmp_path, pipeline="test") is None

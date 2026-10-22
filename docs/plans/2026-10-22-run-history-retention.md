@@ -90,15 +90,15 @@
 - Modify: `tests/test_retention.py`
 - Modify: `tests/test_agent_first.py`
 
-- [ ] Преобразовать `history` в Typer-группу с callback, сохранив поведение существующих `cdt history`, `--limit`, `--pipeline`, `--status` и `--json`.
-- [ ] Добавить `cdt history prune --older-than Nd --keep-last N --pipeline NAME --dry-run --confirm --json`.
-- [ ] Требовать хотя бы один фильтр `--older-than` или `--keep-last`. При отсутствии обоих не выполнять удаление.
-- [ ] Без `--confirm` выполнять только предпросмотр. `--dry-run` явно включает предпросмотр; сочетание `--dry-run --confirm` отклонять как неоднозначное.
-- [ ] При `--confirm` заново строить и проверять план; не обещать идентичность с ранее показанным dry-run, поскольку история могла измениться.
-- [ ] В текстовом предпросмотре показывать run ID, pipeline, статус, возраст, размер, причины пропуска и итоговый объём кандидатов. Предупреждать, что удаляется вся запись, включая данные resume.
-- [ ] Возвращать JSON с `schema_version`, режимом, фильтрами, кандидатами, удалёнными и пропущенными записями, ошибками и итоговыми размерами. Не смешивать JSON с текстовыми сообщениями.
-- [ ] Определить коды выхода: 0 для успешного предпросмотра/очистки, включая отсутствие кандидатов; 1 при ошибках чтения/удаления, препятствующих операции; 2 для некорректных аргументов. Ожидаемый пропуск активной записи не считать ошибкой.
-- [ ] Проверить CLI-совместимость истории, обе независимые политики, совместные фильтры, JSON, подтверждение, ошибки и отсутствие изменений при предпросмотре.
+- [x] Преобразовать `history` в Typer-группу с callback, сохранив поведение существующих `cdt history`, `--limit`, `--pipeline`, `--status` и `--json`.
+- [x] Добавить `cdt history prune --older-than Nd --keep-last N --pipeline NAME --dry-run --confirm --json`.
+- [x] Требовать хотя бы один фильтр `--older-than` или `--keep-last`. При отсутствии обоих не выполнять удаление.
+- [x] Без `--confirm` выполнять только предпросмотр. `--dry-run` явно включает предпросмотр; сочетание `--dry-run --confirm` отклонять как неоднозначное.
+- [x] При `--confirm` заново строить и проверять план; не обещать идентичность с ранее показанным dry-run, поскольку история могла измениться.
+- [x] В текстовом предпросмотре показывать run ID, pipeline, статус, возраст, размер, причины пропуска и итоговый объём кандидатов. Предупреждать, что удаляется вся запись, включая данные resume.
+- [x] Возвращать JSON с `schema_version`, режимом, фильтрами, кандидатами, удалёнными и пропущенными записями, ошибками и итоговыми размерами. Не смешивать JSON с текстовыми сообщениями.
+- [x] Определить коды выхода: 0 для успешного предпросмотра/очистки, включая отсутствие кандидатов; 1 при ошибках чтения/удаления, препятствующих операции; 2 для некорректных аргументов. Ожидаемый пропуск активной записи не считать ошибкой.
+- [x] Проверить CLI-совместимость истории, обе независимые политики, совместные фильтры, JSON, подтверждение, ошибки и отсутствие изменений при предпросмотре.
 
 ### Task 4: Подключить экспериментальную автоочистку
 
@@ -164,6 +164,15 @@ ruff check .
 ```
 
 Тесты очистки используют временные каталоги и изолированные пользовательские настройки. Не удалять реальные записи проекта и не запускать релизные pipeline для проверки этой функции.
+
+## Execution Notes
+
+### Task 3
+
+- `pytest tests/test_cli.py tests/test_agent_first.py`: 87 passed, 11 failed — the same 11 capture/detached subprocess tests fail identically on the clean base commit (`202d436`, 11 failed / 79 passed there) with `.venv/bin/python: No module named cdt`, i.e. a pre-existing unpackaged-venv environment issue, not a regression of this task. All new Task 3 tests pass.
+- `pytest tests/test_retention.py tests/test_run_record_regressions.py`: 63 passed.
+- `pytest tests/test_agent_release.py tests/test_foreground_run.py`: 35 passed, 4 failed — the same 4 foreground capture tests fail identically on the clean base commit with the same environment cause; `test_agent_release.py` passes fully.
+- `ruff check .`: all checks passed.
 
 ## Acceptance Criteria
 
