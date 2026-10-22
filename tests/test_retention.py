@@ -518,12 +518,12 @@ def test_execute_reports_partial_failure_and_continues(tmp_path, monkeypatch):
 
 def test_execute_refuses_symlinked_runs_directory(tmp_path):
     run = make_run(tmp_path, "test", age_days=40)
+    plan = build_retention_plan(tmp_path, now=NOW, older_than_days=30)
     runs_dir = tmp_path / ".cdt" / "runs"
     external = tmp_path / "outside-runs"
     shutil.move(str(runs_dir), str(external))
     runs_dir.symlink_to(external, target_is_directory=True)
 
-    plan = build_retention_plan(tmp_path, now=NOW, older_than_days=30)
     assert candidate_ids(plan) == [run.run_id]
     with pytest.raises(RetentionError, match="symbolic link"):
         execute_retention(tmp_path, plan)
@@ -654,6 +654,52 @@ def spy_auto_prune(monkeypatch):
 def seed_old_runs(root: Path, pipeline: str, *, count: int, age_days: float = 40) -> list[RunPaths]:
     started = datetime.now(timezone.utc) - timedelta(days=age_days)
     return [make_run(root, pipeline, started=started) for _ in range(count)]
+
+
+@pytest.mark.parametrize("linked_component", [".cdt", "runs"])
+def test_retention_rejects_linked_ancestors_before_reading_or_deleting(tmp_path, monkeypatch, linked_component):
+    run = make_run(tmp_path, "test", age_days=60)
+    plan = build_retention_plan(tmp_path, now=NOW, older_than_days=30)
+    source = tmp_path / ".cdt" if linked_component == ".cdt" else tmp_path / ".cdt" / "runs"
+    external = tmp_path / "external"
+    source.rename(external)
+    source.symlink_to(external, target_is_directory=True)
+    before = {p.relative_to(external): p.read_bytes() for p in external.rglob("*") if p.is_file()}
+
+    with pytest.raises(RetentionError, match="symbolic link"):
+        build_retention_plan(tmp_path, now=NOW, older_than_days=30)
+    with pytest.raises(RetentionError, match="symbolic link"):
+        execute_retention(tmp_path, plan)
+    monkeypatch.chdir(tmp_path)
+    for flags in (["--dry-run"], ["--confirm"]):
+        result = CliRunner().invoke(app, ["history", "prune", "--older-than", "30d", "--json", *flags])
+        assert result.exit_code == 1
+        assert "symbolic link" in json.loads(result.stdout)["errors"][0]["error"]
+    assert run.root.exists()
+    assert {p.relative_to(external): p.read_bytes() for p in external.rglob("*") if p.is_file()} == before
+
+
+def test_auto_prune_reports_partial_failures_on_stderr(tmp_path, monkeypatch, capsys):
+    enable_auto_prune(monkeypatch, tmp_path)
+    seed_old_runs(tmp_path, "test", count=AUTO_PRUNE_KEEP_LAST + 2)
+    original = retention_module.shutil.rmtree
+    calls = []
+
+    def fail_first(path):
+        calls.append(path)
+        if len(calls) == 1:
+            raise OSError("disk busy")
+        return original(path)
+
+    monkeypatch.setattr(retention_module.shutil, "rmtree", fail_first)
+    result = auto_prune_after_run(tmp_path)
+    assert len(result.failed) == 1
+    assert len(result.deleted) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert result.failed[0].run_id in captured.err
+    assert "disk busy" in captured.err
+    assert "experimental run retention failed" in captured.err
 
 
 def test_auto_prune_policy_is_fixed():

@@ -120,6 +120,13 @@ class RetentionError(RuntimeError):
     """Retention cannot run in this project right now."""
 
 
+def _validate_retention_root(cwd: Path) -> None:
+    # Checking runs alone misses a symlink at its .cdt parent.
+    for path in (cwd / ".cdt", runs_dir(cwd)):
+        if path.is_symlink():
+            raise RetentionError(f"Refusing to prune runs: {path.name} is a symbolic link")
+
+
 def parse_older_than_days(value: str | int) -> int:
     """Parse an ``Nd`` age filter into a positive integer number of days."""
     text = str(value).strip().lower()
@@ -151,6 +158,7 @@ def build_retention_plan(
     windows become candidates. Active, unverifiable and corrupted records are
     skipped with explicit reasons.
     """
+    _validate_retention_root(cwd)
     now_utc = _as_utc(now)
     if older_than_days is not None:
         _require_int(older_than_days, minimum=1, name="older_than_days")
@@ -223,19 +231,20 @@ def execute_retention(
     error on one candidate never stops the remaining candidates.
     """
     base = runs_dir(cwd)
-    if base.is_symlink():
-        raise RetentionError("Refusing to prune runs: .cdt/runs is a symbolic link")
+    _validate_retention_root(cwd)
     guard = project_lock(cwd, timeout=lock_timeout)
     try:
         guard.acquire()
     except filelock.Timeout as exc:
         raise RetentionError("Another CDT run operation is in progress; retry pruning later") from exc
     try:
+        _validate_retention_root(cwd)
         deleted: list[RetentionRecord] = []
         skipped: list[RetentionSkip] = []
         failed: list[RetentionFailure] = []
         now_utc = _as_utc(datetime.now(timezone.utc))
         for record in plan.candidates:
+            _validate_retention_root(cwd)
             outcome = _delete_candidate(cwd, base, record, now_utc=now_utc)
             if isinstance(outcome, RetentionFailure):
                 failed.append(outcome)
@@ -297,7 +306,14 @@ def auto_prune_after_run(cwd: Path, run_id: str | None = None) -> RetentionResul
     status/exit code and closed the run log.
     """
     try:
-        return run_auto_prune(cwd, exclude_run_id=run_id)
+        result = run_auto_prune(cwd, exclude_run_id=run_id)
+        if result is not None:
+            for failure in result.failed:
+                print(
+                    f"Warning: experimental run retention failed for {failure.run_id}: {failure.error}",
+                    file=sys.stderr,
+                )
+        return result
     except Exception as exc:  # noqa: BLE001 - retention must never break a finished run
         print(f"Warning: experimental run retention failed: {exc}", file=sys.stderr)
         return None
