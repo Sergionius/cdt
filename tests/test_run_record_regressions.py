@@ -8,9 +8,33 @@ import pytest
 import typer
 
 import cdt.pipeline.runner as runner_module
+import cdt.runs as runs_module
 from cdt.pipeline.runner import run_configured_pipeline
 from cdt.retention import build_retention_plan, execute_retention
 from cdt.runs import acquire_run_lock, create_run, list_runs, read_json, release_run_lock, resolve_run, run_paths
+
+
+def test_generated_run_id_collision_retries_without_overwriting(tmp_path, monkeypatch):
+    ids = iter(["duplicate", "duplicate", "replacement"])
+    monkeypatch.setattr(runs_module, "generate_run_id", lambda pipeline: next(ids))
+
+    first = create_run(tmp_path, "test")
+    second = create_run(tmp_path, "test")
+
+    assert (first.run_id, second.run_id) == ("duplicate", "replacement")
+    assert read_json(first.manifest)["run_id"] == "duplicate"
+    assert read_json(second.manifest)["run_id"] == "replacement"
+    assert resolve_run(tmp_path, pipeline="test") == second
+
+
+def test_explicit_run_id_collision_is_not_retried(tmp_path, monkeypatch):
+    original = create_run(tmp_path, "test", run_id="reserved")
+    monkeypatch.setattr(runs_module, "generate_run_id", lambda pipeline: pytest.fail("unexpected ID generation"))
+
+    with pytest.raises(FileExistsError):
+        create_run(tmp_path, "test", run_id="reserved")
+
+    assert read_json(original.manifest)["run_id"] == "reserved"
 
 
 def test_pipeline_lookup_does_not_follow_colliding_latest_marker(tmp_path):
