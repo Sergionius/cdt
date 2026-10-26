@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Nothing yet.
+
+## v0.10.0 - 2026-10-26
+
 - Added optional `ANDROID_ARTIFACT_PREFIX` for APK/AAB copies made by `artifact.copy_to_downloads`: a value such as `myapp` produces `myapp_app-release.apk`, while missing or blank values preserve original names. Source files, registered artifact paths, and non-Android artifacts are unchanged; unsafe prefixes are rejected before copying.
 
 ## v0.9.2 - 2026-10-26
