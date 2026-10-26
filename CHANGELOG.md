@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Nothing yet.
+
+## v0.9.2 - 2026-10-26
+
 - Retry generated run IDs on directory collisions instead of failing a run; explicitly supplied IDs still reject duplicates.
 
 ## v0.9.1 - 2026-10-26
