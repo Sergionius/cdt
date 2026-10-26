@@ -367,7 +367,17 @@ iOS builds are signed by your Xcode/Flutter project configuration, not by CDT; s
 
 Custom steps come from ordinary Python plugin modules listed in `plugins:`; see [Reusable Python step plugins](plugins.md) and `examples/reusable-plugin/`.
 
-`artifact.copy_to_downloads` copies a named file artifact to `~/Downloads` by default.
+`artifact.copy_to_downloads` copies a named file artifact to `~/Downloads` by default; an optional `destination` parameter selects another directory.
+
+The copy name for Android artifacts can be prefixed through the optional `ANDROID_ARTIFACT_PREFIX` environment variable. With `ANDROID_ARTIFACT_PREFIX=myapp`, copies of `app-release.aab` and `app-release.apk` are saved as `myapp_app-release.aab` and `myapp_app-release.apk`.
+
+- CDT joins the prefix and the original file name with a single `_`; the separator is added by CDT and must not be part of the value.
+- The value is read like other CDT environment variables (project `.env` plus the shell), and external whitespace is stripped: `"  myapp  "` behaves like `myapp`.
+- When the variable is missing, empty, or whitespace-only, copies keep the original artifact file names.
+- The value must not contain `/`, `\`, or control characters; such values are rejected with an error that names `ANDROID_ARTIFACT_PREFIX` (without echoing the value) before any directory is created or file is copied.
+- The prefix applies only to APK and AAB artifacts. Other artifact kinds (for example IPA) ignore the variable entirely, including invalid values.
+
+The setting works in every pipeline regardless of pipeline name or build profile, needs no YAML changes, and, together with a custom `destination`, affects only the copies created by the step; source files and registered artifact paths keep their original names. External consumers that fetch the copies from fixed paths (scripts, upload jobs, CI steps) must account for the new file names when the prefix is set.
 
 `notify.prod_user_agent` is separate from `notify.success`. When `NOTIFY_PROVIDER=pachca`, it sends production user-agent details using `PACHCA_USER_AGENT_WEBHOOK_URL` and `UA_APP_NAME`; optional formatting variables are `UA_TITLE`, `UA_IOS_DEVICE`, and `UA_ANDROID_DEVICE`. With another provider the step is a no-op.
 
