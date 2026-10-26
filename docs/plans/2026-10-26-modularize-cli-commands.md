@@ -106,12 +106,12 @@
 - Modify: `tests/test_foreground_run.py`
 - Modify: `tests/test_orca_status.py`
 
-- [ ] Перенести `run_pipeline`, capture-константы, валидацию флагов/inputs, интерактивное подтверждение, формирование argv и manifest, supervisor и финализацию в `run.py`.
-- [ ] Зарегистрировать обработчик как прежнюю корневую команду `run`, без промежуточных обёрток и изменения сигнатуры.
-- [ ] Сохранить ранний выход dry-run, порядок проверок, различение direct/detached/capture-child и передачу всех параметров.
-- [ ] Сохранить владение lifecycle lock, запись итоговых статусов, однократную автоочистку и Orca-события; не переносить эти обязанности между предметными слоями.
-- [ ] Одновременно обновить импорты `_finalize_captured_run` и monkeypatch для `require_posix_capture`, `release_run_lock`, `report_orca_status`, `run_configured_pipeline` на `cdt.cli_commands.run`.
-- [ ] Оставить тестовые вызовы CLI через `from cdt.cli import app`; не ослаблять проверки ради нового расположения функций.
+- [x] Перенести `run_pipeline`, capture-константы, валидацию флагов/inputs, интерактивное подтверждение, формирование argv и manifest, supervisor и финализацию в `run.py`.
+- [x] Зарегистрировать обработчик как прежнюю корневую команду `run`, без промежуточных обёрток и изменения сигнатуры.
+- [x] Сохранить ранний выход dry-run, порядок проверок, различение direct/detached/capture-child и передачу всех параметров.
+- [x] Сохранить владение lifecycle lock, запись итоговых статусов, однократную автоочистку и Orca-события; не переносить эти обязанности между предметными слоями.
+- [x] Одновременно обновить импорты `_finalize_captured_run` и monkeypatch для `require_posix_capture`, `release_run_lock`, `report_orca_status`, `run_configured_pipeline` на `cdt.cli_commands.run`.
+- [x] Оставить тестовые вызовы CLI через `from cdt.cli import app`; не ослаблять проверки ради нового расположения функций.
 
 ### Task 5: Завершить разделение и проверить точки входа
 

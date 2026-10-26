@@ -756,7 +756,7 @@ def test_capture_output_rejected_on_unsupported_platform_before_record(tmp_path,
 
         raise ForegroundCaptureError("Foreground output capture requires POSIX process-group primitives (Linux/macOS)")
 
-    monkeypatch.setattr("cdt.cli.require_posix_capture", reject)
+    monkeypatch.setattr("cdt.cli_commands.run.require_posix_capture", reject)
 
     result = runner.invoke(app, ["run", "demo", "--capture-output"])
 
@@ -820,7 +820,7 @@ def test_finalize_captured_run_marks_incomplete_capture_as_failure(tmp_path):
     )
     write_json_atomic(paths.status, payload)
 
-    from cdt.cli import _finalize_captured_run
+    from cdt.cli_commands.run import _finalize_captured_run
 
     problems = ("terminal output failed; live copy stopped: broken",)
     exit_code = _finalize_captured_run({}, paths, "demo", None, 0, None, capture_problems=problems)
@@ -842,7 +842,7 @@ def test_finalize_captured_run_keeps_child_failure_with_capture_problems(tmp_pat
     payload.update({"status": "failed", "error": "Pipeline failed at step 0", "completed_steps": []})
     write_json_atomic(paths.status, payload)
 
-    from cdt.cli import _finalize_captured_run
+    from cdt.cli_commands.run import _finalize_captured_run
 
     exit_code = _finalize_captured_run(
         {}, paths, "demo", None, 1, None, capture_problems=("capture log write failed; saved copy stopped",)
@@ -867,7 +867,7 @@ def test_finalize_captured_run_preserves_progress_and_marks_failure(tmp_path):
     )
     write_json_atomic(paths.status, payload)
 
-    from cdt.cli import _finalize_captured_run
+    from cdt.cli_commands.run import _finalize_captured_run
 
     exit_code = _finalize_captured_run({}, paths, "demo", None, 1, None)
 

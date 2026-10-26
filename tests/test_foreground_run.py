@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-import cdt.cli as cli_module
+import cdt.cli_commands.run as cli_module
 from cdt import retention as retention_module
 from cdt.cli import app
 from cdt.foreground_run import (
