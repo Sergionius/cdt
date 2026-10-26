@@ -3,8 +3,9 @@ import sys
 
 from typer.testing import CliRunner
 
-from cdt import cli, orca_status
+from cdt import orca_status
 from cdt.cli import app
+from cdt.cli_commands import run as cli
 from cdt.pipeline.executor import PipelineExecutionError
 from cdt.pipeline.registry import _clear_steps_for_tests
 from cdt.user_settings import orca_status_enabled, settings_path

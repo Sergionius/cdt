@@ -75,6 +75,7 @@ def test_root_help_lists_commands():
         "schema",
         "pipeline",
         "agent-release",
+        "settings",
         "doctor",
         "self-update",
     ):
@@ -92,6 +93,217 @@ def test_root_version_flags():
 def test_python_module_version_flag():
     result = subprocess.run(
         [sys.executable, "-m", "cdt", "--version"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == f"cdt {__version__}\n"
+
+
+def test_root_registers_exact_command_set_without_duplicates():
+    command_names = [info.name for info in app.registered_commands]
+    group_names = [info.name for info in app.registered_groups]
+
+    assert len(command_names) == len(set(command_names))
+    assert len(group_names) == len(set(group_names))
+    assert not set(command_names) & set(group_names)
+    assert set(command_names) == {"init", "run", "status", "logs", "schema", "doctor", "self-update"}
+    assert set(group_names) == {"settings", "pipeline", "agent-release", "history"}
+
+
+def test_groups_register_exact_subcommand_sets_without_duplicates():
+    expected = {
+        "settings": {"enable", "disable", "show"},
+        "pipeline": {"list", "inspect", "plan", "validate", "preflight", "steps"},
+        "agent-release": {"start", "status", "stop"},
+        "history": {"prune"},
+    }
+    actual = {}
+    for group_info in app.registered_groups:
+        assert group_info.name not in actual
+        names = [info.name for info in group_info.typer_instance.registered_commands]
+        assert len(names) == len(set(names))
+        actual[group_info.name] = set(names)
+
+    assert actual == expected
+
+
+def _click_command(*path: str):
+    """Resolve the effective click command for a CLI path, e.g. ("history", "prune")."""
+    from typer.main import get_command
+
+    command = get_command(app)
+    for part in path:
+        command = command.commands[part]
+    return command
+
+
+def _param_contract(command) -> list[tuple]:
+    """Parameter contract per command: (name, option flags, default, required, hidden)."""
+    return [
+        (param.name, tuple(param.opts), param.default, param.required, bool(getattr(param, "hidden", False)))
+        for param in command.params
+    ]
+
+
+# The hand-written Typer parameter contract, pinned from the current CLI
+# declarations: arguments carry their plain name as the only "flag".
+_EXPECTED_PARAM_CONTRACT = {
+    ("self-update",): [
+        ("dry_run", ("--dry-run",), False, False, False),
+        ("check", ("--check",), False, False, False),
+        ("json_output", ("--json",), False, False, False),
+        ("manager", ("--manager",), None, False, False),
+    ],
+    ("doctor",): [("json_output", ("--json",), False, False, False)],
+    ("schema",): [("output", ("--output", "-o"), None, False, False)],
+    ("init",): [("force", ("--force",), False, False, False)],
+    ("status",): [
+        ("run_id", ("run_id",), None, False, False),
+        ("pipeline", ("--pipeline",), None, False, False),
+        ("json_output", ("--json",), False, False, False),
+    ],
+    ("logs",): [
+        ("run_id", ("run_id",), None, False, False),
+        ("pipeline", ("--pipeline",), None, False, False),
+        ("tail", ("--tail",), 80, False, False),
+    ],
+    ("run",): [
+        ("name", ("name",), None, True, False),
+        ("id", ("--id",), [], False, False),
+        ("input", ("--input",), [], False, False),
+        ("dry_run", ("--dry-run",), False, False, False),
+        ("status_file", ("--status-file",), None, False, False),
+        ("resume_from", ("--resume-from",), None, False, False),
+        ("skip_completed", ("--skip-completed",), False, False, False),
+        ("resume_status_file", ("--resume-status-file",), None, False, False),
+        ("confirm", ("--confirm",), None, False, False),
+        ("run_id", ("--run-id",), None, False, True),
+        ("capture_output", ("--capture-output",), False, False, False),
+        ("capture_child", ("--capture-child",), False, False, True),
+    ],
+    ("settings", "enable"): [("name", ("name",), None, True, False)],
+    ("settings", "disable"): [("name", ("name",), None, True, False)],
+    ("settings", "show"): [],
+    ("pipeline", "list"): [],
+    ("pipeline", "inspect"): [
+        ("name", ("name",), None, True, False),
+        ("json_output", ("--json",), False, False, False),
+    ],
+    ("pipeline", "plan"): [
+        ("name", ("name",), None, True, False),
+        ("input", ("--input",), [], False, False),
+        ("json_output", ("--json",), False, False, False),
+    ],
+    ("pipeline", "validate"): [
+        ("name", ("name",), None, False, False),
+        ("json_output", ("--json",), False, False, False),
+        ("strict", ("--strict",), False, False, False),
+    ],
+    ("pipeline", "preflight"): [
+        ("name", ("name",), None, True, False),
+        ("json_output", ("--json",), False, False, False),
+    ],
+    ("pipeline", "steps"): [("json_output", ("--json",), False, False, False)],
+    ("agent-release", "start"): [
+        ("pipeline", ("pipeline",), None, True, False),
+        ("id", ("--id",), [], False, False),
+        ("input", ("--input",), [], False, False),
+        ("confirm", ("--confirm",), None, False, False),
+        ("json_output", ("--json",), False, False, False),
+    ],
+    ("agent-release", "status"): [
+        ("pipeline", ("pipeline",), None, False, False),
+        ("run_id", ("--run",), None, False, False),
+        ("wait", ("--wait",), False, False, False),
+        ("timeout", ("--timeout",), "40m", False, False),
+        ("json_output", ("--json",), False, False, False),
+    ],
+    ("agent-release", "stop"): [
+        ("pipeline", ("pipeline",), None, False, False),
+        ("run_id", ("--run",), None, False, False),
+        ("timeout", ("--timeout",), "30s", False, False),
+        ("json_output", ("--json",), False, False, False),
+    ],
+    ("history", "prune"): [
+        ("older_than", ("--older-than",), None, False, False),
+        ("keep_last", ("--keep-last",), None, False, False),
+        ("pipeline", ("--pipeline",), None, False, False),
+        ("dry_run", ("--dry-run",), False, False, False),
+        ("confirm", ("--confirm",), False, False, False),
+        ("json_output", ("--json",), False, False, False),
+    ],
+}
+
+
+def test_command_parameters_match_pinned_contract():
+    for path, expected in _EXPECTED_PARAM_CONTRACT.items():
+        assert _param_contract(_click_command(*path)) == expected, path
+
+
+def test_root_callback_pins_version_option_alias_and_eagerness():
+    version = {param.name: param for param in _click_command().params}["version"]
+
+    assert tuple(version.opts) == ("--version", "-V")
+    assert version.default is False
+    assert version.required is False
+    assert version.is_eager is True
+
+
+def test_ranged_options_keep_current_defaults_and_bounds():
+    limit = {param.name: param for param in _click_command("history").params}["limit"]
+    tail = {param.name: param for param in _click_command("logs").params}["tail"]
+    keep_last = {param.name: param for param in _click_command("history", "prune").params}["keep_last"]
+
+    assert limit.default == 20
+    assert (limit.type.min, limit.type.max) == (1, 500)
+    assert (tail.type.min, tail.type.max) == (1, 10000)
+    assert keep_last.default is None
+    assert keep_last.type.min == 0
+
+
+def test_root_and_groups_show_help_when_called_without_arguments():
+    # The root and the settings/pipeline/agent-release groups use
+    # no_args_is_help; history lists runs instead (see its own tests).
+    assert _click_command().no_args_is_help is True
+    for group in ("settings", "pipeline", "agent-release"):
+        assert _click_command(group).no_args_is_help is True
+
+    for argv in ([], ["settings"], ["pipeline"], ["agent-release"]):
+        result = runner.invoke(app, argv)
+
+        assert result.exit_code == 2, argv
+        assert "Usage" in result.output, argv
+
+
+def test_history_without_subcommand_lists_runs_instead_of_help(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    paths = create_run(tmp_path, "demo")
+
+    result = runner.invoke(app, ["history"])
+
+    assert result.exit_code == 0
+    assert paths.run_id in result.stdout
+
+
+def test_history_prune_without_filters_fails_without_listing_history(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    paths = create_run(tmp_path, "demo")
+
+    result = runner.invoke(app, ["history", "prune"])
+
+    assert result.exit_code == 2
+    assert "Provide at least one filter" in _portable_error_text(result.output)
+    assert paths.run_id not in result.output
+    assert "No recorded runs." not in result.output
+    assert paths.root.exists()
+
+
+def test_python_cli_module_version_flag():
+    result = subprocess.run(
+        [sys.executable, "-m", "cdt.cli", "--version"],
         capture_output=True,
         text=True,
         check=False,
@@ -544,7 +756,7 @@ def test_capture_output_rejected_on_unsupported_platform_before_record(tmp_path,
 
         raise ForegroundCaptureError("Foreground output capture requires POSIX process-group primitives (Linux/macOS)")
 
-    monkeypatch.setattr("cdt.cli.require_posix_capture", reject)
+    monkeypatch.setattr("cdt.cli_commands.run.require_posix_capture", reject)
 
     result = runner.invoke(app, ["run", "demo", "--capture-output"])
 
@@ -608,7 +820,7 @@ def test_finalize_captured_run_marks_incomplete_capture_as_failure(tmp_path):
     )
     write_json_atomic(paths.status, payload)
 
-    from cdt.cli import _finalize_captured_run
+    from cdt.cli_commands.run import _finalize_captured_run
 
     problems = ("terminal output failed; live copy stopped: broken",)
     exit_code = _finalize_captured_run({}, paths, "demo", None, 0, None, capture_problems=problems)
@@ -630,7 +842,7 @@ def test_finalize_captured_run_keeps_child_failure_with_capture_problems(tmp_pat
     payload.update({"status": "failed", "error": "Pipeline failed at step 0", "completed_steps": []})
     write_json_atomic(paths.status, payload)
 
-    from cdt.cli import _finalize_captured_run
+    from cdt.cli_commands.run import _finalize_captured_run
 
     exit_code = _finalize_captured_run(
         {}, paths, "demo", None, 1, None, capture_problems=("capture log write failed; saved copy stopped",)
@@ -655,7 +867,7 @@ def test_finalize_captured_run_preserves_progress_and_marks_failure(tmp_path):
     )
     write_json_atomic(paths.status, payload)
 
-    from cdt.cli import _finalize_captured_run
+    from cdt.cli_commands.run import _finalize_captured_run
 
     exit_code = _finalize_captured_run({}, paths, "demo", None, 1, None)
 
