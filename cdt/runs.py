@@ -126,9 +126,17 @@ def _create_run_locked(
     capture_output: bool = False,
 ) -> RunPaths:
     """Create a run record; the caller must hold the project lock."""
-    run_id = run_id or generate_run_id(pipeline)
-    paths = run_paths(cwd, run_id)
-    paths.root.mkdir(parents=True, exist_ok=False)
+    # Generated IDs can collide when many records are created in one second.
+    # Retry only those IDs; an explicitly supplied ID must never be replaced.
+    for attempt in range(5):
+        paths = run_paths(cwd, run_id or generate_run_id(pipeline))
+        try:
+            paths.root.mkdir(parents=True, exist_ok=False)
+            break
+        except FileExistsError:
+            if run_id is not None or attempt == 4:
+                raise
+    run_id = paths.run_id
     paths.log.touch()
     # Defense-in-depth: inputs are declared non-secret, but run records still pass
     # through the same redaction layer as every other persisted value.
