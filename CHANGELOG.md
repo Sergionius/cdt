@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Nothing yet.
+- Split the monolithic `cdt/cli.py` internally into thematic `cdt.cli_commands/` modules (settings, history, pipeline, agent-release, run, utility commands); commands, options, output, and exit codes are unchanged.
 
 ## v0.9.0 - 2026-10-22
 
