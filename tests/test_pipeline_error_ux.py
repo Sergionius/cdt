@@ -531,8 +531,8 @@ def test_cli_parallel_firebase_failure_renders_readable_summary(tmp_path, monkey
     output = result.output
     assert "Pipeline failed at step 1/0 (firebase.upload_app_distribution)." in output
     assert (
-        "Firebase App Distribution upload failed. Check the Firebase CLI output above for details; "
-        "inspect the saved run with cdt logs <run-id>."
+        "Firebase App Distribution upload failed. See cdt logs <run-id> for CLI output. "
+        "If it only reports 'Failed to make request', the underlying cause is unavailable in this log."
     ) in output
     assert "Command: firebase appdistribution:distribute" in output
     aab_path = tmp_path / "build" / "app" / "outputs" / "bundle" / "release" / "app.aab"
@@ -565,8 +565,8 @@ def test_cli_parallel_firebase_failure_renders_readable_summary(tmp_path, monkey
     for view in (output, status_json, log):
         assert "Pipeline failed at step 1/0 (firebase.upload_app_distribution)." in view
         assert (
-            "Firebase App Distribution upload failed. Check the Firebase CLI output above for details; "
-            "inspect the saved run with cdt logs <run-id>."
+            "Firebase App Distribution upload failed. See cdt logs <run-id> for CLI output. "
+            "If it only reports 'Failed to make request', the underlying cause is unavailable in this log."
         ) in view
         assert str(aab_path) in view
         assert "--token ***" in view
@@ -648,8 +648,8 @@ def test_executor_wraps_sequential_firebase_failure_without_parallel_notice(tmp_
     lines = message.splitlines()
     assert lines[0] == "Pipeline failed at step firebase.upload_app_distribution."
     assert lines[1] == (
-        "Firebase App Distribution upload failed. Check the Firebase CLI output above for details; "
-        "inspect the saved run with cdt logs <run-id>."
+        "Firebase App Distribution upload failed. See cdt logs <run-id> for CLI output. "
+        "If it only reports 'Failed to make request', the underlying cause is unavailable in this log."
     )
     assert lines[2].startswith("Command: firebase appdistribution:distribute ")
     assert str(tmp_path / "build" / "app" / "outputs" / "bundle" / "release" / "app.aab") in lines[2]

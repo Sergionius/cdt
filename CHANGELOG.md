@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Nothing yet.
+- Clarified Firebase App Distribution upload failures: the saved CLI output may contain only `Failed to make request`, which does not reveal the underlying cause; no upload behavior changed.
 
 ## v0.10.0 - 2026-10-26
 
