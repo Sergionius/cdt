@@ -45,8 +45,8 @@ class FirebaseUploadAppDistributionStep:
         if exit_code != 0:
             _play_fail_sound(ctx.env, ctx.cwd)
             raise CommandExecutionError(
-                "Firebase App Distribution upload failed. Check the Firebase CLI output above for details; "
-                "inspect the saved run with cdt logs <run-id>.",
+                "Firebase App Distribution upload failed. See cdt logs <run-id> for CLI output. "
+                "If it only reports 'Failed to make request', the underlying cause is unavailable in this log.",
                 command=command,
                 exit_code=exit_code,
             )

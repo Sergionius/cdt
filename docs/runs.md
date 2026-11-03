@@ -166,7 +166,7 @@ A Firebase App Distribution upload failure is reported the same way. The command
 
 ```text
 Pipeline failed at step 1/0 (firebase.upload_app_distribution).
-Firebase App Distribution upload failed. Check the Firebase CLI output above for details; inspect the saved run with cdt logs <run-id>.
+Firebase App Distribution upload failed. See cdt logs <run-id> for CLI output. If it only reports 'Failed to make request', the underlying cause is unavailable in this log.
 Command: firebase appdistribution:distribute /path/to/project/build/app/outputs/bundle/release/app.aab --app 1:1234567890:android:0a1b2c3d4e5f6a7b --groups qa-team --release-notes https://tracker.yandex.ru/TASK-123 --token ***
 Exit code: 7
 Other parallel steps were allowed to finish.
@@ -175,7 +175,7 @@ Artifacts produced: android_apk
 
 This summary deliberately distinguishes the two failure points of an Android/Firebase pipeline: `android.build_aab` and `android.build_apk` report `Android AAB build failed.` / `Android APK build failed.` with the Flutter/Gradle command, while `firebase.upload_app_distribution` reports the upload step with the full `firebase appdistribution:distribute` command. When the failing step is the upload, the AAB build itself succeeded, so do not start by rebuilding the artifact.
 
-A Firebase CLI message such as `Failed to make request` on its own does not establish the root cause: it is equally consistent with a network problem, invalid or expired token credentials, missing tester permissions, or an unusable artifact. CDT reports the command and exit code as-is and does not guess the cause. Read the Firebase CLI output streamed above the summary, or inspect the saved record afterwards with `cdt logs <run-id> --tail 80`, and check the obvious external preconditions (network reachability, `FIREBASE_TOKEN` validity, App Distribution access for the app ID) before changing code.
+A Firebase CLI message such as `Failed to make request` does not establish the root cause. CDT reports the command and exit code as-is and does not guess whether the failure was due to the network or the remote service. Inspect the saved record with `cdt logs <run-id> --tail 80`; it contains the CLI output but may not contain any deeper cause. Do not retry an upload blindly: the remote outcome can be uncertain.
 
 Note that `Artifacts produced:` covers only what the failing step or group itself produced (for example, a parallel sibling's `android_apk`). It does not mean earlier steps built nothing: a sequential `android.build_aab` that finished before the failed upload still registered its `android_aab`, and the artifact remains on disk. The full list of all artifacts collected during the run is stored in `status.json` and shown by `cdt status <run-id>`, so check it before rebuilding or re-running.
 
