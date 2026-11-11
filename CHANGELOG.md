@@ -3,7 +3,7 @@
 ## Unreleased
 
 - Verify that GitHub Release and PyPI wheel/sdist filenames match the requested distribution and version before confirming a release; accept normalized prerelease and legacy distribution filenames, and reject malformed wheels.
-- Restrict Typer to the tested 0.27.x and earlier compatible versions until the CLI's ranged-option tests support the changed API in Typer 0.29.
+- Update to Typer 0.29.1 and verify ranged CLI options through user-visible validation instead of Typer's internal option attributes.
 
 ## v0.11.0 - 2026-11-03
 
