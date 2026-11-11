@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Nothing yet.
+- Verify that GitHub Release and PyPI wheel/sdist filenames match the requested distribution and version before confirming a release; accept normalized prerelease and legacy distribution filenames, and reject malformed wheels.
 
 ## v0.11.0 - 2026-11-03
 

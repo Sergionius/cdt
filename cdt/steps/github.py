@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import typer
+from packaging.utils import canonicalize_name, parse_sdist_filename, parse_wheel_filename
+from packaging.version import InvalidVersion, Version
 
 from ..pipeline import PipelineContext
 from ..services.pypi import PyPIRelease, PyPIUnavailableError, fetch_release_files
@@ -22,6 +24,28 @@ KIND_RELEASE_INCOMPLETE = "release_incomplete"
 
 _RUN_LIST_FIELDS = "databaseId,headBranch,headSha,status,conclusion,url,displayTitle"
 _GOOD_JOB_CONCLUSIONS = {"success", "skipped", "neutral"}
+
+
+def _release_distributions(
+    names: tuple[str, ...] | list[str], package: str, version: str
+) -> tuple[str | None, str | None]:
+    """Find wheel and sdist filenames belonging to the requested distribution and version."""
+    target_name = canonicalize_name(package)
+    target_version = Version(version)
+    wheel = sdist = None
+    for name in names:
+        try:
+            if name.endswith(".whl"):
+                dist, file_version, _build, _tags = parse_wheel_filename(name)
+                if wheel is None and dist == target_name and file_version == target_version:
+                    wheel = name
+            elif name.endswith(".tar.gz"):
+                dist, file_version = parse_sdist_filename(name)
+                if sdist is None and dist == target_name and file_version == target_version:
+                    sdist = name
+        except ValueError:
+            continue  # Ignore malformed or unrelated assets; they cannot confirm this release.
+    return wheel, sdist
 
 
 class ReleaseWaitFailure(typer.BadParameter):
@@ -90,14 +114,18 @@ class WaitReleaseStep:
     def run(self, ctx: PipelineContext) -> None:
         self._validate_timing()
         version = resolve_release_version(self.version or ctx.values.get("release_version") or ctx.new_version, ctx)
+        try:
+            Version(version)
+        except InvalidVersion as exc:
+            raise typer.BadParameter(f"Release version {version!r} is not a valid Python package version") from exc
         tag = f"{self.tag_prefix}{version}"
         repo = self.repository or github_repo_from_origin(ctx, self.remote)
         package = self.package or read_pyproject_metadata(ctx.project_path(self.pyproject))[0]
 
         typer.echo(f"==> Waiting for workflow '{self.workflow}' of {tag} in {repo} (timeout {self.timeout:.0f}s)")
         run = self._wait_for_green_run(ctx, repo, tag)
-        release_url = self._require_published_release(ctx, repo, tag)
-        pypi = self._require_published_pypi(package, version)
+        release_url = self._require_published_release(ctx, repo, tag, package, version)
+        pypi, pypi_wheel, pypi_sdist = self._require_published_pypi(package, version)
 
         ctx.register_release_results(
             {
@@ -105,8 +133,8 @@ class WaitReleaseStep:
                 "github_run_id": run.run_id,
                 "github_release_url": release_url,
                 "pypi_release_url": pypi.url,
-                "pypi_wheel": pypi.wheels[0],
-                "pypi_sdist": pypi.sdists[0],
+                "pypi_wheel": pypi_wheel,
+                "pypi_sdist": pypi_sdist,
             }
         )
         typer.echo(f"==> Release {version} confirmed: {release_url} and {pypi.url}")
@@ -230,7 +258,7 @@ class WaitReleaseStep:
 
     # -- GitHub Release ----------------------------------------------------------------------------
 
-    def _require_published_release(self, ctx: PipelineContext, repo: str, tag: str) -> str:
+    def _require_published_release(self, ctx: PipelineContext, repo: str, tag: str, package: str, version: str) -> str:
         """Require a full (not draft/prerelease) GitHub Release with wheel, sdist and SHA256SUMS assets."""
         command = ["gh", "release", "view", tag, "--repo", repo, "--json", "isDraft,isPrerelease,assets,url"]
         code, out, err = _capture(command, cwd=ctx.cwd)
@@ -254,8 +282,7 @@ class WaitReleaseStep:
         assets = [
             str(asset["name"]) for asset in payload.get("assets", []) if isinstance(asset, dict) and asset.get("name")
         ]
-        wheel = next((name for name in assets if name.endswith(".whl")), None)
-        sdist = next((name for name in assets if name.endswith(".tar.gz")), None)
+        wheel, sdist = _release_distributions(assets, package, version)
         checksum = next((name for name in assets if name.lower().startswith("sha256sums")), None)
         missing = [
             label for label, found in (("wheel", wheel), ("sdist", sdist), ("SHA256SUMS", checksum)) if not found
@@ -272,7 +299,7 @@ class WaitReleaseStep:
 
     # -- PyPI --------------------------------------------------------------------------------------
 
-    def _require_published_pypi(self, package: str, version: str) -> PyPIRelease:
+    def _require_published_pypi(self, package: str, version: str) -> tuple[PyPIRelease, str, str]:
         """Require the exact version on PyPI with wheel and sdist files, tolerating indexing delay."""
         try:
             release = fetch_release_files(package, version)
@@ -283,7 +310,8 @@ class WaitReleaseStep:
                 retryable=True,
                 details={"pypi_package": package, "version": version},
             ) from exc
-        missing = [label for label, files in (("wheel", release.wheels), ("sdist", release.sdists)) if not files]
+        wheel, sdist = _release_distributions(release.files, package, version)
+        missing = [label for label, file in (("wheel", wheel), ("sdist", sdist)) if not file]
         if missing:
             raise ReleaseWaitFailure(
                 f"PyPI release {package} {version} is missing required files: {', '.join(missing)}. "
@@ -292,7 +320,7 @@ class WaitReleaseStep:
                 retryable=False,
                 details={"pypi_package": package, "version": version},
             )
-        return release
+        return release, wheel, sdist
 
     # -- helpers -----------------------------------------------------------------------------------
 

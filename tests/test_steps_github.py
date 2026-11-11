@@ -6,7 +6,7 @@ import typer
 
 from cdt.pipeline import PipelineContext
 from cdt.services.pypi import PyPIRelease, PyPIUnavailableError
-from cdt.steps.github import ReleaseWaitFailure, WaitReleaseStep
+from cdt.steps.github import ReleaseWaitFailure, WaitReleaseStep, _release_distributions
 
 RUN_ID = "12345"
 RUN_URL = f"https://github.com/example/cdt/actions/runs/{RUN_ID}"
@@ -319,6 +319,42 @@ def test_wait_release_requires_wheel_sdist_and_checksum_assets(tmp_path, monkeyp
         assert asset in message
 
 
+def test_wait_release_rejects_assets_for_another_distribution_or_version(tmp_path, monkeypatch):
+    assets = (
+        "other_package-0.5.2-py3-none-any.whl",
+        "cdt_release-0.5.1-py3-none-any.whl",
+        "cdt_release-0.5.1.tar.gz",
+        "SHA256SUMS",
+    )
+    capture = green_capture(**{"release view": [release_view_response(assets=assets)]})
+
+    with pytest.raises(ReleaseWaitFailure) as exc_info:
+        run_step(tmp_path, monkeypatch, capture)
+
+    assert exc_info.value.failure_kind == "release_incomplete"
+    assert "wheel, sdist" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("version", "file_version"),
+    [
+        ("1.2.3-beta1", "1.2.3b1"),
+        ("1.2.3-pre1", "1.2.3rc1"),
+        ("1.2.3-post1", "1.2.3.post1"),
+        ("1.2.3-dev1", "1.2.3.dev1"),
+    ],
+)
+def test_release_distributions_accepts_normalized_versions(version, file_version):
+    wheel = f"foo_bar-{file_version}-py3-none-any.whl"
+    sdist = f"foo.bar-{file_version}.tar.gz"
+    assert _release_distributions((wheel, sdist), "foo.bar", version) == (wheel, sdist)
+
+
+def test_release_distributions_ignores_invalid_wheel_build_tag():
+    names = ("cdt_release-0.5.2-x-y-z-q.whl", "cdt_release-0.5.2-1-py3-none-any.whl")
+    assert _release_distributions(names, "cdt-release", "0.5.2") == (names[1], None)
+
+
 def test_wait_release_classifies_unviewable_release_as_transient(tmp_path, monkeypatch):
     capture = green_capture(**{"release view": [(1, "", "gh: server error")]})
 
@@ -395,6 +431,29 @@ def test_wait_release_requires_pypi_wheel_and_sdist_files(tmp_path, monkeypatch)
     assert "sdist" in str(failure)
 
 
+def test_wait_release_rejects_pypi_files_for_another_distribution_or_version(tmp_path, monkeypatch):
+    files = ("other_package-0.5.2-py3-none-any.whl", "cdt_release-0.5.1.tar.gz")
+
+    with pytest.raises(ReleaseWaitFailure) as exc_info:
+        run_step(tmp_path, monkeypatch, green_capture(), pypi_files=files)
+
+    assert exc_info.value.failure_kind == "release_incomplete"
+    assert "wheel, sdist" in str(exc_info.value)
+
+
+def test_wait_release_records_matching_pypi_files_when_unrelated_files_are_present(tmp_path, monkeypatch):
+    files = (
+        "aaa_other-0.5.2-py3-none-any.whl",
+        "aaa_other-0.5.2.tar.gz",
+        "cdt_release-0.5.2-py3-none-any.whl",
+        "cdt-release-0.5.2.tar.gz",
+    )
+    ctx, _clock = run_step(tmp_path, monkeypatch, green_capture(), pypi_files=files)
+
+    assert ctx.release_results["pypi_wheel"] == "cdt_release-0.5.2-py3-none-any.whl"
+    assert ctx.release_results["pypi_sdist"] == "cdt-release-0.5.2.tar.gz"
+
+
 def test_wait_release_never_reruns_the_workflow(tmp_path, monkeypatch):
     capture = green_capture()
     run_step(tmp_path, monkeypatch, capture)
@@ -469,6 +528,13 @@ def test_wait_release_rejects_non_semver_versions(tmp_path, monkeypatch, version
 
     with pytest.raises(typer.BadParameter, match="not an explicit semver"):
         WaitReleaseStep(package="cdt-release", version=version).run(make_ctx(tmp_path))
+
+
+def test_wait_release_rejects_non_package_versions(tmp_path, monkeypatch):
+    patch_capture(monkeypatch, green_capture())
+
+    with pytest.raises(typer.BadParameter, match="valid Python package version"):
+        WaitReleaseStep(package="cdt-release", version="1.2.3-abc").run(make_ctx(tmp_path))
 
 
 def test_wait_release_validates_timing_options(tmp_path):
