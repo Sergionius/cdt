@@ -254,14 +254,21 @@ def test_root_callback_pins_version_option_alias_and_eagerness():
 
 def test_ranged_options_keep_current_defaults_and_bounds():
     limit = {param.name: param for param in _click_command("history").params}["limit"]
-    tail = {param.name: param for param in _click_command("logs").params}["tail"]
     keep_last = {param.name: param for param in _click_command("history", "prune").params}["keep_last"]
 
     assert limit.default == 20
-    assert (limit.type.min, limit.type.max) == (1, 500)
-    assert (tail.type.min, tail.type.max) == (1, 10000)
     assert keep_last.default is None
-    assert keep_last.type.min == 0
+    # Check CLI behavior, not Typer's internal representation of range types.
+    for args in (
+        ["history", "--limit", "0"],
+        ["history", "--limit", "501"],
+        ["logs", "--tail", "0"],
+        ["logs", "--tail", "10001"],
+        ["history", "prune", "--keep-last", "-1"],
+    ):
+        result = runner.invoke(app, args)
+        assert result.exit_code == 2, (args, result.output)
+        assert "Invalid value" in result.output, (args, result.output)
 
 
 def test_root_and_groups_show_help_when_called_without_arguments():
